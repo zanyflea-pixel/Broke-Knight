@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Broke Knight (v23-lite)</title>
+  <style>
+    html, body { margin:0; height:100%; background:#05070f; overflow:hidden; }
+    canvas { display:block; width:100vw; height:100vh; image-rendering: pixelated; }
+    #hint {
+      position:fixed; left:12px; bottom:10px;
+      font: 12px system-ui, sans-serif; color:#cfe2ff;
+      opacity:.9; user-select:none; pointer-events:none;
+      text-shadow: 0 2px 10px rgba(0,0,0,.6);
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="hint">Arrows: move • A: fireball • B: sail (only at docks) • M: map • E: teleport (near waystone)</div>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
