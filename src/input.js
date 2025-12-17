@@ -4,7 +4,7 @@ export default class Input {
     this.canvas = canvas;
 
     this.keys = new Set();
-    this.pressed = new Set(); // edge-triggered keys (one-shot)
+    this.pressed = new Set();
 
     this.mouse = { x: 0, y: 0, down: false, clicked: false };
 
@@ -13,10 +13,7 @@ export default class Input {
       if (!this.keys.has(k)) this.pressed.add(k);
       this.keys.add(k);
 
-      // prevent scrolling with arrows/space
-      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(k)) {
-        e.preventDefault();
-      }
+      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(k)) e.preventDefault();
     });
 
     window.addEventListener("keyup", (e) => {
@@ -39,7 +36,6 @@ export default class Input {
     });
   }
 
-  // one-shot: returns true only once per key press
   consume(key) {
     if (this.pressed.has(key)) {
       this.pressed.delete(key);
@@ -48,7 +44,6 @@ export default class Input {
     return false;
   }
 
-  // returns normalized movement vector using arrow keys
   moveVec() {
     let x = 0, y = 0;
     if (this.keys.has("ArrowLeft")) x -= 1;
@@ -64,7 +59,6 @@ export default class Input {
     return { x, y };
   }
 
-  // click position for UI (screen-space). returns null if no click this frame.
   consumeClick() {
     if (!this.mouse.clicked) return null;
     this.mouse.clicked = false;
