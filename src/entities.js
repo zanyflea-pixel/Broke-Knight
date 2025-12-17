@@ -1,6 +1,9 @@
 // src/entities.js
 import { clamp, dist2 } from "./util.js";
 
+/* ============================
+   HERO (silhouette + gear tint)
+   ============================ */
 export class Hero {
   constructor(x, y) {
     this.x = x;
@@ -30,6 +33,9 @@ export class Hero {
     this.armor = this.base.armor;
     this.moveSpeed = this.base.move;
 
+    // facing / animation
+    this.faceX = 1; // last move direction
+    this.faceY = 0;
     this._t = 0;
   }
 
@@ -74,58 +80,147 @@ export class Hero {
     this.x += this.vx * dt;
     this.y += this.vy * dt;
 
-    // mild mana regen
+    // update facing based on movement
+    if (Math.abs(this.vx) + Math.abs(this.vy) > 1) {
+      const len = Math.hypot(this.vx, this.vy) || 1;
+      this.faceX = this.vx / len;
+      this.faceY = this.vy / len;
+    }
+
     this.mana = clamp(this.mana + dt * 3.5, 0, this.maxMana);
   }
 
   draw(ctx) {
-    ctx.globalAlpha = 0.18;
+    const walk = (Math.abs(this.vx) + Math.abs(this.vy)) > 3;
+    const bob = Math.sin(this._t * (walk ? 10 : 4)) * (walk ? 1.6 : 0.8);
+
+    const fx = this.faceX;
+    const fy = this.faceY;
+
+    // shadow
+    ctx.globalAlpha = 0.20;
     ctx.fillStyle = "#000";
     ctx.beginPath();
-    ctx.ellipse(this.x + 2, this.y + 8, this.r * 0.9, this.r * 0.45, 0, 0, Math.PI * 2);
+    ctx.ellipse(this.x + 2, this.y + 14, 14, 6, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
 
-    const bob = Math.sin(this._t * 8) * 1.2;
+    // palette
+    const armorCol = "#cfd7e6";
+    const steelDark = "#8f9bb2";
+    const outline = "#0b1330";
 
-    ctx.fillStyle = "#cfd7e6";
-    ctx.beginPath();
-    ctx.arc(this.x, this.y + bob, this.r, 0, Math.PI * 2);
-    ctx.fill();
+    const chestTint = this.equip.chest ? rarityColor(this.equip.chest.rarity) : null;
+    const helmTint = this.equip.helm ? rarityColor(this.equip.helm.rarity) : null;
 
-    ctx.globalAlpha = 0.7;
+    // body (torso)
+    drawOutlinedRoundRect(ctx, this.x - 10, this.y - 6 + bob, 20, 22, 7, outline, armorCol);
+
+    // torso shading
+    ctx.globalAlpha = 0.18;
     ctx.fillStyle = "#0b1330";
-    ctx.fillRect(this.x - 7, this.y - 4 + bob, 14, 7);
+    roundRect(ctx, this.x - 10, this.y - 6 + bob, 6, 22, 6);
+    ctx.fill();
     ctx.globalAlpha = 1;
 
-    if (this.equip.chest) {
-      ctx.globalAlpha = 0.28;
-      ctx.fillStyle = rarityColor(this.equip.chest.rarity);
-      ctx.beginPath();
-      ctx.arc(this.x, this.y + bob + 2, this.r * 0.85, 0, Math.PI * 2);
+    // chest armor overlay
+    if (chestTint) {
+      ctx.globalAlpha = 0.25;
+      ctx.fillStyle = chestTint;
+      roundRect(ctx, this.x - 10, this.y - 6 + bob, 20, 22, 7);
       ctx.fill();
       ctx.globalAlpha = 1;
     }
-    if (this.equip.helm) {
-      ctx.globalAlpha = 0.35;
-      ctx.fillStyle = rarityColor(this.equip.helm.rarity);
+
+    // head + helm
+    const headY = this.y - 18 + bob;
+    drawOutlinedCircle(ctx, this.x, headY, 8.5, outline, "#f2f5ff");
+
+    if (helmTint) {
+      ctx.globalAlpha = 0.30;
+      ctx.fillStyle = helmTint;
       ctx.beginPath();
-      ctx.arc(this.x, this.y + bob - 10, this.r * 0.55, 0, Math.PI * 2);
+      ctx.ellipse(this.x, headY - 1, 9, 7, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.globalAlpha = 1;
     }
+
+    // visor
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = outline;
+    roundRect(ctx, this.x - 7, headY - 2, 14, 5, 3);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // legs (two)
+    const step = walk ? Math.sin(this._t * 10) * 3 : 0;
+    drawOutlinedRoundRect(ctx, this.x - 7, this.y + 12 + bob + step * 0.4, 6, 10, 3, outline, steelDark);
+    drawOutlinedRoundRect(ctx, this.x + 1, this.y + 12 + bob - step * 0.4, 6, 10, 3, outline, steelDark);
+
+    // boots tint
+    if (this.equip.boots) {
+      ctx.globalAlpha = 0.30;
+      ctx.fillStyle = rarityColor(this.equip.boots.rarity);
+      roundRect(ctx, this.x - 7, this.y + 18 + bob + step * 0.4, 6, 4, 2);
+      ctx.fill();
+      roundRect(ctx, this.x + 1, this.y + 18 + bob - step * 0.4, 6, 4, 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // arms (aimed slightly toward facing)
+    const ax = fx * 3;
+    const ay = fy * 2;
+    drawOutlinedRoundRect(ctx, this.x - 14 + ax, this.y - 2 + bob + ay, 6, 14, 3, outline, steelDark);
+    drawOutlinedRoundRect(ctx, this.x + 8 + ax, this.y - 2 + bob + ay, 6, 14, 3, outline, steelDark);
+
+    // weapon (simple sword/staff) based on weapon rarity
+    const wcol = this.equip.weapon ? rarityColor(this.equip.weapon.rarity) : "#d7e0ff";
+    ctx.globalAlpha = 0.95;
+    ctx.strokeStyle = outline;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(this.x + fx * 6, this.y - 2 + bob);
+    ctx.lineTo(this.x + fx * 22, this.y - 2 + bob + fy * 10);
+    ctx.stroke();
+
+    ctx.strokeStyle = wcol;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(this.x + fx * 6, this.y - 2 + bob);
+    ctx.lineTo(this.x + fx * 22, this.y - 2 + bob + fy * 10);
+    ctx.stroke();
+
+    // small “spark” on rare+ weapons
+    if (this.equip.weapon && this.equip.weapon.rarity !== "common") {
+      ctx.globalAlpha = 0.30;
+      ctx.fillStyle = "#eaf6ff";
+      ctx.beginPath();
+      ctx.arc(this.x + fx * 22, this.y - 2 + bob + fy * 10, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // highlight
+    ctx.globalAlpha = 0.14;
+    ctx.fillStyle = "#eaf6ff";
+    ctx.beginPath();
+    ctx.arc(this.x - 6, headY - 5, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
   }
 }
 
+/* ============================
+   ENEMY (silhouette per type)
+   ============================ */
 export class Enemy {
   constructor(x, y, tier = 1, type = "grunt") {
     this.x = x;
     this.y = y;
-
     this.tier = tier;
     this.type = type;
 
-    // base scaling
     const baseHp = 26 + tier * 22;
     const baseDmg = 6 + tier * 4;
     const baseMove = 88 + tier * 10;
@@ -155,30 +250,31 @@ export class Enemy {
 
     this.alive = true;
     this.atkCD = 0;
-
     this._t = Math.random() * 10;
+
+    // facing for sprite-ish drawing
+    this.faceX = 1;
+    this.faceY = 0;
   }
 
   update(dt, hero, outProjectiles) {
     this._t += dt;
     if (this.atkCD > 0) this.atkCD -= dt;
-
     if (!this.alive) return;
 
     const d2 = dist2(this.x, this.y, hero.x, hero.y);
-    const chase = d2 < 900 * 900;
+    const dist = Math.sqrt(d2) || 1;
+    const dx = hero.x - this.x;
+    const dy = hero.y - this.y;
+    const nx = dx / dist;
+    const ny = dy / dist;
+
+    // update facing
+    if (dist > 1) { this.faceX = nx; this.faceY = ny; }
 
     if (this.type === "shaman") {
-      // keep distance + shoot
       if (this.castCD > 0) this.castCD -= dt;
 
-      const dist = Math.sqrt(d2) || 1;
-      const dx = hero.x - this.x;
-      const dy = hero.y - this.y;
-      const nx = dx / dist;
-      const ny = dy / dist;
-
-      // kite: if too close, back off; else mild circle
       const desired = dist < 240 ? -1 : dist > 520 ? 1 : 0.2;
       this.x += nx * this.move * dt * desired;
       this.y += ny * this.move * dt * desired;
@@ -192,29 +288,20 @@ export class Enemy {
       return;
     }
 
+    const chase = d2 < 900 * 900;
     if (chase) {
-      const dx = hero.x - this.x;
-      const dy = hero.y - this.y;
-      const len = Math.sqrt(dx * dx + dy * dy) || 1;
-      const nx = dx / len;
-      const ny = dy / len;
-
       if (this.type === "charger") {
         if (this.chargeCD > 0) this.chargeCD -= dt;
-
-        // charge burst
         if (this.chargeCD <= 0) {
           this.chargeCD = 2.0 - this.tier * 0.08;
-          this.chargeT = 0.28; // burst window
+          this.chargeT = 0.28;
         }
-
         const mult = this.chargeT > 0 ? 2.8 : 1.0;
         if (this.chargeT > 0) this.chargeT -= dt;
 
         this.x += nx * this.move * dt * mult;
         this.y += ny * this.move * dt * mult;
       } else {
-        // grunt
         this.x += nx * this.move * dt;
         this.y += ny * this.move * dt;
       }
@@ -224,54 +311,100 @@ export class Enemy {
   draw(ctx) {
     if (!this.alive) return;
 
-    ctx.globalAlpha = 0.18;
+    const walk = true;
+    const bob = Math.sin(this._t * 8) * 1.2;
+    const fx = this.faceX;
+    const fy = this.faceY;
+
+    const outline = "#0b1330";
+
+    // shadow
+    ctx.globalAlpha = 0.20;
     ctx.fillStyle = "#000";
     ctx.beginPath();
-    ctx.ellipse(this.x + 2, this.y + 8, this.r * 0.85, this.r * 0.4, 0, 0, Math.PI * 2);
+    ctx.ellipse(this.x + 2, this.y + 14, 14 + this.tier * 2, 6 + this.tier, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
 
-    const wob = Math.sin(this._t * 6) * 1.1;
-
-    // body colors by type/tier
+    // colors by type
     let body = "#2b2f39";
-    if (this.type === "charger") body = "#5a2b2b";
-    if (this.type === "shaman") body = "#2b3b5a";
+    let accent = "#ffd28a";
+    if (this.type === "charger") { body = "#6a2b2b"; accent = "#ff5d5d"; }
+    if (this.type === "shaman") { body = "#2b3b5a"; accent = "#38d9ff"; }
     if (this.tier >= 3) body = this.type === "shaman" ? "#3a2b5a" : "#7a2b2b";
-    if (this.tier === 2 && this.type === "grunt") body = "#4a3a2b";
 
-    ctx.fillStyle = body;
-    ctx.beginPath();
-    ctx.arc(this.x, this.y + wob, this.r, 0, Math.PI * 2);
-    ctx.fill();
+    // torso
+    drawOutlinedRoundRect(ctx, this.x - 10, this.y - 4 + bob, 20, 22, 7, outline, body);
 
-    // eyes
-    ctx.globalAlpha = 0.9;
-    ctx.fillStyle = this.type === "shaman" ? "#38d9ff" : "#ffd28a";
-    ctx.fillRect(this.x - 7, this.y - 4 + wob, 4, 3);
-    ctx.fillRect(this.x + 3, this.y - 4 + wob, 4, 3);
-    ctx.globalAlpha = 1;
+    // head
+    const headY = this.y - 16 + bob;
+    drawOutlinedCircle(ctx, this.x, headY, 8.0 + this.tier * 0.4, outline, shade(body, 1.12));
 
-    // shaman staff nub
-    if (this.type === "shaman") {
-      ctx.globalAlpha = 0.8;
-      ctx.fillStyle = "#6b4a2b";
-      ctx.fillRect(this.x + this.r - 2, this.y + wob - 6, 3, 14);
+    // horns/hood per type
+    if (this.type === "charger") {
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = outline;
+      ctx.beginPath();
+      ctx.moveTo(this.x - 10, headY - 2);
+      ctx.lineTo(this.x - 18, headY - 12);
+      ctx.lineTo(this.x - 6, headY - 8);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.moveTo(this.x + 10, headY - 2);
+      ctx.lineTo(this.x + 18, headY - 12);
+      ctx.lineTo(this.x + 6, headY - 8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    } else if (this.type === "shaman") {
+      ctx.globalAlpha = 0.25;
+      ctx.fillStyle = accent;
+      ctx.beginPath();
+      ctx.ellipse(this.x, headY + 2, 14, 10, 0, 0, Math.PI * 2);
+      ctx.fill();
       ctx.globalAlpha = 1;
     }
 
-    // hp bar
-    const w = 34 + this.tier * 6;
-    const pct = clamp(this.hp / this.maxHp, 0, 1);
-    ctx.globalAlpha = 0.8;
-    ctx.fillStyle = "rgba(0,0,0,0.35)";
-    ctx.fillRect(this.x - w / 2, this.y - this.r - 18, w, 5);
-    ctx.fillStyle = this.type === "shaman" ? "#38d9ff" : "#ff7b2f";
-    ctx.fillRect(this.x - w / 2, this.y - this.r - 18, w * pct, 5);
+    // arms
+    const sway = walk ? Math.sin(this._t * 8) * 2 : 0;
+    drawOutlinedRoundRect(ctx, this.x - 14 + fx * 2, this.y - 2 + bob + fy * 2, 6, 14, 3, outline, shade(body, 0.92));
+    drawOutlinedRoundRect(ctx, this.x + 8 + fx * 2, this.y - 2 + bob + fy * 2, 6, 14, 3, outline, shade(body, 0.92));
+
+    // legs
+    drawOutlinedRoundRect(ctx, this.x - 7, this.y + 12 + bob + sway * 0.2, 6, 10, 3, outline, shade(body, 0.85));
+    drawOutlinedRoundRect(ctx, this.x + 1, this.y + 12 + bob - sway * 0.2, 6, 10, 3, outline, shade(body, 0.85));
+
+    // eyes
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = accent;
+    ctx.fillRect(this.x - 7, headY - 2, 4, 3);
+    ctx.fillRect(this.x + 3, headY - 2, 4, 3);
+    ctx.globalAlpha = 1;
+
+    // weapon hint
+    ctx.globalAlpha = 0.9;
+    ctx.strokeStyle = outline;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(this.x + fx * 6, this.y - 2 + bob);
+    ctx.lineTo(this.x + fx * 18, this.y - 2 + bob + fy * 10);
+    ctx.stroke();
+
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(this.x + fx * 6, this.y - 2 + bob);
+    ctx.lineTo(this.x + fx * 18, this.y - 2 + bob + fy * 10);
+    ctx.stroke();
     ctx.globalAlpha = 1;
   }
 }
 
+/* ============================
+   BOSS (keep as-is if you had it)
+   ============================ */
 export class Boss {
   constructor(x, y) {
     this.x = x;
@@ -307,17 +440,13 @@ export class Boss {
     const nx = dx / dist;
     const ny = dy / dist;
 
-    // phases
     const hpPct = this.hp / this.maxHp;
     this.phase = hpPct < 0.35 ? 3 : hpPct < 0.7 ? 2 : 1;
 
     const speed = this.move * (this.phase === 3 ? 1.25 : this.phase === 2 ? 1.1 : 1.0);
-
-    // chase
     this.x += nx * speed * dt;
     this.y += ny * speed * dt;
 
-    // slam pulse (AoE feel)
     if (dist < 260 && this.slamCD <= 0 && outProjectiles) {
       this.slamCD = this.phase === 3 ? 2.2 : 3.0;
       const count = this.phase === 3 ? 10 : 7;
@@ -334,39 +463,25 @@ export class Boss {
   draw(ctx) {
     if (!this.alive) return;
 
-    // shadow
-    ctx.globalAlpha = 0.22;
+    const wob = Math.sin(this._t * 3) * 1.3;
+    const outline = "#0b1330";
+
+    ctx.globalAlpha = 0.24;
     ctx.fillStyle = "#000";
     ctx.beginPath();
-    ctx.ellipse(this.x + 4, this.y + 14, this.r * 0.95, this.r * 0.45, 0, 0, Math.PI * 2);
+    ctx.ellipse(this.x + 4, this.y + 16, this.r * 0.98, this.r * 0.48, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
 
-    const wob = Math.sin(this._t * 3) * 1.3;
-
-    // body
-    ctx.fillStyle = "#2b2f39";
-    ctx.beginPath();
-    ctx.arc(this.x, this.y + wob, this.r, 0, Math.PI * 2);
-    ctx.fill();
-
-    // armor plates
-    ctx.globalAlpha = 0.35;
-    ctx.fillStyle = "#0b1330";
-    ctx.beginPath();
-    ctx.arc(this.x - 12, this.y - 8 + wob, this.r * 0.55, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(this.x + 12, this.y - 8 + wob, this.r * 0.55, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
+    drawOutlinedCircle(ctx, this.x, this.y + wob, this.r + 2, outline, "#2b2f39");
+    drawOutlinedCircle(ctx, this.x, this.y + wob, this.r, outline, "#2b2f39");
 
     // eyes
     ctx.fillStyle = "#ff5d5d";
     ctx.fillRect(this.x - 16, this.y - 8 + wob, 10, 6);
     ctx.fillRect(this.x + 6, this.y - 8 + wob, 10, 6);
 
-    // boss hp bar
+    // hp bar
     const w = 240;
     const pct = clamp(this.hp / this.maxHp, 0, 1);
     ctx.globalAlpha = 0.9;
@@ -378,6 +493,9 @@ export class Boss {
   }
 }
 
+/* ============================
+   PROJECTILES / LOOT
+   ============================ */
 export class Projectile {
   constructor(x, y, vx, vy, dmg) {
     this.x = x;
@@ -401,21 +519,19 @@ export class Projectile {
     ctx.globalAlpha = 0.22;
     ctx.fillStyle = "#000";
     ctx.beginPath();
-    ctx.ellipse(this.x + 2, this.y + 6, this.r * 1.2, this.r * 0.6, 0, 0, Math.PI * 2);
+    ctx.ellipse(this.x + 2, this.y + 7, this.r * 1.2, this.r * 0.6, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
 
-    ctx.fillStyle = "#ff7b2f";
+    const g = ctx.createRadialGradient(this.x - 2, this.y - 2, 2, this.x, this.y, this.r * 2.2);
+    g.addColorStop(0, "#fff3c4");
+    g.addColorStop(0.55, "#ff7b2f");
+    g.addColorStop(1, "#0b1330");
+
+    ctx.fillStyle = g;
     ctx.beginPath();
     ctx.arc(this.x, this.y, this.r * pulse, 0, Math.PI * 2);
     ctx.fill();
-
-    ctx.globalAlpha = 0.65;
-    ctx.fillStyle = "#ffd28a";
-    ctx.beginPath();
-    ctx.arc(this.x - 2, this.y - 2, this.r * 0.45, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
   }
 }
 
@@ -438,14 +554,20 @@ export class EnemyProjectile {
 
   draw(ctx, t) {
     const wob = 1 + Math.sin(t * 14 + this.x * 0.01) * 0.12;
+
     ctx.globalAlpha = 0.22;
     ctx.fillStyle = "#000";
     ctx.beginPath();
-    ctx.ellipse(this.x + 2, this.y + 5, this.r * 1.2, this.r * 0.6, 0, 0, Math.PI * 2);
+    ctx.ellipse(this.x + 2, this.y + 6, this.r * 1.2, this.r * 0.6, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
 
-    ctx.fillStyle = "#38d9ff";
+    const g = ctx.createRadialGradient(this.x - 2, this.y - 2, 2, this.x, this.y, this.r * 2.2);
+    g.addColorStop(0, "#eaf6ff");
+    g.addColorStop(0.55, "#38d9ff");
+    g.addColorStop(1, "#0b1330");
+
+    ctx.fillStyle = g;
     ctx.beginPath();
     ctx.arc(this.x, this.y, this.r * wob, 0, Math.PI * 2);
     ctx.fill();
@@ -473,21 +595,28 @@ export class Loot {
 
     if (this.item.kind === "gold") {
       const bob = Math.sin(this._t * 6) * 1.2;
-      ctx.fillStyle = "#ffd28a";
+      const g = ctx.createRadialGradient(this.x - 2, this.y - 3 + bob, 2, this.x, this.y + bob, this.r * 1.8);
+      g.addColorStop(0, "#fff3c4");
+      g.addColorStop(0.6, "#ffd28a");
+      g.addColorStop(1, "#8a5a1f");
+
+      ctx.fillStyle = g;
       ctx.beginPath();
       ctx.arc(this.x, this.y + bob, this.r, 0, Math.PI * 2);
       ctx.fill();
-      ctx.globalAlpha = 0.25;
-      ctx.fillStyle = "#fff";
-      ctx.beginPath();
-      ctx.arc(this.x - 2, this.y - 2 + bob, this.r * 0.4, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalAlpha = 1;
       return;
     }
 
     const c = rarityColor(this.item.rarity);
     const bob = Math.sin(this._t * 5) * 1.2;
+
+    ctx.fillStyle = "#0b1330";
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y - 12 + bob);
+    ctx.lineTo(this.x - 12, this.y + 10 + bob);
+    ctx.lineTo(this.x + 12, this.y + 10 + bob);
+    ctx.closePath();
+    ctx.fill();
 
     ctx.fillStyle = c;
     ctx.beginPath();
@@ -498,7 +627,7 @@ export class Loot {
     ctx.fill();
 
     ctx.globalAlpha = 0.25;
-    ctx.fillStyle = "#fff";
+    ctx.fillStyle = "#eaf6ff";
     ctx.beginPath();
     ctx.moveTo(this.x, this.y - 6 + bob);
     ctx.lineTo(this.x - 6, this.y + 6 + bob);
@@ -513,4 +642,50 @@ export function rarityColor(r) {
   if (r === "epic") return "#c77dff";
   if (r === "rare") return "#38d9ff";
   return "#cfd7e6";
+}
+
+/* ============================
+   SMALL DRAW HELPERS
+   ============================ */
+function roundRect(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, w * 0.5, h * 0.5);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+function drawOutlinedRoundRect(ctx, x, y, w, h, r, outline, fill) {
+  ctx.fillStyle = outline;
+  roundRect(ctx, x - 2, y - 2, w + 4, h + 4, r + 2);
+  ctx.fill();
+  ctx.fillStyle = fill;
+  roundRect(ctx, x, y, w, h, r);
+  ctx.fill();
+}
+
+function drawOutlinedCircle(ctx, x, y, r, outline, fill) {
+  ctx.fillStyle = outline;
+  ctx.beginPath();
+  ctx.arc(x, y, r + 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = fill;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// quick “shade” helper: factor >1 brightens, <1 darkens
+function shade(rgbHex, factor) {
+  // only handles #rrggbb
+  const r = parseInt(rgbHex.slice(1, 3), 16);
+  const g = parseInt(rgbHex.slice(3, 5), 16);
+  const b = parseInt(rgbHex.slice(5, 7), 16);
+  const rr = Math.max(0, Math.min(255, Math.round(r * factor)));
+  const gg = Math.max(0, Math.min(255, Math.round(g * factor)));
+  const bb = Math.max(0, Math.min(255, Math.round(b * factor)));
+  return `rgb(${rr},${gg},${bb})`;
 }
