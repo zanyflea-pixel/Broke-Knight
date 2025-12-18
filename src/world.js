@@ -478,6 +478,19 @@ export default class World {
             ctx.globalAlpha = 1;
           }
         }
+        }
+        // micro details (tufts/pebbles) when close enough
+        if (!T.ocean) {
+          const d = hash01(cx * 0.7, cy * 0.7, this.seed);
+          // fewer details when far (based on y on screen gives pseudo depth)
+          if (d < 0.06) {
+            drawTuft(ctx, cx, cy, t, d);
+          } else if (d > 0.965) {
+            drawPebble(ctx, cx, cy, t, d);
+          } else if (d > 0.88 && T.biome === "forest") {
+            drawBush(ctx, cx, cy, t, d);
+          }
+        }
       }
     }
 
@@ -513,6 +526,9 @@ export default class World {
 
     // cloud shadows pass
     this.drawCloudShadows(ctx, t, x0, y0, x1, y1);
+    // atmospheric haze (fake depth toward horizon)
+    this.drawHaze(ctx, t, x0, y0, x1, y1, cam);
+
   }
 
   drawSkyBackdrop(ctx, t) {
@@ -1031,6 +1047,22 @@ export default class World {
     }
     ctx.globalAlpha = 1;
   }
+  drawHaze(ctx, t, x0, y0, x1, y1, cam) {
+    // Stronger haze toward the top of the screen (fake distance)
+    const topY = cam.y;
+    const bottomY = cam.y + this.viewH;
+
+    const g = ctx.createLinearGradient(0, topY, 0, bottomY);
+    g.addColorStop(0, "rgba(120,170,210,0.22)");
+    g.addColorStop(0.35, "rgba(120,170,210,0.12)");
+    g.addColorStop(1, "rgba(120,170,210,0.00)");
+
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = g;
+    ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+  }
+
+
 }
 
 /* ============================
@@ -1082,6 +1114,85 @@ function tileColor(T, t, x, y, seed) {
   b = lerp(b, sandB, shore);
 
   return rgb(r, g, b);
+}
+
+/* ============================
+   MICRO DETAILS (tufts/pebbles)
+   ============================ */
+function hash01(x, y, seed) {
+  // deterministic 0..1 based on sin hash (fast, stable)
+  const s = Math.sin((x * 12.9898 + y * 78.233 + seed * 0.001) * 0.017) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+function drawTuft(ctx, x, y, t, d) {
+  // upside-down W tuft, slightly wiggly
+  const w = 9;
+  const h = 7;
+  const sway = Math.sin(t * 2.5 + d * 999) * 0.9;
+
+  ctx.globalAlpha = 0.20;
+  ctx.strokeStyle = "rgba(0,0,0,0.55)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x - w * 0.55, y + h * 0.85);
+  ctx.lineTo(x - w * 0.25 + sway, y - h * 0.15);
+  ctx.lineTo(x + sway, y + h * 0.75);
+  ctx.lineTo(x + w * 0.25 + sway, y - h * 0.15);
+  ctx.lineTo(x + w * 0.55, y + h * 0.85);
+  ctx.stroke();
+
+  ctx.globalAlpha = 0.30;
+  ctx.strokeStyle = "rgba(220,255,220,0.55)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x - w * 0.55, y + h * 0.85);
+  ctx.lineTo(x - w * 0.25 + sway, y - h * 0.15);
+  ctx.lineTo(x + sway, y + h * 0.75);
+  ctx.lineTo(x + w * 0.25 + sway, y - h * 0.15);
+  ctx.lineTo(x + w * 0.55, y + h * 0.85);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+function drawPebble(ctx, x, y, t, d) {
+  const r = 2.2 + (d * 10 % 1.2);
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = "#000";
+  ctx.beginPath();
+  ctx.ellipse(x + 1, y + 2, r + 1.2, r, 0.2, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.globalAlpha = 0.55;
+  ctx.fillStyle = "rgba(220,230,240,0.70)";
+  ctx.beginPath();
+  ctx.ellipse(x, y + 1, r, r * 0.9, 0.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+function drawBush(ctx, x, y, t, d) {
+  const s = 0.7 + (d * 10 % 0.6);
+  ctx.globalAlpha = 0.16;
+  ctx.fillStyle = "#000";
+  ctx.beginPath();
+  ctx.ellipse(x + 2, y + 10, 10 * s, 4 * s, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.globalAlpha = 0.85;
+  ctx.fillStyle = "rgba(20,60,40,0.95)";
+  ctx.beginPath();
+  ctx.arc(x - 6 * s, y + 2 * s, 8 * s, 0, Math.PI * 2);
+  ctx.arc(x + 3 * s, y, 9 * s, 0, Math.PI * 2);
+  ctx.arc(x + 10 * s, y + 4 * s, 7 * s, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.globalAlpha = 0.25;
+  ctx.fillStyle = "rgba(140,220,170,0.8)";
+  ctx.beginPath();
+  ctx.arc(x + 2 * s, y - 2 * s, 6 * s, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
 }
 
 function rgb(r, g, b) {

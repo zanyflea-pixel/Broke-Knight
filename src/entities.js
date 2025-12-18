@@ -90,126 +90,199 @@ export class Hero {
     this.mana = clamp(this.mana + dt * 3.5, 0, this.maxMana);
   }
 
+
   draw(ctx) {
-    const walk = (Math.abs(this.vx) + Math.abs(this.vy)) > 3;
-    const bob = Math.sin(this._t * (walk ? 10 : 4)) * (walk ? 1.6 : 0.8);
+    const moving = (Math.abs(this.vx) + Math.abs(this.vy)) > 3;
+    const bob = Math.sin(this._t * (moving ? 10 : 4)) * (moving ? 1.8 : 0.9);
+    const fx = this.faceX || 1;
+    const fy = this.faceY || 0;
 
-    const fx = this.faceX;
-    const fy = this.faceY;
+    // gear tints
+    const helm = this.equip.helm;
+    const chest = this.equip.chest;
+    const boots = this.equip.boots;
+    const weapon = this.equip.weapon;
 
-    // shadow
-    ctx.globalAlpha = 0.20;
+    const helmTint = helm ? rarityColor(helm.rarity) : null;
+    const chestTint = chest ? rarityColor(chest.rarity) : null;
+    const bootTint = boots ? rarityColor(boots.rarity) : null;
+
+    // shadow (gives "grounded" 3D feel)
+    ctx.globalAlpha = 0.22;
     ctx.fillStyle = "#000";
     ctx.beginPath();
-    ctx.ellipse(this.x + 2, this.y + 14, 14, 6, 0, 0, Math.PI * 2);
+    ctx.ellipse(this.x + 2, this.y + 16, 15, 6, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
 
-    // palette
-    const armorCol = "#cfd7e6";
-    const steelDark = "#8f9bb2";
+    // small helper for outlines
     const outline = "#0b1330";
+    const skin = "#ffd9b0";
 
-    const chestTint = this.equip.chest ? rarityColor(this.equip.chest.rarity) : null;
-    const helmTint = this.equip.helm ? rarityColor(this.equip.helm.rarity) : null;
+    // --- feet/boots (front layer) ---
+    const step = moving ? Math.sin(this._t * 10) * 1.6 : 0;
+    const footY = this.y + 10 + bob;
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = outline;
+    ctx.fillStyle = bootTint ? shadeColor(bootTint, 0.9) : "#3b3f4a";
 
-    // body (torso)
-    drawOutlinedRoundRect(ctx, this.x - 10, this.y - 6 + bob, 20, 22, 7, outline, armorCol);
+    // left boot
+    roundRect(ctx, this.x - 10 + fx * 1, footY + step, 9, 6, 3);
+    ctx.fill(); ctx.stroke();
+    // right boot
+    roundRect(ctx, this.x + 1 + fx * 1, footY - step, 9, 6, 3);
+    ctx.fill(); ctx.stroke();
 
-    // torso shading
-    ctx.globalAlpha = 0.18;
-    ctx.fillStyle = "#0b1330";
-    roundRect(ctx, this.x - 10, this.y - 6 + bob, 6, 22, 6);
+    // boot highlights
+    ctx.globalAlpha = 0.22;
+    ctx.fillStyle = "#fff";
+    roundRect(ctx, this.x - 9 + fx * 1, footY + step + 1, 6, 2, 2);
+    ctx.fill();
+    roundRect(ctx, this.x + 2 + fx * 1, footY - step + 1, 6, 2, 2);
     ctx.fill();
     ctx.globalAlpha = 1;
 
-    // chest armor overlay
+    // --- legs ---
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = outline;
+    ctx.fillStyle = "#2b2f39";
+    roundRect(ctx, this.x - 8, this.y + 2 + bob + step * 0.35, 7, 12, 3);
+    ctx.fill(); ctx.stroke();
+    roundRect(ctx, this.x + 1, this.y + 2 + bob - step * 0.35, 7, 12, 3);
+    ctx.fill(); ctx.stroke();
+
+    // --- torso (slight trapezoid look via two rects) ---
+    const torsoY = this.y - 7 + bob;
+    ctx.fillStyle = "#384154";
+    ctx.strokeStyle = outline;
+    ctx.lineWidth = 3;
+
+    // base torso
+    roundRect(ctx, this.x - 11, torsoY, 22, 20, 8);
+    ctx.fill(); ctx.stroke();
+
+    // chest overlay
     if (chestTint) {
-      ctx.globalAlpha = 0.25;
+      ctx.globalAlpha = 0.22;
       ctx.fillStyle = chestTint;
-      roundRect(ctx, this.x - 10, this.y - 6 + bob, 20, 22, 7);
+      roundRect(ctx, this.x - 11, torsoY, 22, 20, 8);
       ctx.fill();
       ctx.globalAlpha = 1;
     }
 
-    // head + helm
-    const headY = this.y - 18 + bob;
-    drawOutlinedCircle(ctx, this.x, headY, 8.5, outline, "#f2f5ff");
+    // torso light/shade (fake volume)
+    ctx.globalAlpha = 0.15;
+    ctx.fillStyle = "#fff";
+    roundRect(ctx, this.x - 9, torsoY + 2, 8, 14, 6);
+    ctx.fill();
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = "#000";
+    roundRect(ctx, this.x + 2, torsoY + 2, 7, 14, 6);
+    ctx.fill();
+    ctx.globalAlpha = 1;
 
+    // --- arms (simple capsules, swinging with movement) ---
+    const armSwing = moving ? Math.sin(this._t * 10) * 2.2 : 0;
+    // back arm (behind torso)
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = "#2f3646";
+    ctx.strokeStyle = outline;
+    ctx.lineWidth = 3;
+    roundRect(ctx, this.x - 16, this.y - 4 + bob - armSwing * 0.4, 7, 16, 4);
+    ctx.fill(); ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // front arm (weapon arm)
+    ctx.fillStyle = "#364055";
+    roundRect(ctx, this.x + 9, this.y - 4 + bob + armSwing * 0.4, 7, 16, 4);
+    ctx.fill(); ctx.stroke();
+
+    // --- head ---
+    const headY = this.y - 21 + bob * 0.35;
+    ctx.fillStyle = skin;
+    ctx.strokeStyle = outline;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.ellipse(this.x, headY, 9, 10, 0, 0, Math.PI * 2);
+    ctx.fill(); ctx.stroke();
+
+    // face shadow / nose direction
+    ctx.globalAlpha = 0.12;
+    ctx.fillStyle = "#000";
+    ctx.beginPath();
+    ctx.ellipse(this.x + fx * 2, headY + 1, 6, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // helmet overlay (if equipped)
     if (helmTint) {
-      ctx.globalAlpha = 0.30;
+      ctx.globalAlpha = 0.25;
       ctx.fillStyle = helmTint;
       ctx.beginPath();
-      ctx.ellipse(this.x, headY - 1, 9, 7, 0, 0, Math.PI * 2);
+      ctx.ellipse(this.x, headY - 1, 10, 9, 0, Math.PI, Math.PI * 2);
       ctx.fill();
       ctx.globalAlpha = 1;
-    }
 
-    // visor
-    ctx.globalAlpha = 0.85;
-    ctx.fillStyle = outline;
-    roundRect(ctx, this.x - 7, headY - 2, 14, 5, 3);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-
-    // legs (two)
-    const step = walk ? Math.sin(this._t * 10) * 3 : 0;
-    drawOutlinedRoundRect(ctx, this.x - 7, this.y + 12 + bob + step * 0.4, 6, 10, 3, outline, steelDark);
-    drawOutlinedRoundRect(ctx, this.x + 1, this.y + 12 + bob - step * 0.4, 6, 10, 3, outline, steelDark);
-
-    // boots tint
-    if (this.equip.boots) {
-      ctx.globalAlpha = 0.30;
-      ctx.fillStyle = rarityColor(this.equip.boots.rarity);
-      roundRect(ctx, this.x - 7, this.y + 18 + bob + step * 0.4, 6, 4, 2);
-      ctx.fill();
-      roundRect(ctx, this.x + 1, this.y + 18 + bob - step * 0.4, 6, 4, 2);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-    }
-
-    // arms (aimed slightly toward facing)
-    const ax = fx * 3;
-    const ay = fy * 2;
-    drawOutlinedRoundRect(ctx, this.x - 14 + ax, this.y - 2 + bob + ay, 6, 14, 3, outline, steelDark);
-    drawOutlinedRoundRect(ctx, this.x + 8 + ax, this.y - 2 + bob + ay, 6, 14, 3, outline, steelDark);
-
-    // weapon (simple sword/staff) based on weapon rarity
-    const wcol = this.equip.weapon ? rarityColor(this.equip.weapon.rarity) : "#d7e0ff";
-    ctx.globalAlpha = 0.95;
-    ctx.strokeStyle = outline;
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(this.x + fx * 6, this.y - 2 + bob);
-    ctx.lineTo(this.x + fx * 22, this.y - 2 + bob + fy * 10);
-    ctx.stroke();
-
-    ctx.strokeStyle = wcol;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(this.x + fx * 6, this.y - 2 + bob);
-    ctx.lineTo(this.x + fx * 22, this.y - 2 + bob + fy * 10);
-    ctx.stroke();
-
-    // small “spark” on rare+ weapons
-    if (this.equip.weapon && this.equip.weapon.rarity !== "common") {
-      ctx.globalAlpha = 0.30;
-      ctx.fillStyle = "#eaf6ff";
+      ctx.globalAlpha = 0.22;
+      ctx.fillStyle = "#fff";
       ctx.beginPath();
-      ctx.arc(this.x + fx * 22, this.y - 2 + bob + fy * 10, 3, 0, Math.PI * 2);
+      ctx.ellipse(this.x - 3, headY - 5, 3, 2, 0.2, 0, Math.PI * 2);
       ctx.fill();
       ctx.globalAlpha = 1;
     }
 
-    // highlight
-    ctx.globalAlpha = 0.14;
-    ctx.fillStyle = "#eaf6ff";
+    // --- cape / back cloth (subtle, makes silhouette "real") ---
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = "#203045";
     ctx.beginPath();
-    ctx.arc(this.x - 6, headY - 5, 4, 0, Math.PI * 2);
+    ctx.moveTo(this.x - 10, this.y - 4 + bob);
+    ctx.quadraticCurveTo(this.x - 18, this.y + 12 + bob, this.x - 6, this.y + 14 + bob);
+    ctx.quadraticCurveTo(this.x - 2, this.y + 6 + bob, this.x + 1, this.y + 2 + bob);
+    ctx.closePath();
     ctx.fill();
     ctx.globalAlpha = 1;
+
+    // --- weapon (readable direction + rarity tint) ---
+    if (weapon) {
+      const wcol = rarityColor(weapon.rarity);
+      ctx.lineCap = "round";
+
+      // shadow stroke
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = outline;
+      ctx.beginPath();
+      ctx.moveTo(this.x + fx * 6, this.y - 2 + bob);
+      ctx.lineTo(this.x + fx * 30, this.y - 2 + bob + fy * 16);
+      ctx.stroke();
+
+      // colored blade
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = wcol;
+      ctx.beginPath();
+      ctx.moveTo(this.x + fx * 6, this.y - 2 + bob);
+      ctx.lineTo(this.x + fx * 30, this.y - 2 + bob + fy * 16);
+      ctx.stroke();
+
+      // sparkle
+      ctx.globalAlpha = 0.18;
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(this.x + fx * 26, this.y - 6 + bob + fy * 10, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // nameplate
+    if (this.showName) {
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = "#d7e0ff";
+      ctx.font = "12px system-ui, sans-serif";
+      const txt = this.name || "Broke Knight";
+      ctx.fillText(txt, this.x - ctx.measureText(txt).width / 2, this.y - 34);
+      ctx.globalAlpha = 1;
+    }
   }
-}
+
 
 /* ============================
    ENEMY (silhouette per type)
