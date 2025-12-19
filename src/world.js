@@ -289,7 +289,8 @@ export default class World {
     for (const w of this.waystones) this.drawWaystone(ctx, w, t);
 
     this.drawCoastFoam(ctx, t, x0, y0, x1, y1);
-    this.drawCloudShadows(ctx, t, x0, y0, x1, y1);
+    this.drawClouds(ctx, t, cam, x0, y0, x1, y1);
+    this.drawAtmosphere(ctx, cam);
   }
 
   drawRiver(ctx, t, x0, y0, x1, y1) {
@@ -462,33 +463,114 @@ export default class World {
     ctx.globalAlpha = 1;
   }
 
-  drawCloudShadows(ctx, t, x0, y0, x1, y1) {
-    ctx.globalAlpha = 0.06;
-    ctx.fillStyle = "#000";
-    const span = 520;
-    const drift = (t * 40) % span;
-    for (let y = Math.floor(y0 / 400) * 400; y < y1; y += 400) {
-      for (let x = Math.floor(x0 / span) * span - span; x < x1 + span; x += span) {
+  drawClouds(ctx, t, cam, x0, y0, x1, y1) {
+    // Two parallax cloud layers + their shadows. World is top-down, but we fake depth.
+    const layers = [
+      { yOff: 70,  speed: 18,  alpha: 0.22,  scaleX: 1.0, scaleY: 1.0 },
+      { yOff: 130, speed: 28,  alpha: 0.16,  scaleX: 1.2, scaleY: 1.1 },
+    ];
+
+    for (let li = 0; li < layers.length; li++) {
+      const L = layers[li];
+      const span = 520;
+      const drift = (t * L.speed + cam.x * 0.25 * (li + 1)) % span;
+      const baseY = cam.y + L.yOff + li * 40 + Math.sin(t * 0.15 + li) * 10;
+
+      // shadows
+      ctx.save();
+      ctx.globalAlpha = 0.06;
+      ctx.fillStyle = "#000";
+      for (let x = Math.floor((cam.x - 200) / span) * span; x < cam.x + cam.w + span; x += span) {
         const xx = x + drift;
+        const yy = baseY + 140;
+        if (yy < y0 - 200 || yy > y1 + 200) continue;
         ctx.beginPath();
-        ctx.ellipse(xx, y + 120, 160, 40, 0, 0, Math.PI * 2);
+        ctx.ellipse(xx, yy, 170 * L.scaleX, 42 * L.scaleY, 0, 0, Math.PI * 2);
         ctx.fill();
       }
+      ctx.restore();
+
+      // clouds
+      ctx.save();
+      ctx.globalAlpha = L.alpha;
+      ctx.fillStyle = "rgba(235,245,255,1)";
+      for (let x = Math.floor((cam.x - 200) / span) * span; x < cam.x + cam.w + span; x += span) {
+        const xx = x + drift;
+        const yy = baseY;
+        if (yy < y0 - 200 || yy > y1 + 200) continue;
+        // puffy stack
+        ctx.beginPath();
+        ctx.ellipse(xx - 50, yy + 10, 70 * L.scaleX, 22 * L.scaleY, 0, 0, Math.PI * 2);
+        ctx.ellipse(xx + 10, yy, 90 * L.scaleX, 30 * L.scaleY, 0, 0, Math.PI * 2);
+        ctx.ellipse(xx + 75, yy + 12, 60 * L.scaleX, 20 * L.scaleY, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // subtle shading
+        ctx.globalAlpha = L.alpha * 0.55;
+        ctx.fillStyle = "rgba(180,205,235,1)";
+        ctx.beginPath();
+        ctx.ellipse(xx + 15, yy + 18, 95 * L.scaleX, 22 * L.scaleY, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = L.alpha;
+        ctx.fillStyle = "rgba(235,245,255,1)";
+      }
+      ctx.restore();
     }
-    ctx.globalAlpha = 1;
+  }
+
+  drawAtmosphere(ctx, cam) {
+    // Screen-aligned atmosphere / vignette for depth (fake horizon).
+    const x = cam.x, y = cam.y, w = cam.w, h = cam.h;
+
+    // top haze
+    ctx.save();
+    const g = ctx.createLinearGradient(0, y, 0, y + h);
+    g.addColorStop(0.00, "rgba(220,235,255,0.22)");
+    g.addColorStop(0.35, "rgba(220,235,255,0.06)");
+    g.addColorStop(1.00, "rgba(0,0,0,0.10)");
+    ctx.fillStyle = g;
+    ctx.fillRect(x, y, w, h);
+
+    // subtle vignette
+    ctx.globalAlpha = 0.16;
+    ctx.strokeStyle = "rgba(0,0,0,0.9)";
+    ctx.lineWidth = 80;
+    ctx.strokeRect(x + 40, y + 40, w - 80, h - 80);
+    ctx.restore();
   }
 }
 
 function tileColor(T, t, x, y, seed) {
+  // Base palette + subtle noise variation + animated water shimmer.
+  const n = hash01((x * 0.35) | 0, (y * 0.35) | 0, seed);
+  const n2 = hash01((x * 0.08) | 0, (y * 0.08) | 0, seed + 77);
+
   if (T.ocean) {
-    const wave = Math.sin(t * 3 + x * 0.01 + y * 0.013) * 0.5 + 0.5;
-    return `rgb(${8 + wave * 10},${28 + wave * 30},${48 + wave * 55})`;
+    const wave = Math.sin(t * 2.6 + x * 0.012 + y * 0.014) * 0.5 + 0.5;
+    const chop = Math.sin(t * 5.2 + x * 0.04) * 0.5 + 0.5;
+    const k = 0.55 * wave + 0.45 * chop;
+    const r = 8 + k * 12;
+    const g = 34 + k * 34;
+    const b = 64 + k * 70;
+    return `rgb(${r|0},${g|0},${b|0})`;
   }
-  if (T.biome === "desert") return "#7a6a2b";
-  if (T.biome === "swamp") return "#1b3a2f";
-  if (T.biome === "highland") return "#27543b";
-  if (T.biome === "forest") return "#184b31";
-  return "#1b5a3a";
+
+  // land: biome base
+  let base;
+  if (T.biome === "desert") base = [122, 108, 48];
+  else if (T.biome === "swamp") base = [24, 58, 47];
+  else if (T.biome === "highland") base = [35, 92, 62];
+  else if (T.biome === "forest") base = [22, 86, 55];
+  else base = [30, 104, 64]; // grass
+
+  // variation (dirt patches / moss / subtle speckle)
+  const v = (n - 0.5) * 26 + (n2 - 0.5) * 18;
+  const dirt = fbm(x * 0.0028 + 10, y * 0.0028 - 7, seed + 11, 3);
+  const dirtK = clamp((dirt - 0.52) * 1.25, -0.25, 0.25);
+
+  const rr = clamp(base[0] + v + dirtK * 22, 0, 255);
+  const gg = clamp(base[1] + v + dirtK * 10, 0, 255);
+  const bb = clamp(base[2] + v - dirtK * 8, 0, 255);
+  return `rgb(${rr|0},${gg|0},${bb|0})`;
 }
 
 function drawTuft(ctx, x, y, t, d) {
