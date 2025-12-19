@@ -2,10 +2,8 @@
 export default class Input {
   constructor(canvas) {
     this.canvas = canvas;
-
     this.keys = new Set();
     this.pressed = new Set();
-
     this.mouse = { x: 0, y: 0, down: false, clicked: false };
 
     window.addEventListener("keydown", (e) => {
@@ -13,7 +11,11 @@ export default class Input {
       if (!this.keys.has(k)) this.pressed.add(k);
       this.keys.add(k);
 
-      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(k)) e.preventDefault();
+      // prevent page scroll
+      if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(k)) e.preventDefault();
+      // quick save/load helpers
+      if ((e.ctrlKey || e.metaKey) && (k === "s" || k === "S")) e.preventDefault();
+      if ((e.ctrlKey || e.metaKey) && (k === "l" || k === "L")) e.preventDefault();
     });
 
     window.addEventListener("keyup", (e) => {
@@ -31,9 +33,7 @@ export default class Input {
       this.mouse.clicked = true;
     });
 
-    window.addEventListener("mouseup", () => {
-      this.mouse.down = false;
-    });
+    window.addEventListener("mouseup", () => { this.mouse.down = false; });
   }
 
   consume(key) {
@@ -44,24 +44,15 @@ export default class Input {
     return false;
   }
 
-  moveVec() {
-    let x = 0, y = 0;
-    if (this.keys.has("ArrowLeft")) x -= 1;
-    if (this.keys.has("ArrowRight")) x += 1;
-    if (this.keys.has("ArrowUp")) y -= 1;
-    if (this.keys.has("ArrowDown")) y += 1;
+  step() { this.mouse.clicked = false; this.pressed.clear(); }
 
-    if (x !== 0 && y !== 0) {
-      const inv = 1 / Math.sqrt(2);
-      x *= inv;
-      y *= inv;
-    }
-    return { x, y };
+  get axis() {
+    const left = this.keys.has("ArrowLeft") ? -1 : 0;
+    const right = this.keys.has("ArrowRight") ? 1 : 0;
+    const up = this.keys.has("ArrowUp") ? -1 : 0;
+    const down = this.keys.has("ArrowDown") ? 1 : 0;
+    return { x: left + right, y: up + down };
   }
 
-  consumeClick() {
-    if (!this.mouse.clicked) return null;
-    this.mouse.clicked = false;
-    return { x: this.mouse.x, y: this.mouse.y };
-  }
+  getKey(k) { return this.keys.has(k); }
 }
