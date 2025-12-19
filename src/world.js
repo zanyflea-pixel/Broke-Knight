@@ -212,9 +212,22 @@ export default class World {
         this.terrainAt(x, y + 120).ocean ||
         this.terrainAt(x, y - 120).ocean;
 
-      if (!nearOcean) continue;
 
-      arr.push({ x: x - 80, y: y - 40, w: 160, h: 80, name: `Dock ${arr.length + 1}` });
+if (!nearOcean) continue;
+
+// push the dock toward the nearest ocean side so it sits right on the coast
+let ox = this.terrainAt(x + 140, y).ocean ? 1 : (this.terrainAt(x - 140, y).ocean ? -1 : 0);
+let oy = this.terrainAt(x, y + 140).ocean ? 1 : (this.terrainAt(x, y - 140).ocean ? -1 : 0);
+x += ox * 70;
+y += oy * 70;
+
+// keep the dock itself on land
+if (this.terrainAt(x, y).ocean) {
+  x -= ox * 90;
+  y -= oy * 90;
+}
+
+arr.push({ x: x - 80, y: y - 40, w: 160, h: 80, name: `Dock ${arr.length + 1}` });
     }
 
     // guarantee one useful
@@ -237,6 +250,123 @@ export default class World {
     }
     return arr;
   }
+
+
+generateSettlements(count) {
+  const rng = new RNG(this.seed + 505);
+  const arr = [];
+  let tries = 0;
+  while (arr.length < count && tries++ < 12000) {
+    const x = rng.float() * this.width;
+    const y = rng.float() * this.height;
+    const T = this.terrainAt(x, y);
+    if (T.ocean) continue;
+    if (this.isInRiver(x, y)) continue;
+    if (x < 320 || y < 320 || x > this.width - 320 || y > this.height - 320) continue;
+    if (!(T.biome === "grass" || T.biome === "forest" || T.biome === "highland")) continue;
+
+    let ok = true;
+    for (const w of this.waystones) { if (dist2(x, y, w.x, w.y) < 900 * 900) { ok = false; break; } }
+    if (!ok) continue;
+    for (const d of this.docks) { if (dist2(x, y, d.x + d.w/2, d.y + d.h/2) < 800 * 800) { ok = false; break; } }
+    if (!ok) continue;
+    for (const s of arr) { if (dist2(x, y, s.x, s.y) < 1400 * 1400) { ok = false; break; } }
+    if (!ok) continue;
+
+    const nBuildings = 6 + rng.int(0, 8);
+    const buildings = [];
+    for (let i = 0; i < nBuildings; i++) {
+      const a = (i / nBuildings) * Math.PI * 2 + rng.float() * 0.35;
+      const rad = 90 + rng.float() * 120;
+      const bx = x + Math.cos(a) * rad;
+      const by = y + Math.sin(a) * (rad * 0.72);
+      const bw = 26 + rng.float() * 18;
+      const bh = 22 + rng.float() * 16;
+      buildings.push({
+        x: bx - bw/2,
+        y: by - bh/2,
+        w: bw,
+        h: bh,
+        type: rng.pick(["hut","house","shop","tower"]),
+        seed: rng.int(0, 999999),
+      });
+    }
+
+    arr.push({
+      id: `town_${arr.length}`,
+      name: ["Oakreach","Brineford","Emberhollow","Stonewake","Mossgate","Frostmere","Glimmerfield","Cinderwatch","Rivenshore"][arr.length % 9],
+      x, y,
+      biome: T.biome,
+      buildings,
+    });
+  }
+
+  if (arr.length) {
+    arr[0].x = this.spawn.x + 520;
+    arr[0].y = this.spawn.y - 420;
+    arr[0].name = "Starter Hamlet";
+  }
+  return arr;
+}
+
+drawSettlement(ctx, s, t) {
+  const ringR = 190;
+
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = "#000";
+  ctx.beginPath();
+  ctx.ellipse(s.x, s.y + 14, ringR * 1.05, ringR * 0.72, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.globalAlpha = 0.75;
+  ctx.strokeStyle = "rgba(210,190,145,0.65)";
+  ctx.lineWidth = 10;
+  ctx.beginPath();
+  ctx.ellipse(s.x, s.y, ringR, ringR * 0.68, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  for (const b of s.buildings) this.drawBuilding(ctx, b, t);
+
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = "#d7e0ff";
+  ctx.font = "12px system-ui, sans-serif";
+  const label = s.name;
+  ctx.fillText(label, s.x - ctx.measureText(label).width / 2, s.y - ringR * 0.72 - 14);
+  ctx.globalAlpha = 1;
+}
+
+drawBuilding(ctx, b, t) {
+  const roof = b.type === "tower" ? "#3a3f55" : (b.type === "shop" ? "#5b2b2b" : "#2f2b3b");
+  const wall = "#cbbfa7";
+
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(b.x + 6, b.y + b.h + 6, b.w, 10);
+
+  ctx.globalAlpha = 0.92;
+  ctx.fillStyle = wall;
+  ctx.fillRect(b.x, b.y, b.w, b.h);
+
+  ctx.globalAlpha = 0.95;
+  ctx.fillStyle = roof;
+  ctx.beginPath();
+  ctx.moveTo(b.x - 4, b.y);
+  ctx.lineTo(b.x + b.w/2, b.y - 14);
+  ctx.lineTo(b.x + b.w + 4, b.y);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.globalAlpha = 0.45;
+  ctx.fillStyle = "#0b1330";
+  ctx.fillRect(b.x + b.w*0.42, b.y + b.h*0.45, b.w*0.16, b.h*0.5);
+
+  ctx.globalAlpha = 0.35;
+  ctx.fillStyle = "rgba(255,210,140,0.9)";
+  ctx.fillRect(b.x + b.w*0.18, b.y + b.h*0.32, b.w*0.14, b.h*0.18);
+  ctx.fillRect(b.x + b.w*0.68, b.y + b.h*0.32, b.w*0.14, b.h*0.18);
+  ctx.globalAlpha = 1;
+}
+
 
   draw(ctx, t, cam) {
     const margin = 240;
@@ -289,8 +419,7 @@ export default class World {
     for (const w of this.waystones) this.drawWaystone(ctx, w, t);
 
     this.drawCoastFoam(ctx, t, x0, y0, x1, y1);
-    this.drawClouds(ctx, t, cam, x0, y0, x1, y1);
-    this.drawAtmosphere(ctx, cam);
+    this.drawCloudShadows(ctx, t, x0, y0, x1, y1);
   }
 
   drawRiver(ctx, t, x0, y0, x1, y1) {
@@ -336,21 +465,47 @@ export default class World {
     ctx.fillRect(b.x - 8, b.y + b.h + 2, b.w + 16, 8);
   }
 
-  drawDock(ctx, d, t) {
-    ctx.globalAlpha = 0.9;
-    ctx.fillStyle = "#6b4a2b";
-    ctx.fillRect(d.x, d.y, d.w, d.h);
+drawDock(ctx, d, t) {
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(d.x + 8, d.y + d.h + 6, d.w, 10);
 
-    ctx.globalAlpha = 0.35;
-    ctx.fillStyle = "#3b2412";
-    for (let x = d.x + 10; x < d.x + d.w; x += 18) ctx.fillRect(x, d.y + 8, 2, d.h - 16);
+  ctx.globalAlpha = 0.95;
+  ctx.fillStyle = "#6b4a2b";
+  ctx.fillRect(d.x, d.y, d.w, d.h);
 
-    ctx.globalAlpha = 0.95;
-    ctx.fillStyle = "#d7e0ff";
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText("Dock (press B to sail)", d.x + 10, d.y - 6);
-    ctx.globalAlpha = 1;
+  ctx.globalAlpha = 0.35;
+  ctx.fillStyle = "#3b2412";
+  for (let x = d.x + 10; x < d.x + d.w; x += 18) {
+    ctx.fillRect(x, d.y + 6, 2, d.h - 12);
   }
+
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = "#4a321e";
+  const postW = 6, postH = 18;
+  ctx.fillRect(d.x - 2, d.y - 6, postW, postH);
+  ctx.fillRect(d.x + d.w - 4, d.y - 6, postW, postH);
+  ctx.fillRect(d.x - 2, d.y + d.h - 12, postW, postH);
+  ctx.fillRect(d.x + d.w - 4, d.y + d.h - 12, postW, postH);
+
+  ctx.globalAlpha = 0.35;
+  ctx.strokeStyle = "#d7c7a6";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(d.x + 4, d.y + 6);
+  ctx.lineTo(d.x + d.w - 4, d.y + 6);
+  ctx.moveTo(d.x + 4, d.y + d.h - 6);
+  ctx.lineTo(d.x + d.w - 4, d.y + d.h - 6);
+  ctx.stroke();
+
+  ctx.globalAlpha = 0.95;
+  ctx.fillStyle = "#d7e0ff";
+  ctx.font = "13px system-ui, sans-serif";
+  ctx.fillText("Dock (B to sail)", d.x + 10, d.y - 10);
+  ctx.globalAlpha = 1;
+}
+
+  
 
   drawWaystone(ctx, w, t) {
     const pulse = 1 + Math.sin(t * 4) * 0.08;
@@ -463,149 +618,49 @@ export default class World {
     ctx.globalAlpha = 1;
   }
 
-  drawClouds(ctx, t, cam, x0, y0, x1, y1) {
-    // Two parallax cloud layers + their shadows. World is top-down, but we fake depth.
-    const layers = [
-      { yOff: 70,  speed: 18,  alpha: 0.22,  scaleX: 1.0, scaleY: 1.0 },
-      { yOff: 130, speed: 28,  alpha: 0.16,  scaleX: 1.2, scaleY: 1.1 },
-    ];
-
-    for (let li = 0; li < layers.length; li++) {
-      const L = layers[li];
-      const span = 520;
-      const drift = (t * L.speed + cam.x * 0.25 * (li + 1)) % span;
-      const baseY = cam.y + L.yOff + li * 40 + Math.sin(t * 0.15 + li) * 10;
-
-      // shadows
-      ctx.save();
-      ctx.globalAlpha = 0.06;
-      ctx.fillStyle = "#000";
-      for (let x = Math.floor((cam.x - 200) / span) * span; x < cam.x + cam.w + span; x += span) {
+  drawCloudShadows(ctx, t, x0, y0, x1, y1) {
+    ctx.globalAlpha = 0.06;
+    ctx.fillStyle = "#000";
+    const span = 520;
+    const drift = (t * 40) % span;
+    for (let y = Math.floor(y0 / 400) * 400; y < y1; y += 400) {
+      for (let x = Math.floor(x0 / span) * span - span; x < x1 + span; x += span) {
         const xx = x + drift;
-        const yy = baseY + 140;
-        if (yy < y0 - 200 || yy > y1 + 200) continue;
         ctx.beginPath();
-        ctx.ellipse(xx, yy, 170 * L.scaleX, 42 * L.scaleY, 0, 0, Math.PI * 2);
+        ctx.ellipse(xx, y + 120, 160, 40, 0, 0, Math.PI * 2);
         ctx.fill();
       }
-      ctx.restore();
-
-      // clouds
-      ctx.save();
-      ctx.globalAlpha = L.alpha;
-      ctx.fillStyle = "rgba(235,245,255,1)";
-      for (let x = Math.floor((cam.x - 200) / span) * span; x < cam.x + cam.w + span; x += span) {
-        const xx = x + drift;
-        const yy = baseY;
-        if (yy < y0 - 200 || yy > y1 + 200) continue;
-        // puffy stack
-        ctx.beginPath();
-        ctx.ellipse(xx - 50, yy + 10, 70 * L.scaleX, 22 * L.scaleY, 0, 0, Math.PI * 2);
-        ctx.ellipse(xx + 10, yy, 90 * L.scaleX, 30 * L.scaleY, 0, 0, Math.PI * 2);
-        ctx.ellipse(xx + 75, yy + 12, 60 * L.scaleX, 20 * L.scaleY, 0, 0, Math.PI * 2);
-        ctx.fill();
-        // subtle shading
-        ctx.globalAlpha = L.alpha * 0.55;
-        ctx.fillStyle = "rgba(180,205,235,1)";
-        ctx.beginPath();
-        ctx.ellipse(xx + 15, yy + 18, 95 * L.scaleX, 22 * L.scaleY, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.globalAlpha = L.alpha;
-        ctx.fillStyle = "rgba(235,245,255,1)";
-      }
-      ctx.restore();
     }
-  }
-
-  drawAtmosphere(ctx, cam) {
-    // Screen-aligned atmosphere / vignette for depth (fake horizon).
-    const x = cam.x, y = cam.y, w = cam.w, h = cam.h;
-
-    // top haze
-    ctx.save();
-    const g = ctx.createLinearGradient(0, y, 0, y + h);
-    g.addColorStop(0.00, "rgba(220,235,255,0.22)");
-    g.addColorStop(0.35, "rgba(220,235,255,0.06)");
-    g.addColorStop(1.00, "rgba(0,0,0,0.10)");
-    ctx.fillStyle = g;
-    ctx.fillRect(x, y, w, h);
-
-    // subtle vignette
-    ctx.globalAlpha = 0.16;
-    ctx.strokeStyle = "rgba(0,0,0,0.9)";
-    ctx.lineWidth = 80;
-    ctx.strokeRect(x + 40, y + 40, w - 80, h - 80);
-    ctx.restore();
+    ctx.globalAlpha = 1;
   }
 }
 
 function tileColor(T, t, x, y, seed) {
-  // Base palette + subtle noise variation + animated water shimmer.
-  const n = hash01((x * 0.35) | 0, (y * 0.35) | 0, seed);
-  const n2 = hash01((x * 0.08) | 0, (y * 0.08) | 0, seed + 77);
-
+  const v = hash01(x * 0.45, y * 0.45, seed);
   if (T.ocean) {
-    const wave = Math.sin(t * 2.6 + x * 0.012 + y * 0.014) * 0.5 + 0.5;
-    const chop = Math.sin(t * 5.2 + x * 0.04) * 0.5 + 0.5;
-    const k = 0.55 * wave + 0.45 * chop;
-    const r = 8 + k * 12;
-    const g = 34 + k * 34;
-    const b = 64 + k * 70;
+    const wave = Math.sin(t * 3 + x * 0.01 + y * 0.013) * 0.5 + 0.5;
+    const shimmer = (Math.sin(t * 7 + x * 0.04) * 0.5 + 0.5) * 0.35;
+    const r = 8 + wave * 10 + shimmer * 8;
+    const g = 28 + wave * 30 + shimmer * 18;
+    const b = 48 + wave * 55 + shimmer * 28;
     return `rgb(${r|0},${g|0},${b|0})`;
   }
 
-  // land: biome base
   let base;
-  if (T.biome === "desert") base = [122, 108, 48];
-  else if (T.biome === "swamp") base = [24, 58, 47];
-  else if (T.biome === "highland") base = [35, 92, 62];
-  else if (T.biome === "forest") base = [22, 86, 55];
-  else base = [30, 104, 64]; // grass
+  if (T.biome === "desert") base = [122, 106, 43];
+  else if (T.biome === "swamp") base = [27, 58, 47];
+  else if (T.biome === "highland") base = [39, 92, 63];
+  else if (T.biome === "forest") base = [24, 75, 49];
+  else base = [27, 90, 58];
 
-  // variation (dirt patches / moss / subtle speckle)
-  const v = (n - 0.5) * 26 + (n2 - 0.5) * 18;
-  const dirt = fbm(x * 0.0028 + 10, y * 0.0028 - 7, seed + 11, 3);
-  const dirtK = clamp((dirt - 0.52) * 1.25, -0.25, 0.25);
+  const dirt = v < 0.06 ? 18 : 0;
+  const moss = v > 0.9 ? 10 : 0;
+  const shade = (v - 0.5) * 14;
 
-  const rr = clamp(base[0] + v + dirtK * 22, 0, 255);
-  const gg = clamp(base[1] + v + dirtK * 10, 0, 255);
-  const bb = clamp(base[2] + v - dirtK * 8, 0, 255);
-  return `rgb(${rr|0},${gg|0},${bb|0})`;
-}
-
-function drawTuft(ctx, x, y, t, d) {
-  const sway = Math.sin(t * 2.4 + d * 30) * 2.2;
-  ctx.save();
-  ctx.globalAlpha = 0.45;
-  ctx.strokeStyle = "rgba(20,70,40,0.55)";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(x - 6, y + 6);
-  ctx.quadraticCurveTo(x - 2 + sway * 0.3, y - 6, x + 2, y + 6);
-  ctx.quadraticCurveTo(x + 4 + sway, y - 2, x + 8, y + 6);
-  ctx.stroke();
-  ctx.restore();
-}
-
-function drawPebble(ctx, x, y, t, d) {
-  ctx.save();
-  ctx.globalAlpha = 0.35;
-  ctx.fillStyle = "rgba(30,35,45,0.45)";
-  roundRect(ctx, x - 5, y + 4, 10, 6, 3);
-  ctx.fill();
-  ctx.restore();
-}
-
-function drawBush(ctx, x, y, t, d) {
-  ctx.save();
-  ctx.globalAlpha = 0.55;
-  ctx.fillStyle = "rgba(10,40,24,0.55)";
-  ctx.beginPath();
-  ctx.arc(x - 8, y + 2, 7, 0, Math.PI * 2);
-  ctx.arc(x, y, 9, 0, Math.PI * 2);
-  ctx.arc(x + 9, y + 3, 6, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
+  const r = clamp(base[0] + shade + dirt - moss, 0, 255);
+  const g = clamp(base[1] + shade + dirt + moss, 0, 255);
+  const b = clamp(base[2] + shade + dirt - moss * 0.5, 0, 255);
+  return `rgb(${r|0},${g|0},${b|0})`;
 }
 
 function roundRect(ctx, x, y, w, h, r) {
