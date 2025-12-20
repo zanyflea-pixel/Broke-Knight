@@ -503,11 +503,9 @@ drawDock(ctx, d, t) {
   ctx.font = "13px system-ui, sans-serif";
   ctx.fillText("Dock (B to sail)", d.x + 10, d.y - 10);
   ctx.globalAlpha = 1;
-}
+  }
 
-  
-
-  drawWaystone(ctx, w, t) {
+    drawWaystone(ctx, w, t) {
     const pulse = 1 + Math.sin(t * 4) * 0.08;
 
     ctx.globalAlpha = w.activated ? 0.28 : 0.12;
@@ -530,6 +528,81 @@ drawDock(ctx, d, t) {
     ctx.font = "12px system-ui, sans-serif";
     ctx.fillText(w.name, w.x - ctx.measureText(w.name).width / 2, w.y - 28);
     ctx.globalAlpha = 1;
+	/* ============================
+   MICRO DETAILS (terrain dressing)
+   ============================ */
+
+// deterministic 0..1 hash based on x,y,seed
+function hash01(x, y, seed = 0) {
+  const s = Math.sin(x * 12.9898 + y * 78.233 + seed * 0.001) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+function drawTuft(ctx, x, y, t, d) {
+  // little upside-down W grass with wiggle
+  const sway = Math.sin(t * 3 + x * 0.02 + y * 0.01) * 1.2;
+  const h = 7 + d * 10;
+  const w = 8 + d * 6;
+
+  ctx.globalAlpha = 0.35;
+  ctx.strokeStyle = "rgba(10,25,18,0.9)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x - w * 0.5, y + 3);
+  ctx.lineTo(x - w * 0.2 + sway, y - h);
+  ctx.lineTo(x + sway, y + 1);
+  ctx.lineTo(x + w * 0.2 + sway, y - h * 0.9);
+  ctx.lineTo(x + w * 0.5, y + 3);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+function drawPebble(ctx, x, y, t, d) {
+  const r = 1.5 + d * 3.0;
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = "rgba(255,255,255,0.6)";
+  ctx.beginPath();
+  ctx.arc(x + 1.5, y + 1.0, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.globalAlpha = 0.22;
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+function drawBush(ctx, x, y, t, d) {
+  const wob = Math.sin(t * 2.2 + x * 0.01) * 0.8;
+  const s = 6 + d * 10;
+
+  // shadow
+  ctx.globalAlpha = 0.12;
+  ctx.fillStyle = "#000";
+  ctx.beginPath();
+  ctx.ellipse(x + 2, y + 5, s * 1.1, s * 0.55, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // body
+  ctx.globalAlpha = 0.28;
+  ctx.fillStyle = "rgba(10,35,24,0.95)";
+  ctx.beginPath();
+  ctx.arc(x - 3, y + wob, s * 0.9, 0, Math.PI * 2);
+  ctx.arc(x + 6, y - 1 + wob, s, 0, Math.PI * 2);
+  ctx.arc(x + 1, y + 3 + wob, s * 0.95, 0, Math.PI * 2);
+  ctx.fill();
+
+  // highlight
+  ctx.globalAlpha = 0.10;
+  ctx.fillStyle = "#fff";
+  ctx.beginPath();
+  ctx.ellipse(x + 2, y - 2 + wob, s * 0.9, s * 0.55, -0.4, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.globalAlpha = 1;
+}
+
   }
 
   drawPOI(ctx, p, t) {
