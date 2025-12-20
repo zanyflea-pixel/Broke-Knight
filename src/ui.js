@@ -139,7 +139,33 @@ export default class UI {
       }
     }
 
-    // hero marker
+    
+// markers: waystones / docks / towns
+// waystones
+ctx.globalAlpha = 0.9;
+for (const w of (world.waystones || [])) {
+  const wx = mx + (w.x / world.width) * mw;
+  const wy = my + (w.y / world.height) * mh;
+  ctx.fillStyle = w.activated ? "rgba(56,217,255,0.95)" : "rgba(160,170,210,0.8)";
+  ctx.fillRect(wx - 2, wy - 2, 4, 4);
+}
+
+// docks
+for (const d of (world.docks || [])) {
+  const dx = mx + ((d.x + d.w/2) / world.width) * mw;
+  const dy = my + ((d.y + d.h/2) / world.height) * mh;
+  ctx.fillStyle = "rgba(255,210,140,0.85)";
+  ctx.fillRect(dx - 2, dy - 2, 4, 4);
+}
+
+// towns/settlements
+for (const s of (world.settlements || [])) {
+  const sx = mx + (s.x / world.width) * mw;
+  const sy = my + (s.y / world.height) * mh;
+  ctx.fillStyle = "rgba(210,190,145,0.9)";
+  ctx.fillRect(sx - 3, sy - 3, 6, 6);
+}
+ctx.globalAlpha = 1;// hero marker
     const hx = mx + (hero.x / world.width) * mw;
     const hy = my + (hero.y / world.height) * mh;
     ctx.fillStyle = "#ffd28a";
