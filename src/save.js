@@ -1,25 +1,24 @@
 // src/save.js
-const KEY = "broke_knight_save_v30";
+// Minimal localStorage save scaffold.
+// You can extend this later (gear, flags, waystones, etc.)
 
-export function hasSave() {
-  try { return !!localStorage.getItem(KEY); } catch { return false; }
-}
+const KEY = "broke_knight_save_v27";
 
-export function saveGameSnapshot(snapshot) {
+export function saveGame(state) {
   try {
-    localStorage.setItem(KEY, JSON.stringify(snapshot));
-    return true;
-  } catch {
-    return false;
-  }
+    localStorage.setItem(KEY, JSON.stringify(state));
+  } catch {}
 }
 
-export function loadGameSnapshot() {
+export function loadGame() {
   try {
     const s = localStorage.getItem(KEY);
-    if (!s) return null;
-    return JSON.parse(s);
+    return s ? JSON.parse(s) : null;
   } catch {
     return null;
   }
+}
+
+export function clearSave() {
+  try { localStorage.removeItem(KEY); } catch {}
 }

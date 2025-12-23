@@ -1,457 +1,377 @@
 // src/entities.js
-import { clamp, dist2, lerp, RNG } from "./util.js";
+import { clamp, dist2, len, norm } from "./util.js";
 
-/* ============================
-   RARITY COLORS (UI)
-   ============================ */
 export function rarityColor(r) {
-  switch (r) {
-    case "common": return "#cfd7e6";
-    case "uncommon": return "#6bd26b";
-    case "rare": return "#4fa3ff";
-    case "epic": return "#b36bff";
-    case "legendary": return "#ffb84f";
-    default: return "#ffffff";
-  }
+  if (r === "common") return "#cfd7e6";
+  if (r === "uncommon") return "#5dff9a";
+  if (r === "rare") return "#52b7ff";
+  if (r === "epic") return "#d56cff";
+  return "#ffd36a"; // legendary
+}
+
+export const GearSlots = ["helm", "chest", "boots", "weapon", "ring"];
+
+export function gearStatRoll(rng, rarity) {
+  const mul = rarity === "common" ? 1 : rarity === "uncommon" ? 1.25 : rarity === "rare" ? 1.55 : rarity === "epic" ? 1.9 : 2.4;
+  return {
+    hp: Math.round((rng.int(0, 8) + 2) * mul),
+    dmg: Math.round((rng.int(0, 5) + 1) * mul),
+    armor: Math.round((rng.int(0, 4) + 0) * mul),
+    mana: Math.round((rng.int(0, 8) + 0) * mul),
+  };
+}
+
+export function makeGear(rng, slot, rarity) {
+  const mats = {
+    helm: ["Iron Cap", "Leather Hood", "Runed Circlet"],
+    chest: ["Patch Vest", "Iron Cuirass", "Runed Coat"],
+    boots: ["Worn Boots", "Ranger Boots", "Greaves"],
+    weapon: ["Rust Blade", "Flame Rod", "Knight Sword"],
+    ring: ["Copper Ring", "Silver Ring", "Glyph Ring"],
+  };
+  const base = rng.pick(mats[slot] || ["Gear"]);
+  const stats = gearStatRoll(rng, rarity);
+  return {
+    id: "g_" + Math.floor(rng.float() * 1e9),
+    kind: "gear",
+    slot,
+    rarity,
+    name: `${base}`,
+    stats,
+    sell: 8 + Math.round((stats.hp + stats.dmg * 3 + stats.armor * 4 + stats.mana) * 0.6),
+  };
 }
 
 export class Hero {
   constructor(x, y) {
-    this.x = x; this.y = y;
-    this.vx = 0; this.vy = 0;
-    this.r = 14;
+    this.x = x;
+    this.y = y;
+    this.r = 16;
 
-    this.sailing = false;
-    this.lastDir = { x: 1, y: 0 };
-
-    this.base = { hp: 100, mana: 60, dmg: 10, armor: 0, move: 165 };
-    this.maxHp = this.base.hp;
-    this.maxMana = this.base.mana;
-    this.hp = this.maxHp;
-    this.mana = this.maxMana;
-
-    this.gold = 0;
-    this.xp = 0;
     this.level = 1;
+    this.xp = 0;
+    this.nextXp = 30;
+    this.gold = 0;
 
-    this.materials = { iron: 0, leather: 0, essence: 0 };
+    this.base = { maxHp: 120, dmg: 12, armor: 0, maxMana: 60 };
+    this.hp = this.base.maxHp;
+    this.mana = this.base.maxMana;
 
-    this.inventory = []; // items
-    this.equip = { weapon: null, helm: null, chest: null, boots: null, ring: null };
+    this.invulnT = 0;
 
-    this.skillXP = { fireball: 0 };
-    this.skillLvl = { fireball: 1 };
+    this.inventory = [];
+    this.equip = { helm: null, chest: null, boots: null, weapon: null, ring: null };
 
-    this.invuln = 0;
+    this.state = {
+      sailing: false,
+      invulnerable: false,
+    };
+
+    this.lastMove = { x: 1, y: 0 }; // for aiming fallback
   }
 
-  computeStats() {
-    const s = { ...this.base };
-    for (const k of Object.keys(this.equip)) {
-      const it = this.equip[k];
+  getStats() {
+    let add = { maxHp: 0, dmg: 0, armor: 0, maxMana: 0 };
+    for (const slot of Object.keys(this.equip)) {
+      const it = this.equip[slot];
       if (!it) continue;
-      if (it.stats) {
-        for (const [kk, vv] of Object.entries(it.stats)) s[kk] = (s[kk] || 0) + vv;
-      }
+      add.maxHp += it.stats.hp || 0;
+      add.dmg += it.stats.dmg || 0;
+      add.armor += it.stats.armor || 0;
+      add.maxMana += it.stats.mana || 0;
     }
-    s.hp = Math.max(1, s.hp|0);
-    s.mana = Math.max(1, s.mana|0);
-    s.dmg = Math.max(1, s.dmg|0);
-    s.armor = Math.max(0, s.armor|0);
-    s.move = Math.max(80, s.move|0);
-
-    // keep bars within new maxima
-    this.maxHp = s.hp;
-    this.maxMana = s.mana;
-    this.hp = clamp(this.hp, 0, this.maxHp);
-    this.mana = clamp(this.mana, 0, this.maxMana);
-    return s;
+    return {
+      maxHp: this.base.maxHp + add.maxHp,
+      dmg: this.base.dmg + add.dmg,
+      armor: this.base.armor + add.armor,
+      maxMana: this.base.maxMana + add.maxMana,
+    };
   }
 
-  gainXP(n) {
-    this.xp += n;
-    const need = () => 55 + (this.level - 1) * 45;
-    while (this.xp >= need()) {
-      this.xp -= need();
+  giveXP(x) {
+    this.xp += x;
+    while (this.xp >= this.nextXp) {
+      this.xp -= this.nextXp;
       this.level++;
-      this.base.hp += 12;
-      this.base.mana += 6;
-      this.base.dmg += 1;
-      this.hp = this.maxHp = this.base.hp;
-      this.mana = this.maxMana = this.base.mana;
+      this.nextXp = Math.round(this.nextXp * 1.35 + 10);
+      // small growth
+      this.base.maxHp += 10;
+      this.base.dmg += 2;
+      this.base.maxMana += 6;
+      const st = this.getStats();
+      this.hp = Math.min(this.hp + 15, st.maxHp);
+      this.mana = Math.min(this.mana + 10, st.maxMana);
     }
   }
 
-  takeDamage(n) {
-    if (this.invuln > 0) return 0;
-    const dmg = Math.max(0, n|0);
-    this.hp = Math.max(0, this.hp - dmg);
-    this.invuln = 0.35;
+  takeDamage(raw) {
+    if (this.state.invulnerable) return 0;
+    if (this.invulnT > 0) return 0;
+
+    const st = this.getStats();
+    const dmg = Math.max(1, Math.round(raw - st.armor * 0.35));
+    this.hp -= dmg;
+    this.invulnT = 0.25;
     return dmg;
   }
 
-  spendMana(n) {
-    if (this.mana < n) return false;
-    this.mana -= n;
-    return true;
-  }
-
-  update(dt, ax) {
-    if (this.invuln > 0) this.invuln -= dt;
-
-    const len = Math.hypot(ax.x, ax.y);
-    let mx = ax.x, my = ax.y;
-    if (len > 0) { mx /= len; my /= len; }
-
-    if (len > 0.01) {
-      this.lastDir.x = mx; this.lastDir.y = my;
-    }
-
-    const stats = this.computeStats();
-    const targetVx = mx * stats.move;
-    const targetVy = my * stats.move;
-
-    // ease (feels weighty)
-    this.vx = lerp(this.vx, targetVx, clamp(dt * 10, 0, 1));
-    this.vy = lerp(this.vy, targetVy, clamp(dt * 10, 0, 1));
-
-    this.x += this.vx * dt;
-    this.y += this.vy * dt;
+  update(dt) {
+    if (this.invulnT > 0) this.invulnT -= dt;
+    const st = this.getStats();
+    this.hp = clamp(this.hp, 0, st.maxHp);
+    this.mana = clamp(this.mana, 0, st.maxMana);
   }
 
   draw(ctx, t) {
-    const bob = Math.sin(t * 6) * 1.6;
-    const glow = 1 + Math.sin(t * 3) * 0.04;
-
     // shadow
     ctx.globalAlpha = 0.22;
     ctx.fillStyle = "#000";
     ctx.beginPath();
-    ctx.ellipse(this.x, this.y + 12, 14, 6, 0, 0, Math.PI * 2);
+    ctx.ellipse(this.x + 6, this.y + 16, 14, 7, 0, 0, Math.PI * 2);
     ctx.fill();
-
-    // body base
     ctx.globalAlpha = 1;
-    ctx.fillStyle = "#cfd7e6";
+
+    // body (pseudo 3D)
+    const bob = Math.sin(t * 6) * 1.2;
+    ctx.fillStyle = "#d7e0ff";
     ctx.beginPath();
-    ctx.arc(this.x, this.y + bob, this.r * glow, 0, Math.PI * 2);
+    ctx.ellipse(this.x, this.y - 2 + bob, 12, 14, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // tunic
-    ctx.globalAlpha = 0.9;
-    ctx.fillStyle = "#2b2f39";
+    // outline
+    ctx.strokeStyle = "#0b1330";
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.ellipse(this.x, this.y + bob + 2, this.r * 0.75, this.r * 0.55, 0, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.ellipse(this.x, this.y - 2 + bob, 12, 14, 0, 0, Math.PI * 2);
+    ctx.stroke();
 
-    // helm highlight if equipped
+    // helmet if equipped
     if (this.equip.helm) {
-      ctx.globalAlpha = 0.85;
-      ctx.fillStyle = "#7d8796";
+      ctx.fillStyle = rarityColor(this.equip.helm.rarity);
+      ctx.globalAlpha = 0.9;
       ctx.beginPath();
-      ctx.arc(this.x, this.y + bob - 10, this.r * 0.55, Math.PI, Math.PI * 2);
+      ctx.arc(this.x, this.y - 14 + bob, 8, Math.PI, 0);
       ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // chest armor
+    if (this.equip.chest) {
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = rarityColor(this.equip.chest.rarity);
+      ctx.fillRect(this.x - 10, this.y - 4 + bob, 20, 12);
+      ctx.globalAlpha = 1;
     }
 
     // weapon hint
-    ctx.globalAlpha = 0.9;
-    ctx.strokeStyle = "#ffd28a";
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(this.x, this.y + bob);
-    ctx.lineTo(this.x + this.lastDir.x * 18, this.y + bob + this.lastDir.y * 18);
-    ctx.stroke();
-
-    // invuln shimmer
-    if (this.invuln > 0) {
-      ctx.globalAlpha = 0.12;
-      ctx.fillStyle = "#38d9ff";
+    if (this.equip.weapon) {
+      const fx = this.lastMove.x, fy = this.lastMove.y;
+      ctx.strokeStyle = rarityColor(this.equip.weapon.rarity);
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(this.x, this.y + bob, this.r * 1.55, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.moveTo(this.x + fx * 10, this.y - 4 + bob);
+      ctx.lineTo(this.x + fx * 26, this.y - 4 + bob + fy * 10);
+      ctx.stroke();
     }
 
-    ctx.globalAlpha = 1;
+    // sailing ring
+    if (this.state.sailing) {
+      ctx.globalAlpha = 0.14;
+      ctx.strokeStyle = "#52b7ff";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 22, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
   }
 }
 
 export class Enemy {
-  constructor(x, y, tier = 1, type = "grunt", rng = null) {
-    this.x = x; this.y = y;
-    this.tier = tier; this.type = type;
-    this.r = 12 + tier * 2;
-    this.maxHp = 30 + tier * 22;
-    this.hp = this.maxHp;
-    this.dmg = 7 + tier * 4;
-    this.move = 88 + tier * 10;
-    this.alive = true;
-    this.atkT = 0;
-
-    // spice
-    this.hue = (rng ? rng.int(0, 360) : (Math.random() * 360)|0);
-  }
-
-  takeDamage(n) {
-    this.hp -= Math.max(1, n|0);
-    if (this.hp <= 0) { this.hp = 0; this.alive = false; }
-  }
-
-  update(dt, hero) {
-    if (!this.alive) return;
-    this.atkT += dt;
-
-    const dx = hero.x - this.x, dy = hero.y - this.y;
-    const d = Math.hypot(dx, dy) || 1;
-
-    // chase
-    if (d > this.r + hero.r + 6) {
-      this.x += (dx / d) * this.move * dt;
-      this.y += (dy / d) * this.move * dt;
-    }
-  }
-
-  canHit(hero) {
-    const rr = this.r + hero.r + 3;
-    return dist2(this.x, this.y, hero.x, hero.y) <= rr * rr;
-  }
-
-  draw(ctx, t) {
-    if (!this.alive) return;
-    const bob = Math.sin(t * 5 + this.x * 0.01) * 1.8;
-
-    // shadow
-    ctx.globalAlpha = 0.22;
-    ctx.fillStyle = "#000";
-    ctx.beginPath();
-    ctx.ellipse(this.x, this.y + 10, this.r, 6, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // body
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = `hsl(${this.hue} 45% 45%)`;
-    ctx.beginPath();
-    ctx.arc(this.x, this.y + bob, this.r, 0, Math.PI * 2);
-    ctx.fill();
-
-    // eyes
-    ctx.globalAlpha = 0.9;
-    ctx.fillStyle = "#0b1330";
-    ctx.beginPath();
-    ctx.arc(this.x - 5, this.y + bob - 4, 2, 0, Math.PI * 2);
-    ctx.arc(this.x + 5, this.y + bob - 4, 2, 0, Math.PI * 2);
-    ctx.fill();
-
-    // hp bar
-    const w = this.r * 2.1;
-    const p = clamp(this.hp / this.maxHp, 0, 1);
-    ctx.globalAlpha = 0.75;
-    ctx.fillStyle = "rgba(0,0,0,0.7)";
-    ctx.fillRect(this.x - w / 2, this.y - this.r - 12, w, 5);
-    ctx.fillStyle = "#ff4f6a";
-    ctx.fillRect(this.x - w / 2, this.y - this.r - 12, w * p, 5);
-    ctx.globalAlpha = 1;
-  }
-}
-
-export class Boss {
-  constructor(x, y, tier = 6) {
+  constructor(x, y, tier = 1, type = "grunt") {
     this.x = x; this.y = y;
     this.tier = tier;
-    this.r = 38 + tier * 2;
-    this.maxHp = 600 + tier * 220;
+    this.type = type;
+
+    this.r = type === "charger" ? 18 : 15;
+    this.maxHp = Math.round((28 + tier * 20) * (type === "shaman" ? 0.85 : 1.0));
     this.hp = this.maxHp;
-    this.dmg = 22 + tier * 7;
-    this.move = 78;
+    this.dmg = Math.round((7 + tier * 4) * (type === "charger" ? 1.2 : 1.0));
+    this.spd = Math.round((80 + tier * 10) * (type === "charger" ? 1.15 : 1.0));
+
     this.alive = true;
-    this.atkT = 0;
+    this.hitT = 0;
+    this.cd = 0;
   }
-  takeDamage(n) {
-    this.hp -= Math.max(1, n|0);
-    if (this.hp <= 0) { this.hp = 0; this.alive = false; }
+
+  xpValue() {
+    const base = 10 + this.tier * 8;
+    const mul = this.type === "grunt" ? 1 : this.type === "charger" ? 1.25 : 1.35;
+    return Math.round(base * mul);
   }
-  update(dt, hero) {
+
+  update(dt, hero, world) {
     if (!this.alive) return;
-    this.atkT += dt;
-    const dx = hero.x - this.x, dy = hero.y - this.y;
-    const d = Math.hypot(dx, dy) || 1;
-    if (d > this.r + hero.r + 10) {
-      this.x += (dx / d) * this.move * dt;
-      this.y += (dy / d) * this.move * dt;
+
+    if (this.hitT > 0) this.hitT -= dt;
+    if (this.cd > 0) this.cd -= dt;
+
+    // chase hero
+    const dx = hero.x - this.x;
+    const dy = hero.y - this.y;
+    const L = len(dx, dy);
+    const nx = dx / L, ny = dy / L;
+
+    this.x += nx * this.spd * dt;
+    this.y += ny * this.spd * dt;
+
+    // simple collision with world (treat as heroState walking)
+    world.resolveCircleVsWorld({ x: this.x, y: this.y, r: this.r }, { sailing: false });
+
+    // contact damage
+    if (dist2(this.x, this.y, hero.x, hero.y) < (this.r + hero.r) * (this.r + hero.r)) {
+      if (this.cd <= 0) {
+        hero.takeDamage(this.dmg);
+        this.cd = 0.65;
+      }
     }
   }
-  canHit(hero) {
-    const rr = this.r + hero.r + 8;
-    return dist2(this.x, this.y, hero.x, hero.y) <= rr * rr;
+
+  takeHit(dmg) {
+    this.hp -= dmg;
+    this.hitT = 0.12;
+    if (this.hp <= 0) {
+      this.hp = 0;
+      this.alive = false;
+    }
   }
+
   draw(ctx, t) {
     if (!this.alive) return;
-    const bob = Math.sin(t * 2.6) * 2;
 
-    ctx.globalAlpha = 0.26;
+    // shadow
+    ctx.globalAlpha = 0.20;
     ctx.fillStyle = "#000";
     ctx.beginPath();
-    ctx.ellipse(this.x + 5, this.y + 22, this.r * 1.15, this.r * 0.45, 0, 0, Math.PI * 2);
+    ctx.ellipse(this.x + 6, this.y + 14, 14, 6, 0, 0, Math.PI * 2);
     ctx.fill();
-
     ctx.globalAlpha = 1;
-    ctx.fillStyle = "#2b2f39";
+
+    // body
+    const wob = Math.sin(t * 5 + this.x * 0.01) * 1.0;
+    const base = this.type === "grunt" ? "#8b93a8" : this.type === "charger" ? "#c97c4a" : "#7a5cff";
+    ctx.fillStyle = this.hitT > 0 ? "#fff" : base;
+
     ctx.beginPath();
-    ctx.arc(this.x, this.y + bob, this.r, 0, Math.PI * 2);
+    ctx.ellipse(this.x, this.y - 2 + wob, this.r, this.r * 0.92, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.globalAlpha = 0.16;
-    ctx.fillStyle = "#fff";
+    ctx.strokeStyle = "#0b1330";
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.ellipse(this.x - 10, this.y + bob - 12, this.r * 0.55, this.r * 0.35, -0.2, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.ellipse(this.x, this.y - 2 + wob, this.r, this.r * 0.92, 0, 0, Math.PI * 2);
+    ctx.stroke();
 
     // hp bar
-    const w = this.r * 2.6;
-    const p = clamp(this.hp / this.maxHp, 0, 1);
-    ctx.globalAlpha = 0.85;
-    ctx.fillStyle = "rgba(0,0,0,0.8)";
-    ctx.fillRect(this.x - w / 2, this.y - this.r - 20, w, 9);
-    ctx.fillStyle = "#ff4f6a";
-    ctx.fillRect(this.x - w / 2, this.y - this.r - 20, w * p, 9);
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = "rgba(0,0,0,0.6)";
+    ctx.fillRect(this.x - 18, this.y - this.r - 16, 36, 5);
+    ctx.fillStyle = "#ff5d5d";
+    ctx.fillRect(this.x - 18, this.y - this.r - 16, 36 * (this.hp / this.maxHp), 5);
     ctx.globalAlpha = 1;
   }
 }
 
 export class Projectile {
-  constructor(x, y, vx, vy, dmg = 12, ttl = 1.6) {
-    this.x = x; this.y = y; this.vx = vx; this.vy = vy;
-    this.dmg = dmg;
+  constructor(x, y, vx, vy, dmg, life = 1.1) {
+    this.x = x; this.y = y;
+    this.vx = vx; this.vy = vy;
     this.r = 6;
-    this.ttl = ttl;
-    this.dead = false;
+    this.dmg = dmg;
+    this.life = life;
+    this.alive = true;
   }
-  update(dt) {
-    if (this.dead) return;
-    this.ttl -= dt;
-    if (this.ttl <= 0) { this.dead = true; return; }
+
+  update(dt, world, enemies) {
+    if (!this.alive) return;
+    this.life -= dt;
+    if (this.life <= 0) { this.alive = false; return; }
+
     this.x += this.vx * dt;
     this.y += this.vy * dt;
+
+    if (world.projectileHitsSolid(this)) {
+      this.alive = false;
+      return;
+    }
+
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      if (dist2(this.x, this.y, e.x, e.y) < (this.r + e.r) * (this.r + e.r)) {
+        e.takeHit(this.dmg);
+        this.alive = false;
+        return;
+      }
+    }
   }
+
   draw(ctx, t) {
-    if (this.dead) return;
-    const pulse = 1 + Math.sin(t * 12 + this.x * 0.02) * 0.12;
-    ctx.globalAlpha = 0.2;
-    ctx.fillStyle = "#000";
-    ctx.beginPath();
-    ctx.ellipse(this.x + 2, this.y + 6, this.r * 1.2, this.r * 0.6, 0, 0, Math.PI * 2);
-    ctx.fill();
+    if (!this.alive) return;
 
-    ctx.globalAlpha = 0.95;
-    ctx.fillStyle = "#ff7a2f";
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.r * pulse, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.globalAlpha = 0.55;
-    ctx.fillStyle = "#ffd28a";
-    ctx.beginPath();
-    ctx.arc(this.x - 1, this.y - 1, this.r * 0.35, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-  }
-  hitsCircle(cx, cy, cr) {
-    const dx = this.x - cx, dy = this.y - cy;
-    const rr = this.r + cr;
-    return (dx * dx + dy * dy) <= rr * rr;
-  }
-}
-
-export class EnemyProjectile {
-  constructor(x, y, vx, vy, dmg = 8, ttl = 2.2) {
-    this.x = x; this.y = y; this.vx = vx; this.vy = vy;
-    this.dmg = dmg; this.r = 6;
-    this.ttl = ttl;
-    this.dead = false;
-  }
-  update(dt) {
-    if (this.dead) return;
-    this.ttl -= dt;
-    if (this.ttl <= 0) { this.dead = true; return; }
-    this.x += this.vx * dt;
-    this.y += this.vy * dt;
-  }
-  draw(ctx, t) {
-    if (this.dead) return;
-    const pulse = 1 + Math.sin(t * 10 + this.x * 0.02) * 0.12;
     ctx.globalAlpha = 0.18;
     ctx.fillStyle = "#000";
     ctx.beginPath();
-    ctx.ellipse(this.x + 2, this.y + 6, this.r * 1.2, this.r * 0.6, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.globalAlpha = 0.95;
-    ctx.fillStyle = "#ff4f6a";
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.r * pulse, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.globalAlpha = 0.6;
-    ctx.fillStyle = "#ffd28a";
-    ctx.beginPath();
-    ctx.arc(this.x - 1, this.y - 1, this.r * 0.35, 0, Math.PI * 2);
+    ctx.ellipse(this.x + 5, this.y + 8, 9, 4, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
-  }
-  hitsCircle(cx, cy, cr) {
-    const dx = this.x - cx, dy = this.y - cy;
-    const rr = this.r + cr;
-    return (dx * dx + dy * dy) <= rr * rr;
+
+    const glow = 0.55 + 0.25 * Math.sin(t * 18 + this.x * 0.02);
+    ctx.fillStyle = `rgba(255,140,60,${glow})`;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.globalAlpha = 0.9;
+    ctx.strokeStyle = "#ffd28a";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.r + 2, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
   }
 }
 
 export class Loot {
   constructor(x, y, item) {
     this.x = x; this.y = y;
-    this.item = item;
+    this.item = item; // {kind:'gold'...} or gear
     this.r = 10;
-    this.vy = -40;
-    this.ttl = 999;
-    this.dead = false;
+    this.t = 0;
   }
-  update(dt) {
-    if (this.dead) return;
-    this.vy += 140 * dt;
-    this.y += this.vy * dt;
-    if (this.vy > 0) this.vy *= 0.85;
-    if (Math.abs(this.vy) < 6) this.vy = 0;
-  }
-  draw(ctx, t) {
-    if (this.dead) return;
-    const bob = Math.sin(t * 6 + this.x * 0.01) * 1.4;
-    const name = this.item?.name || "Loot";
-    const r = this.item?.rarity || "common";
-
+  update(dt) { this.t += dt; }
+  draw(ctx, time) {
+    const bob = Math.sin((time + this.t) * 3) * 2;
     ctx.globalAlpha = 0.18;
     ctx.fillStyle = "#000";
     ctx.beginPath();
-    ctx.ellipse(this.x, this.y + 10, 10, 4, 0, 0, Math.PI * 2);
+    ctx.ellipse(this.x + 5, this.y + 14, 12, 5, 0, 0, Math.PI * 2);
     ctx.fill();
-
     ctx.globalAlpha = 1;
-    ctx.fillStyle = rarityColor(r);
-    ctx.beginPath();
-    ctx.arc(this.x, this.y + bob, this.r, 0, Math.PI * 2);
-    ctx.fill();
 
-    ctx.globalAlpha = 0.65;
-    ctx.strokeStyle = "#0b1330";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    ctx.globalAlpha = 0.85;
-    ctx.fillStyle = "#d7e0ff";
-    ctx.font = "11px system-ui, sans-serif";
-    ctx.fillText(name, this.x - ctx.measureText(name).width / 2, this.y - 18);
-    ctx.globalAlpha = 1;
-  }
-  intersectsCircle(x, y, r) {
-    const dx = x - this.x, dy = y - this.y;
-    const rr = (r + this.r);
-    return (dx * dx + dy * dy) <= rr * rr;
+    if (this.item.kind === "gold") {
+      ctx.fillStyle = "#ffd36a";
+      ctx.beginPath();
+      ctx.arc(this.x, this.y - 4 + bob, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#0b1330";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = rarityColor(this.item.rarity);
+      ctx.fillRect(this.x - 6, this.y - 10 + bob, 12, 12);
+      ctx.strokeStyle = "#0b1330";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(this.x - 6, this.y - 10 + bob, 12, 12);
+    }
   }
 }

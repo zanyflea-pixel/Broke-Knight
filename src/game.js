@@ -1,479 +1,340 @@
 // src/game.js
-import World from "./world.js";
 import Input from "./input.js";
 import UI from "./ui.js";
-import { clamp, RNG } from "./util.js";
-import { saveGameSnapshot, loadGameSnapshot, hasSave } from "./save.js";
-import { Hero, Enemy, Boss, Projectile, EnemyProjectile, Loot } from "./entities.js";
+import { RNG, clamp, dist2, norm } from "./util.js";
+import { World } from "./world.js";
+import { Hero, Enemy, Projectile, Loot, makeGear, GearSlots } from "./entities.js";
+import { saveGame, loadGame } from "./save.js";
 
-/* =========================
-   GEAR / LOOT HELPERS
-========================= */
-const GEAR_BASE = {
-  helm:   { hp: 20, armor: 2 },
-  chest:  { hp: 44, armor: 4 },
-  boots:  { move: 22, armor: 1 },
-  ring:   { mana: 18 },
-  weapon: { dmg: 7 }
-};
-
-const AFFIXES = [
-  { name: "of Embers",   add: { dmg: 2 },         tint: "#ff7a2f" },
-  { name: "of Tides",    add: { hp: 10 },         tint: "#4fd0ff" },
-  { name: "of Haste",    add: { move: 18 },       tint: "#38d9ff" },
-  { name: "of Kings",    add: { hp: 18, dmg: 1 }, tint: "#ffd28a" },
-  { name: "of Echoes",   add: { dmg: 3 },         tint: "#c56bff" },
-];
-
-function rollRarity(rng, bonus = 0) {
-  const r = rng.float() - bonus;
-  if (r < 0.02) return "legendary";
-  if (r < 0.08) return "epic";
-  if (r < 0.26) return "rare";
-  if (r < 0.55) return "uncommon";
-  return "common";
-}
-
-function rarityMult(r) {
-  if (r === "legendary") return 2.0;
-  if (r === "epic") return 1.55;
-  if (r === "rare") return 1.25;
-  if (r === "uncommon") return 1.1;
-  return 1.0;
-}
-
-function makeGear(rng, slot, tier) {
-  const rar = rollRarity(rng, clamp((tier - 1) * 0.03, 0, 0.25));
-  const base = GEAR_BASE[slot] || {};
-  const a = rng.pick(AFFIXES);
-  const stats = {};
-  for (const [k, v] of Object.entries(base)) stats[k] = Math.round(v * rarityMult(rar));
-  for (const [k, v] of Object.entries(a.add)) stats[k] = (stats[k] || 0) + Math.round(v * rarityMult(rar));
-
-  const name = `${slot.toUpperCase()} ${a.name}`;
-  return {
-    id: `g_${rng.nextU32().toString(16)}`,
-    kind: "gear",
-    slot,
-    rarity: rar,
-    name,
-    stats,
-    tint: a.tint
-  };
-}
-
-function salvageYield(item) {
-  const r = item.rarity || "common";
-  const mult = rarityMult(r);
-  return {
-    iron: Math.round(2 * mult),
-    leather: Math.round(1 * mult),
-    essence: r === "rare" || r === "epic" || r === "legendary" ? Math.max(1, Math.round(mult)) : 0
-  };
-}
-
-/* =========================
-   GAME
-========================= */
 export default class Game {
   constructor(canvas) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext("2d");
+    this.ctx = canvas.getContext("2d", { alpha: false });
 
     this.input = new Input(canvas);
     this.ui = new UI();
 
-    this.world = new World(canvas.width, canvas.height);
+    this.rng = new RNG(444777);
 
-    this.rng = new RNG(13377331);
+    this.enemies = [];
+    this.projectiles = [];
+    this.loot = [];
 
-    this.hero = new Hero(this.world.spawn.x, this.world.spawn.y);
+    this.hint = "";
 
     this.cam = { x: 0, y: 0 };
 
-    this.enemies = [];
-    this.seaEnemies = [];
-    this.boss = null;
+    this.resize();
+    window.addEventListener("resize", () => this.resize());
 
-    this.projectiles = [];
-    this.enemyProjectiles = [];
-    this.loot = [];
+    this.world = new World(this.canvas.width, this.canvas.height);
+    this.hero = new Hero(this.world.spawn.x, this.world.spawn.y);
 
-    this.menus = { map: false, inventory: false, skills: false, god: false };
-    this.god = { invincible: false, oneshot: false, freeman: false };
+    this._mouseWorld = { x: this.hero.x, y: this.hero.y };
+    this._mouseMoved = false;
 
-    this.activeSkill = "FIREBALL";
+    this.spawnTimer = 0;
 
-    this.msg = "";
-    this.msgT = 0;
+    // load save (optional)
+    const s = loadGame();
+    if (s && s.hero) {
+      this.hero.x = s.hero.x ?? this.hero.x;
+      this.hero.y = s.hero.y ?? this.hero.y;
+      this.hero.level = s.hero.level ?? this.hero.level;
+      this.hero.xp = s.hero.xp ?? this.hero.xp;
+      this.hero.nextXp = s.hero.nextXp ?? this.hero.nextXp;
+      this.hero.gold = s.hero.gold ?? this.hero.gold;
+      this.hero.hp = s.hero.hp ?? this.hero.hp;
+      this.hero.mana = s.hero.mana ?? this.hero.mana;
+    }
 
-    this._spawnT = 0;
-    this._combatT = 0;
+    // safety: if save placed you in ocean, snap to spawn
+    if (this.world.terrainAt(this.hero.x, this.hero.y).ocean) {
+      this.hero.x = this.world.spawn.x;
+      this.hero.y = this.world.spawn.y;
+    }
   }
 
-  setMsg(s, t = 2.0) { this.msg = s; this.msgT = t; }
+  resize() {
+    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    this.canvas.width = Math.floor(window.innerWidth * dpr);
+    this.canvas.height = Math.floor(window.innerHeight * dpr);
+    this.ctx.imageSmoothingEnabled = true;
 
-  resize(w, h) {
-    this.canvas.width = w;
-    this.canvas.height = h;
-    this.world.viewW = w;
-    this.world.viewH = h;
+    // IMPORTANT: keep world viewport size in sync
+    if (this.world && this.world.setViewSize) {
+      this.world.setViewSize(this.canvas.width, this.canvas.height);
+    }
   }
 
-  // ===== save/load =====
-  snapshot() {
-    return {
-      v: 30,
-      hero: {
-        x: this.hero.x, y: this.hero.y,
-        hp: this.hero.hp, mana: this.hero.mana,
-        level: this.hero.level, xp: this.hero.xp,
-        gold: this.hero.gold,
-        base: this.hero.base,
-        materials: this.hero.materials,
-        inventory: this.hero.inventory,
-        equip: this.hero.equip,
-        skillXP: this.hero.skillXP,
-        skillLvl: this.hero.skillLvl,
-      },
-      world: { seed: this.world.seed },
-    };
-  }
-
-  applySnapshot(s) {
-    if (!s || !s.hero) return false;
-    const h = s.hero;
-    this.hero.x = h.x; this.hero.y = h.y;
-    this.hero.hp = h.hp; this.hero.mana = h.mana;
-    this.hero.level = h.level; this.hero.xp = h.xp;
-    this.hero.gold = h.gold;
-    this.hero.base = h.base || this.hero.base;
-    this.hero.materials = h.materials || this.hero.materials;
-    this.hero.inventory = h.inventory || [];
-    this.hero.equip = h.equip || this.hero.equip;
-    this.hero.skillXP = h.skillXP || this.hero.skillXP;
-    this.hero.skillLvl = h.skillLvl || this.hero.skillLvl;
-    this.setMsg("Loaded save.", 2.0);
-    return true;
-  }
-
-  // ===== gameplay =====
-  canHeroSail() {
-    // can sail only if near dock and near ocean edge (adjacent ocean)
-    if (!this.world.isNearDock(this.hero.x, this.hero.y)) return false;
-    const T = this.world.terrainAt(this.hero.x, this.hero.y);
-    // we are on land; check adjacent for ocean
-    const nearOcean =
-      this.world.terrainAt(this.hero.x + 140, this.hero.y).ocean ||
-      this.world.terrainAt(this.hero.x - 140, this.hero.y).ocean ||
-      this.world.terrainAt(this.hero.x, this.hero.y + 140).ocean ||
-      this.world.terrainAt(this.hero.x, this.hero.y - 140).ocean;
-    return !T.ocean && nearOcean;
-  }
-
-  toggleMenu(key) {
-    if (key === "map") this.menus.map = !this.menus.map;
-    if (key === "inventory") this.menus.inventory = !this.menus.inventory;
-    if (key === "skills") this.menus.skills = !this.menus.skills;
-    if (key === "god") this.menus.god = !this.menus.god;
-  }
-
-  update(dt, t) {
-    // message timer
-    if (this.msgT > 0) { this.msgT -= dt; if (this.msgT <= 0) this.msg = ""; }
-
+  update(dt) {
     // toggles
-    if (this.input.consume("m") || this.input.consume("M")) this.toggleMenu("map");
-    if (this.input.consume("i") || this.input.consume("I")) this.toggleMenu("inventory");
-    if (this.input.consume("k") || this.input.consume("K")) this.toggleMenu("skills");
-    if (this.input.consume("g") || this.input.consume("G")) this.toggleMenu("god");
+    if (this.input.pressed("escape")) this.ui.closeAll();
+    if (this.input.pressed("m")) this.ui.toggle("map");
+    if (this.input.pressed("k")) this.ui.toggle("skills");
+    if (this.input.pressed("i")) this.ui.toggle("stats");
+    if (this.input.pressed("g")) {
+      this.hero.state.invulnerable = !this.hero.state.invulnerable;
+      this.ui.setMsg(`God mode: ${this.hero.state.invulnerable ? "ON" : "OFF"}`);
+    }
 
-    // god menu toggles
-    if (this.menus.god) {
-      if (this.input.consume("1")) { this.god.invincible = !this.god.invincible; this.setMsg(`Invincible: ${this.god.invincible?"ON":"OFF"}`); }
-      if (this.input.consume("2")) { this.god.oneshot = !this.god.oneshot; this.setMsg(`One-shot: ${this.god.oneshot?"ON":"OFF"}`); }
-      if (this.input.consume("3")) { this.god.freeman = !this.god.freeman; this.setMsg(`Free Mana: ${this.god.freeman?"ON":"OFF"}`); }
-      if (this.input.consume("9")) {
-        this.boss = new Boss(this.hero.x + 260, this.hero.y - 80, Math.max(6, this.hero.level + 2));
-        this.setMsg("Boss spawned.", 2.0);
+    // mouse -> world coords
+    this._mouseWorld.x = this.cam.x + this.input.mouse.x;
+    this._mouseWorld.y = this.cam.y + this.input.mouse.y;
+
+    if (dist2(this._mouseWorld.x, this._mouseWorld.y, this.hero.x, this.hero.y) > 25) {
+      this._mouseMoved = true;
+    }
+
+    const uiBlocking = this.ui.open.map || this.ui.open.stats || this.ui.open.skills;
+
+    if (!uiBlocking) {
+      // movement
+      let mx = 0, my = 0;
+      if (this.input.down("arrowleft")) mx -= 1;
+      if (this.input.down("arrowright")) mx += 1;
+      if (this.input.down("arrowup")) my -= 1;
+      if (this.input.down("arrowdown")) my += 1;
+
+      const baseSpd = this.hero.state.sailing ? 190 : 145;
+
+      if (mx !== 0 || my !== 0) {
+        const n = norm(mx, my);
+        mx = n.x;
+        my = n.y;
+
+        this.hero.lastMove.x = mx;
+        this.hero.lastMove.y = my;
+
+        const body = { x: this.hero.x + mx * baseSpd * dt, y: this.hero.y + my * baseSpd * dt, r: this.hero.r };
+        this.world.resolveCircleVsWorld(body, this.hero.state);
+        this.hero.x = body.x;
+        this.hero.y = body.y;
       }
-    }
 
-    // save/load shortcuts
-    if ((this.input.getKey("Control") || this.input.getKey("Meta")) && (this.input.consume("s") || this.input.consume("S"))) {
-      const ok = saveGameSnapshot(this.snapshot());
-      this.setMsg(ok ? "Saved." : "Save failed.", 2.0);
-    }
-    if ((this.input.getKey("Control") || this.input.getKey("Meta")) && (this.input.consume("l") || this.input.consume("L"))) {
-      const snap = loadGameSnapshot();
-      this.applySnapshot(snap);
-    }
-
-    // Sailing toggle
-    const sailHint = this.canHeroSail() && !this.hero.sailing;
-    if (this.input.consume("b") || this.input.consume("B")) {
-      if (this.hero.sailing) {
-        // attempt dock (must be on dock)
-        if (this.world.isNearDock(this.hero.x, this.hero.y)) {
-          this.hero.sailing = false;
-          this.setMsg("Docked.", 1.6);
+      // sailing toggle only at dock
+      if (this.input.pressed("b")) {
+        const can = this.world.isNearDock(this.hero.x, this.hero.y);
+        if (can) {
+          this.hero.state.sailing = !this.hero.state.sailing;
+          this.ui.setMsg(`Sailing: ${this.hero.state.sailing ? "ON" : "OFF"}`);
         } else {
-          this.setMsg("You can only dock at a dock.", 1.8);
+          this.ui.setMsg("You can only sail at a dock.");
         }
-      } else if (sailHint) {
-        this.hero.sailing = true;
-        this.setMsg("Sailing...", 1.4);
+      }
+
+      // cast (A)
+      if (this.input.pressed("a")) {
+        this.castFireball();
       }
     }
 
-    // Movement
-    const ax = this.input.axis;
-    // don't move when map open? (still allow, but feels ok)
-    this.hero.update(dt, ax);
+    // update hero
+    this.hero.update(dt);
 
-    // world collision
-    this.world.resolveCircleVsWorld(this.hero, this.hero);
-
-    // regen mana
-    if (this.god.freeman) this.hero.mana = this.hero.maxMana;
-    else this.hero.mana = clamp(this.hero.mana + dt * 6, 0, this.hero.maxMana);
-
-    // Skill cast: A (uses lastDir)
-    if (this.input.consume("a") || this.input.consume("A")) {
-      this.castFireball();
-    }
-
-    // update entities
-    for (const e of this.enemies) e.update(dt, this.hero);
-    if (this.boss?.alive) this.boss.update(dt, this.hero);
-
-    // enemy melee damage
-    if (!this.god.invincible) {
-      for (const e of this.enemies) {
-        if (!e.alive) continue;
-        if (e.canHit(this.hero)) {
-          // slow tick
-          e.atkT += dt;
-          if (e.atkT > 0.9) {
-            e.atkT = 0;
-            this.hero.takeDamage(Math.max(1, e.dmg - this.hero.computeStats().armor));
-          }
-        }
-      }
-      if (this.boss?.alive && this.boss.canHit(this.hero)) {
-        this.boss.atkT += dt;
-        if (this.boss.atkT > 0.85) {
-          this.boss.atkT = 0;
-          this.hero.takeDamage(Math.max(2, this.boss.dmg - this.hero.computeStats().armor));
-        }
+    // pickups
+    for (let i = this.loot.length - 1; i >= 0; i--) {
+      const L = this.loot[i];
+      L.update(dt);
+      if (dist2(L.x, L.y, this.hero.x, this.hero.y) < (L.r + this.hero.r + 4) ** 2) {
+        this.pickup(L.item);
+        this.loot.splice(i, 1);
       }
     }
+
+    // enemies
+    for (const e of this.enemies) e.update(dt, this.hero, this.world);
 
     // projectiles
-    for (const p of this.projectiles) {
-      p.update(dt);
-      if (p.dead) continue;
-      if (this.world.projectileHitsSolid(p)) p.dead = true;
-      for (const e of this.enemies) {
-        if (!e.alive) continue;
-        if (p.hitsCircle(e.x, e.y, e.r)) {
-          p.dead = true;
-          const dmg = this.god.oneshot ? 9999 : (p.dmg + Math.floor(this.hero.computeStats().dmg * 0.55));
-          e.takeDamage(dmg);
-          if (!e.alive) this.onEnemyKilled(e);
-          break;
-        }
-      }
-      if (this.boss?.alive && !p.dead && p.hitsCircle(this.boss.x, this.boss.y, this.boss.r)) {
-        p.dead = true;
-        const dmg = this.god.oneshot ? 99999 : (p.dmg + Math.floor(this.hero.computeStats().dmg * 0.45));
-        this.boss.takeDamage(dmg);
-        if (!this.boss.alive) this.onBossKilled(this.boss);
+    for (const p of this.projectiles) p.update(dt, this.world, this.enemies);
+    this.projectiles = this.projectiles.filter(p => p.alive);
+
+    // enemy deaths -> drops
+    for (let i = this.enemies.length - 1; i >= 0; i--) {
+      const e = this.enemies[i];
+      if (!e.alive) {
+        this.hero.giveXP(e.xpValue());
+        this.ui.setMsg(`+${e.xpValue()} XP`);
+        this.dropLoot(e.x, e.y, e.tier);
+        this.enemies.splice(i, 1);
       }
     }
-    this.projectiles = this.projectiles.filter(p => !p.dead);
-
-    for (const p of this.enemyProjectiles) p.update(dt);
-    this.enemyProjectiles = this.enemyProjectiles.filter(p => !p.dead);
-
-    // loot update + pickup
-    for (const L of this.loot) L.update(dt);
-    for (const L of this.loot) {
-      if (L.dead) continue;
-      if (L.intersectsCircle(this.hero.x, this.hero.y, this.hero.r + 10)) {
-        L.dead = true;
-        const it = L.item;
-        if (it.kind === "gold") this.hero.gold += it.amount;
-        else if (it.kind === "mat") this.hero.materials[it.type] += it.amount;
-        else this.hero.inventory.push(it);
-      }
-    }
-    this.loot = this.loot.filter(l => !l.dead);
 
     // spawns
-    this._spawnT += dt;
-    if (this._spawnT > 1.0) {
-      this._spawnT = 0;
+    this.spawnTimer -= dt;
+    if (this.spawnTimer <= 0) {
+      this.spawnTimer = 1.2;
       this.spawnEnemies();
     }
 
-    // camera
-    this.cam.x = clamp(this.hero.x - this.canvas.width / 2, 0, this.world.width - this.canvas.width);
-    this.cam.y = clamp(this.hero.y - this.canvas.height / 2, 0, this.world.height - this.canvas.height);
+    // camera clamp (make sure it can't go NaN)
+    const maxCamX = Math.max(0, this.world.width - this.canvas.width);
+    const maxCamY = Math.max(0, this.world.height - this.canvas.height);
 
-    // end
-    this.input.step();
+    this.cam.x = clamp(this.hero.x - this.canvas.width / 2, 0, maxCamX);
+    this.cam.y = clamp(this.hero.y - this.canvas.height / 2, 0, maxCamY);
 
-    // death
-    if (this.hero.hp <= 0) {
-      this.hero.hp = this.hero.maxHp;
-      this.hero.mana = this.hero.maxMana;
-      this.hero.x = this.world.spawn.x;
-      this.hero.y = this.world.spawn.y;
-      this.setMsg("You were defeated. Respawned at the Starter Waystone.", 3.0);
+    // hints
+    this.hint = "";
+    if (this.world.isNearDock(this.hero.x, this.hero.y)) {
+      this.hint = "Dock: press B to toggle sailing";
     }
 
-    this._hints = { sail: sailHint };
+    // UI
+    this.ui.update(dt);
+
+    // periodic save
+    this._saveT = (this._saveT ?? 0) - dt;
+    if (this._saveT <= 0) {
+      this._saveT = 2.0;
+      saveGame({
+        hero: {
+          x: this.hero.x, y: this.hero.y,
+          level: this.hero.level, xp: this.hero.xp,
+          nextXp: this.hero.nextXp,
+          gold: this.hero.gold,
+          hp: this.hero.hp, mana: this.hero.mana
+        }
+      });
+    }
+
+    this.world.update(dt);
+    this.input.endFrame();
   }
 
   castFireball() {
-    const lvl = this.hero.skillLvl.fireball || 1;
-    const cost = 10 + Math.floor(lvl * 1.2);
-    if (!this.god.freeman && !this.hero.spendMana(cost)) {
-      this.setMsg("Not enough mana.", 1.4);
+    const st = this.hero.getStats();
+    const manaCost = 10;
+
+    if (this.hero.mana < manaCost) {
+      this.ui.setMsg("Not enough mana.");
       return;
     }
-    const dx = this.hero.lastDir.x, dy = this.hero.lastDir.y;
-    const spd = 520 + lvl * 30;
-    const dmg = 14 + lvl * 4;
+    this.hero.mana -= manaCost;
+
+    let dir;
+    if (this._mouseMoved) {
+      dir = norm(this._mouseWorld.x - this.hero.x, this._mouseWorld.y - this.hero.y);
+    } else {
+      dir = norm(this.hero.lastMove.x, this.hero.lastMove.y);
+    }
+
+    const spd = 520;
+    const dmg = st.dmg;
 
     const p = new Projectile(
-      this.hero.x + dx * (this.hero.r + 10),
-      this.hero.y + dy * (this.hero.r + 10),
-      dx * spd,
-      dy * spd,
+      this.hero.x + dir.x * 18,
+      this.hero.y + dir.y * 18,
+      dir.x * spd,
+      dir.y * spd,
       dmg,
-      1.7
+      1.05
     );
     this.projectiles.push(p);
 
-    // skill XP
-    this.hero.skillXP.fireball = (this.hero.skillXP.fireball || 0) + 1;
-    const need = 20 + (this.hero.skillLvl.fireball || 1) * 18;
-    if (this.hero.skillXP.fireball >= need) {
-      this.hero.skillXP.fireball = 0;
-      this.hero.skillLvl.fireball = (this.hero.skillLvl.fireball || 1) + 1;
-      this.setMsg(`Fireball leveled up! Lv ${this.hero.skillLvl.fireball}`, 2.0);
-    }
+    this.ui.skillName = "Fireball";
+    this.ui.skillPulse = 0.24;
   }
 
   spawnEnemies() {
-    // keep some enemies around player, avoid ocean/river
-    const max = 16;
-    if (this.enemies.filter(e => e.alive).length >= max) return;
+    if (this.enemies.length > 18) return;
 
-    // spawn ring
-    for (let tries = 0; tries < 6; tries++) {
-      const ang = this.rng.float() * Math.PI * 2;
-      const rad = 360 + this.rng.float() * 520;
-      const x = this.hero.x + Math.cos(ang) * rad;
-      const y = this.hero.y + Math.sin(ang) * rad;
+    const r = 520 + this.rng.float() * 520;
+    const ang = this.rng.float() * Math.PI * 2;
+    const x = clamp(this.hero.x + Math.cos(ang) * r, 40, this.world.width - 40);
+    const y = clamp(this.hero.y + Math.sin(ang) * r, 40, this.world.height - 40);
 
-      const T = this.world.terrainAt(x, y);
-      if (T.ocean) continue;
-      if (this.world.isInRiver(x, y) && !this.world.isOnAnyBridge(x, y)) continue;
+    const T = this.world.terrainAt(x, y);
+    if (T.ocean) return;
+    if (this.world.isInRiver(x, y)) return;
 
-      const tier = Math.max(1, Math.min(10, Math.floor(this.hero.level * (0.7 + this.rng.float() * 0.9))));
-      const type = this.rng.float() < 0.18 ? "charger" : (this.rng.float() < 0.10 ? "shaman" : "grunt");
-      const e = new Enemy(x, y, tier, type, this.rng);
-      this.enemies.push(e);
-      break;
+    const d = Math.sqrt(dist2(x, y, this.world.spawn.x, this.world.spawn.y));
+    const tier = clamp(Math.floor(d / 1200) + 1, 1, 8);
+
+    const roll = this.rng.float();
+    const type = roll > 0.86 ? "shaman" : roll > 0.70 ? "charger" : "grunt";
+
+    this.enemies.push(new Enemy(x, y, tier, type));
+  }
+
+  dropLoot(x, y, tier) {
+    const gold = 2 + Math.round(tier * (2 + this.rng.float() * 3));
+    this.loot.push(new Loot(x + 12, y + 6, { kind: "gold", amt: gold }));
+
+    if (this.rng.float() < 0.35) {
+      const rarity = this.rollRarity(tier);
+      const slot = this.rng.pick(GearSlots);
+      const gear = makeGear(this.rng, slot, rarity);
+      this.loot.push(new Loot(x - 10, y - 8, gear));
     }
   }
 
-  onEnemyKilled(e) {
-    const tier = e.tier || 1;
-    const xp = 10 + tier * 8;
-    this.hero.gainXP(xp);
+  rollRarity(tier) {
+    const r = this.rng.float() + tier * 0.03;
+    if (r > 1.15) return "legendary";
+    if (r > 0.98) return "epic";
+    if (r > 0.82) return "rare";
+    if (r > 0.60) return "uncommon";
+    return "common";
+  }
 
-    // drops
-    const dropRoll = this.rng.float();
-    if (dropRoll < 0.55) {
-      // gold
-      const amt = 6 + tier * 3 + this.rng.int(0, 10);
-      this.loot.push(new Loot(e.x, e.y, { kind: "gold", amount: amt, name: `${amt}g`, rarity: "common" }));
-    } else if (dropRoll < 0.80) {
-      // mats
-      const type = this.rng.pick(["iron","leather","essence"]);
-      const amt = type === "essence" ? 1 : 2 + this.rng.int(0, 2);
-      this.loot.push(new Loot(e.x, e.y, { kind: "mat", type, amount: amt, name: `${type} x${amt}`, rarity: "uncommon" }));
+  pickup(item) {
+    if (item.kind === "gold") {
+      this.hero.gold += item.amt;
+      this.ui.setMsg(`+${item.amt} gold`);
+      return;
+    }
+
+    this.hero.inventory.push(item);
+
+    if (!this.hero.equip[item.slot]) {
+      this.hero.equip[item.slot] = item;
+      this.ui.setMsg(`Equipped: ${item.name}`);
+      const st = this.hero.getStats();
+      this.hero.hp = Math.min(this.hero.hp, st.maxHp);
+      this.hero.mana = Math.min(this.hero.mana, st.maxMana);
     } else {
-      // gear
-      const slot = this.rng.pick(["helm","chest","boots","ring","weapon"]);
-      const gear = makeGear(this.rng, slot, tier);
-      this.loot.push(new Loot(e.x, e.y, gear));
+      this.ui.setMsg(`Loot: ${item.name}`);
     }
-  }
-
-  onBossKilled(b) {
-    this.hero.gainXP(250 + b.tier * 80);
-    this.hero.gold += 250 + b.tier * 40;
-    // guaranteed epic/legendary gear
-    const slot = this.rng.pick(["helm","chest","boots","ring","weapon"]);
-    const gear = makeGear(this.rng, slot, b.tier + 3);
-    gear.rarity = this.rng.float() < 0.25 ? "legendary" : "epic";
-    this.loot.push(new Loot(b.x, b.y, gear));
-    this.setMsg("Boss defeated! Loot dropped.", 2.4);
   }
 
   draw(t) {
     const ctx = this.ctx;
-    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-    // background sky gradient
-    const g = ctx.createLinearGradient(0, 0, 0, this.canvas.height);
-    g.addColorStop(0, "#0b1330");
-    g.addColorStop(0.55, "#14305a");
-    g.addColorStop(1, "#1a3b2a");
-    ctx.fillStyle = g;
+    ctx.fillStyle = "#0b1020";
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
     ctx.save();
     ctx.translate(-this.cam.x, -this.cam.y);
 
-    this.world.draw(ctx, t, { x: this.cam.x, y: this.cam.y, w: this.canvas.width, h: this.canvas.height });
+    this.world.draw(ctx, t, {
+      x: this.cam.x,
+      y: this.cam.y,
+      w: this.canvas.width,
+      h: this.canvas.height,
+    });
 
-    // entities
     for (const L of this.loot) L.draw(ctx, t);
     for (const e of this.enemies) e.draw(ctx, t);
-    if (this.boss?.alive) this.boss.draw(ctx, t);
     for (const p of this.projectiles) p.draw(ctx, t);
-    for (const p of this.enemyProjectiles) p.draw(ctx, t);
     this.hero.draw(ctx, t);
 
     ctx.restore();
 
-    // horizon haze overlay (screen-space)
-    ctx.save();
-    const haze = ctx.createLinearGradient(0, 0, 0, this.canvas.height);
-    haze.addColorStop(0, "rgba(210,230,255,0.22)");
-    haze.addColorStop(0.25, "rgba(210,230,255,0.08)");
-    haze.addColorStop(0.85, "rgba(210,230,255,0)");
-    ctx.fillStyle = haze;
-    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-    ctx.restore();
+    this.ui.draw(ctx, this);
 
-    const vm = {
-      hero: this.hero,
-      stats: this.hero.computeStats(),
-      world: this.world,
-      cam: this.cam,
-      menus: this.menus,
-      god: this.god,
-      msg: this.msg,
-      activeSkill: this.activeSkill,
-      hints: this._hints || { sail: false },
-    };
-    this.ui.draw(ctx, vm);
+    if (this.hero.hp <= 0) {
+      ctx.globalAlpha = 0.7;
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = "#ffd28a";
+      ctx.font = "28px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("You Died", this.canvas.width / 2, this.canvas.height / 2);
+      ctx.font = "14px system-ui, sans-serif";
+      ctx.fillStyle = "#d7e0ff";
+      ctx.fillText("Refresh to respawn (saving is on)", this.canvas.width / 2, this.canvas.height / 2 + 28);
+    }
   }
 }

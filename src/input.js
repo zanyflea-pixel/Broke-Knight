@@ -1,58 +1,61 @@
 // src/input.js
 export default class Input {
   constructor(canvas) {
-    this.canvas = canvas;
-    this.keys = new Set();
-    this.pressed = new Set();
+    this.keysDown = new Set();
+    this.keysPressed = new Set();
     this.mouse = { x: 0, y: 0, down: false, clicked: false };
 
     window.addEventListener("keydown", (e) => {
-      const k = e.key;
-      if (!this.keys.has(k)) this.pressed.add(k);
-      this.keys.add(k);
+      const k = e.key.toLowerCase();
+      if (!this.keysDown.has(k)) this.keysPressed.add(k);
+      this.keysDown.add(k);
 
-      // prevent page scroll
-      if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(k)) e.preventDefault();
-      // quick save/load helpers
-      if ((e.ctrlKey || e.metaKey) && (k === "s" || k === "S")) e.preventDefault();
-      if ((e.ctrlKey || e.metaKey) && (k === "l" || k === "L")) e.preventDefault();
-    });
+      // prevent page scrolling with arrows / space
+      if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(e.key)) e.preventDefault();
+    }, { passive: false });
 
     window.addEventListener("keyup", (e) => {
-      this.keys.delete(e.key);
+      this.keysDown.delete(e.key.toLowerCase());
     });
 
     canvas.addEventListener("mousemove", (e) => {
       const r = canvas.getBoundingClientRect();
-      this.mouse.x = e.clientX - r.left;
-      this.mouse.y = e.clientY - r.top;
+      this.mouse.x = (e.clientX - r.left) * (canvas.width / r.width);
+      this.mouse.y = (e.clientY - r.top) * (canvas.height / r.height);
     });
 
     canvas.addEventListener("mousedown", () => {
       this.mouse.down = true;
       this.mouse.clicked = true;
     });
-
-    window.addEventListener("mouseup", () => { this.mouse.down = false; });
+    window.addEventListener("mouseup", () => {
+      this.mouse.down = false;
+    });
   }
 
-  consume(key) {
-    if (this.pressed.has(key)) {
-      this.pressed.delete(key);
+  down(key) {
+    return this.keysDown.has(key.toLowerCase());
+  }
+
+  pressed(key) {
+    key = key.toLowerCase();
+    if (this.keysPressed.has(key)) {
+      this.keysPressed.delete(key);
       return true;
     }
     return false;
   }
 
-  step() { this.mouse.clicked = false; this.pressed.clear(); }
-
-  get axis() {
-    const left = this.keys.has("ArrowLeft") ? -1 : 0;
-    const right = this.keys.has("ArrowRight") ? 1 : 0;
-    const up = this.keys.has("ArrowUp") ? -1 : 0;
-    const down = this.keys.has("ArrowDown") ? 1 : 0;
-    return { x: left + right, y: up + down };
+  consumeMouseClick() {
+    if (this.mouse.clicked) {
+      this.mouse.clicked = false;
+      return true;
+    }
+    return false;
   }
 
-  getKey(k) { return this.keys.has(k); }
+  endFrame() {
+    this.keysPressed.clear();
+    this.mouse.clicked = false;
+  }
 }

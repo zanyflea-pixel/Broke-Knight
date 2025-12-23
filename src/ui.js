@@ -1,6 +1,224 @@
 // src/ui.js
-import { clamp } from "./util.js";
-import { rarityColor } from "./entities.js";
+import { rarityColor, GearSlots } from "./entities.js";
+
+export default class UI {
+  constructor() {
+    this.open = { map: false, stats: false, skills: false };
+    this.msg = "";
+    this.msgT = 0;
+
+    this.skillName = "Fireball";
+    this.skillPulse = 0;
+  }
+
+  setMsg(txt, t = 2.2) {
+    this.msg = txt;
+    this.msgT = t;
+  }
+
+  update(dt) {
+    if (this.msgT > 0) this.msgT -= dt;
+    if (this.skillPulse > 0) this.skillPulse -= dt;
+  }
+
+  toggle(name) {
+    this.open[name] = !this.open[name];
+  }
+
+  closeAll() {
+    for (const k of Object.keys(this.open)) this.open[k] = false;
+  }
+
+  draw(ctx, game) {
+    const w = ctx.canvas.width, h = ctx.canvas.height;
+    const hero = game.hero;
+
+    // HUD
+    this.drawHUD(ctx, game);
+
+    // floating message
+    if (this.msgT > 0) {
+      ctx.globalAlpha = Math.min(1, this.msgT / 0.25);
+      box(ctx, w / 2 - 220, 16, 440, 32, 10, "rgba(0,0,0,0.45)");
+      text(ctx, this.msg, w / 2, 38, "#d7e0ff", 14, "center");
+      ctx.globalAlpha = 1;
+    }
+
+    // active skill indicator
+    if (this.skillPulse > 0) {
+      const a = Math.min(1, this.skillPulse / 0.12);
+      ctx.globalAlpha = a * 0.9;
+      box(ctx, w - 200, 16, 184, 32, 10, "rgba(25,35,70,0.55)");
+      text(ctx, `Skill: ${this.skillName}`, w - 108, 38, "#ffd28a", 14, "center");
+      ctx.globalAlpha = 1;
+    }
+
+    // windows
+    if (this.open.map) this.drawMap(ctx, game);
+    if (this.open.stats) this.drawStats(ctx, game);
+    if (this.open.skills) this.drawSkills(ctx, game);
+  }
+
+  drawHUD(ctx, game) {
+    const hero = game.hero;
+    const st = hero.getStats();
+
+    const W = ctx.canvas.width;
+
+    // HP bar
+    bar(ctx, 16, 16, 240, 16, hero.hp / st.maxHp, "#ff5d5d", "HP");
+    // Mana bar
+    bar(ctx, 16, 38, 240, 16, hero.mana / st.maxMana, "#52b7ff", "Mana");
+
+    // XP
+    bar(ctx, 16, 60, 240, 12, hero.xp / hero.nextXp, "#5dff9a", `Lv ${hero.level}`);
+
+    // Gold + mode
+    box(ctx, 270, 16, 170, 56, 10, "rgba(0,0,0,0.35)");
+    text(ctx, `Gold: ${hero.gold}`, 286, 38, "#ffd36a", 14, "left");
+    text(ctx, `Sailing: ${hero.state.sailing ? "ON" : "OFF"}`, 286, 58, "#d7e0ff", 12, "left");
+    text(ctx, `God: ${hero.state.invulnerable ? "ON" : "OFF"}`, 286, 72, "#d7e0ff", 12, "left");
+
+    // hints
+    if (game.hint) {
+      box(ctx, W / 2 - 260, ctx.canvas.height - 54, 520, 38, 10, "rgba(0,0,0,0.38)");
+      text(ctx, game.hint, W / 2, ctx.canvas.height - 28, "#d7e0ff", 14, "center");
+    }
+  }
+
+  drawMap(ctx, game) {
+    const W = ctx.canvas.width, H = ctx.canvas.height;
+    const ww = 520, hh = 360;
+    const x = W / 2 - ww / 2, y = H / 2 - hh / 2;
+
+    box(ctx, x, y, ww, hh, 14, "rgba(0,0,0,0.62)");
+    text(ctx, "Map (M to close, ESC closes)", x + ww / 2, y + 28, "#d7e0ff", 14, "center");
+
+    const pad = 18;
+    const mx = x + pad, my = y + 44, mw = ww - pad * 2, mh = hh - 60;
+
+    // render low-res map sampling of world
+    const ctx2 = ctx;
+    const steps = 96;
+    const sx = game.world.width / steps;
+    const sy = game.world.height / steps;
+
+    for (let j = 0; j < steps; j++) {
+      for (let i = 0; i < steps; i++) {
+        const wx = (i + 0.5) * sx;
+        const wy = (j + 0.5) * sy;
+        const T = game.world.terrainAt(wx, wy);
+        ctx2.globalAlpha = 0.95;
+        ctx2.fillStyle = T.ocean ? "rgba(20,60,100,0.9)" : "rgba(40,120,70,0.9)";
+        const rx = mx + (i / steps) * mw;
+        const ry = my + (j / steps) * mh;
+        ctx2.fillRect(rx, ry, mw / steps + 0.3, mh / steps + 0.3);
+      }
+    }
+    ctx2.globalAlpha = 1;
+
+    // player marker
+    const px = mx + (game.hero.x / game.world.width) * mw;
+    const py = my + (game.hero.y / game.world.height) * mh;
+    ctx.fillStyle = "#ffd28a";
+    ctx.beginPath();
+    ctx.arc(px, py, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#0b1330";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // waystones markers
+    ctx.globalAlpha = 0.8;
+    for (const wst of game.world.waystones) {
+      const wx = mx + (wst.x / game.world.width) * mw;
+      const wy = my + (wst.y / game.world.height) * mh;
+      ctx.fillStyle = wst.activated ? "#38d9ff" : "#9aa6d8";
+      ctx.fillRect(wx - 2, wy - 2, 4, 4);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  drawStats(ctx, game) {
+    const W = ctx.canvas.width, H = ctx.canvas.height;
+    const ww = 520, hh = 420;
+    const x = W / 2 - ww / 2, y = H / 2 - hh / 2;
+
+    box(ctx, x, y, ww, hh, 14, "rgba(0,0,0,0.62)");
+    text(ctx, "Stats / Gear (I to close, ESC closes)", x + ww / 2, y + 28, "#d7e0ff", 14, "center");
+
+    const hero = game.hero;
+    const st = hero.getStats();
+
+    const leftX = x + 24;
+    let yy = y + 56;
+    text(ctx, `Level: ${hero.level}`, leftX, yy, "#d7e0ff", 14, "left"); yy += 22;
+    text(ctx, `HP: ${Math.round(hero.hp)} / ${st.maxHp}`, leftX, yy, "#d7e0ff", 14, "left"); yy += 22;
+    text(ctx, `Mana: ${Math.round(hero.mana)} / ${st.maxMana}`, leftX, yy, "#d7e0ff", 14, "left"); yy += 22;
+    text(ctx, `Damage: ${st.dmg}`, leftX, yy, "#d7e0ff", 14, "left"); yy += 22;
+    text(ctx, `Armor: ${st.armor}`, leftX, yy, "#d7e0ff", 14, "left"); yy += 22;
+    text(ctx, `Gold: ${hero.gold}`, leftX, yy, "#ffd36a", 14, "left"); yy += 22;
+
+    // equipment slots
+    const sx = x + 280;
+    let sy = y + 56;
+
+    text(ctx, "Equipment", sx, sy, "#ffd28a", 14, "left");
+    sy += 18;
+
+    for (const slot of GearSlots) {
+      const it = hero.equip[slot];
+      box(ctx, sx, sy, 220, 30, 10, "rgba(20,25,45,0.55)");
+      text(ctx, slot.toUpperCase(), sx + 10, sy + 20, "#9aa6d8", 12, "left");
+      if (it) {
+        text(ctx, it.name, sx + 80, sy + 20, rarityColor(it.rarity), 12, "left");
+      } else {
+        text(ctx, "(empty)", sx + 80, sy + 20, "rgba(215,224,255,0.55)", 12, "left");
+      }
+      sy += 38;
+    }
+
+    text(ctx, "Tip: Pick up gear by touching drops.", x + ww / 2, y + hh - 18, "rgba(215,224,255,0.7)", 12, "center");
+  }
+
+  drawSkills(ctx, game) {
+    const W = ctx.canvas.width, H = ctx.canvas.height;
+    const ww = 520, hh = 320;
+    const x = W / 2 - ww / 2, y = H / 2 - hh / 2;
+
+    box(ctx, x, y, ww, hh, 14, "rgba(0,0,0,0.62)");
+    text(ctx, "Skills (K to close, ESC closes)", x + ww / 2, y + 28, "#d7e0ff", 14, "center");
+
+    const sx = x + 24, sy = y + 60;
+    text(ctx, "Fireball", sx, sy, "#ffd28a", 16, "left");
+    text(ctx, "A = cast toward mouse (or last move dir)", sx, sy + 24, "rgba(215,224,255,0.8)", 12, "left");
+    text(ctx, "This is a scaffold for a larger skill XP system.", sx, sy + 46, "rgba(215,224,255,0.6)", 12, "left");
+  }
+}
+
+// ---------- helpers ----------
+function box(ctx, x, y, w, h, r, fill) {
+  ctx.fillStyle = fill;
+  roundRect(ctx, x, y, w, h, r);
+  ctx.fill();
+}
+
+function bar(ctx, x, y, w, h, t, col, label) {
+  t = Math.max(0, Math.min(1, t));
+  box(ctx, x, y, w, h, 10, "rgba(0,0,0,0.45)");
+  ctx.fillStyle = col;
+  roundRect(ctx, x + 2, y + 2, (w - 4) * t, h - 4, 8);
+  ctx.fill();
+  text(ctx, label, x + 10, y + h - 3, "rgba(215,224,255,0.85)", 11, "left");
+}
+
+function text(ctx, str, x, y, col, size = 14, align = "left") {
+  ctx.fillStyle = col;
+  ctx.font = `${size}px system-ui, sans-serif`;
+  ctx.textAlign = align;
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(str, x, y);
+}
 
 function roundRect(ctx, x, y, w, h, r) {
   const rr = Math.min(r, w * 0.5, h * 0.5);
@@ -11,288 +229,4 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.arcTo(x, y + h, x, y, rr);
   ctx.arcTo(x, y, x + w, y, rr);
   ctx.closePath();
-}
-
-export default class UI {
-  constructor() {
-    this.last = { invItems: [], equipSlots: [] };
-  }
-
-  draw(ctx, vm) {
-    const W = ctx.canvas.width;
-    const H = ctx.canvas.height;
-
-    // HUD background fade
-    ctx.save();
-    ctx.globalAlpha = 0.65;
-    ctx.fillStyle = "rgba(0,0,0,0.32)";
-    ctx.fillRect(12, 12, 320, 88);
-    ctx.restore();
-
-    const hero = vm.hero;
-    const stats = vm.stats;
-
-    // HP/Mana bars
-    this.drawBar(ctx, 20, 22, 240, 14, hero.hp / hero.maxHp, "#ff4f6a", "HP");
-    this.drawBar(ctx, 20, 42, 240, 12, hero.mana / hero.maxMana, "#38d9ff", "Mana");
-
-    // XP bar
-    const xpNeed = 55 + (hero.level - 1) * 45;
-    this.drawBar(ctx, 20, 58, 240, 10, hero.xp / xpNeed, "#ffd28a", `Lv ${hero.level}`);
-
-    // gold & materials
-    ctx.fillStyle = "#d7e0ff";
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText(`Gold: ${hero.gold}`, 20, 86);
-    ctx.fillText(`Iron ${hero.materials.iron}  Leather ${hero.materials.leather}  Essence ${hero.materials.essence}`, 90, 86);
-
-    // skill indicator
-    ctx.fillStyle = "rgba(0,0,0,0.45)";
-    roundRect(ctx, W - 210, 14, 196, 34, 10);
-    ctx.fill();
-    ctx.fillStyle = "#d7e0ff";
-    ctx.font = "13px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(`Skill: ${vm.activeSkill}`, W - 112, 36);
-    ctx.textAlign = "left";
-
-    if (vm.msg) {
-      ctx.globalAlpha = 0.7;
-      ctx.fillStyle = "rgba(0,0,0,0.55)";
-      roundRect(ctx, W / 2 - 200, 16, 400, 34, 10);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = "#d7e0ff";
-      ctx.font = "14px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(vm.msg, W / 2, 38);
-      ctx.textAlign = "left";
-    }
-
-    // Menus
-    if (vm.menus.map) this.drawMap(ctx, vm.world, hero);
-    if (vm.menus.inventory) this.drawInventory(ctx, hero);
-    if (vm.menus.skills) this.drawSkills(ctx, hero);
-    if (vm.menus.god) this.drawGod(ctx, vm.god);
-
-    // Sail hint button
-    if (vm.hints.sail) {
-      ctx.globalAlpha = 0.8;
-      ctx.fillStyle = "rgba(0,0,0,0.55)";
-      roundRect(ctx, W/2 - 130, H - 88, 260, 44, 14);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = "#d7e0ff";
-      ctx.font = "14px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText("Press B to Sail (near dock)", W/2, H - 60);
-      ctx.textAlign = "left";
-    }
-  }
-
-  drawBar(ctx, x, y, w, h, p, col, label) {
-    p = clamp(p, 0, 1);
-    ctx.globalAlpha = 0.85;
-    ctx.fillStyle = "rgba(0,0,0,0.7)";
-    roundRect(ctx, x, y, w, h, 6);
-    ctx.fill();
-
-    ctx.globalAlpha = 0.9;
-    ctx.fillStyle = col;
-    roundRect(ctx, x, y, w * p, h, 6);
-    ctx.fill();
-
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = "#d7e0ff";
-    ctx.font = "11px system-ui, sans-serif";
-    ctx.fillText(label, x + 6, y + h - 2);
-  }
-
-  drawMap(ctx, world, hero) {
-    const W = ctx.canvas.width, H = ctx.canvas.height;
-    const pad = 18;
-    const boxW = Math.min(520, W - 80);
-    const boxH = Math.min(360, H - 80);
-    const x0 = (W - boxW) / 2;
-    const y0 = (H - boxH) / 2;
-
-    ctx.globalAlpha = 0.92;
-    ctx.fillStyle = "rgba(0,0,0,0.72)";
-    roundRect(ctx, x0, y0, boxW, boxH, 16);
-    ctx.fill();
-
-    // render mini terrain
-    const inset = 14;
-    const mx = x0 + inset;
-    const my = y0 + inset;
-    const mw = boxW - inset * 2;
-    const mh = boxH - inset * 2;
-
-    const step = 8;
-    for (let yy = 0; yy < mh; yy += step) {
-      for (let xx = 0; xx < mw; xx += step) {
-        const wx = (xx / mw) * world.width;
-        const wy = (yy / mh) * world.height;
-        const T = world.terrainAt(wx, wy);
-        ctx.fillStyle = T.ocean ? "rgba(20,60,92,0.95)" : "rgba(40,130,80,0.95)";
-        ctx.fillRect(mx + xx, my + yy, step, step);
-      }
-    }
-
-    
-// markers: waystones / docks / towns
-// waystones
-ctx.globalAlpha = 0.9;
-for (const w of (world.waystones || [])) {
-  const wx = mx + (w.x / world.width) * mw;
-  const wy = my + (w.y / world.height) * mh;
-  ctx.fillStyle = w.activated ? "rgba(56,217,255,0.95)" : "rgba(160,170,210,0.8)";
-  ctx.fillRect(wx - 2, wy - 2, 4, 4);
-}
-
-// docks
-for (const d of (world.docks || [])) {
-  const dx = mx + ((d.x + d.w/2) / world.width) * mw;
-  const dy = my + ((d.y + d.h/2) / world.height) * mh;
-  ctx.fillStyle = "rgba(255,210,140,0.85)";
-  ctx.fillRect(dx - 2, dy - 2, 4, 4);
-}
-
-// towns/settlements
-for (const s of (world.settlements || [])) {
-  const sx = mx + (s.x / world.width) * mw;
-  const sy = my + (s.y / world.height) * mh;
-  ctx.fillStyle = "rgba(210,190,145,0.9)";
-  ctx.fillRect(sx - 3, sy - 3, 6, 6);
-}
-ctx.globalAlpha = 1;// hero marker
-    const hx = mx + (hero.x / world.width) * mw;
-    const hy = my + (hero.y / world.height) * mh;
-    ctx.fillStyle = "#ffd28a";
-    ctx.beginPath();
-    ctx.arc(hx, hy, 5, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = "#d7e0ff";
-    ctx.font = "13px system-ui, sans-serif";
-    ctx.fillText("MAP (M to close)", x0 + 16, y0 - 10);
-    ctx.globalAlpha = 1;
-  }
-
-  drawInventory(ctx, hero) {
-    const W = ctx.canvas.width, H = ctx.canvas.height;
-    const w = Math.min(560, W - 80);
-    const h = Math.min(420, H - 80);
-    const x = (W - w) / 2;
-    const y = (H - h) / 2;
-
-    ctx.globalAlpha = 0.92;
-    ctx.fillStyle = "rgba(0,0,0,0.72)";
-    roundRect(ctx, x, y, w, h, 16);
-    ctx.fill();
-
-    ctx.fillStyle = "#d7e0ff";
-    ctx.font = "16px system-ui, sans-serif";
-    ctx.fillText("Inventory (I to close)", x + 16, y + 28);
-
-    // equipment slots
-    ctx.font = "12px system-ui, sans-serif";
-    const slots = ["weapon","helm","chest","boots","ring"];
-    let sx = x + 16, sy = y + 44;
-    ctx.fillText("Equipment:", sx, sy + 14);
-
-    let cx = sx, cy = sy + 22;
-    for (const s of slots) {
-      ctx.globalAlpha = 0.85;
-      ctx.fillStyle = "rgba(255,255,255,0.06)";
-      roundRect(ctx, cx, cy, 140, 34, 10);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-      const it = hero.equip[s];
-      ctx.fillStyle = it ? rarityColor(it.rarity) : "#9aa6d8";
-      ctx.fillText(`${s.toUpperCase()}: ${it ? it.name : "-"}`, cx + 10, cy + 22);
-      cy += 40;
-      if (cy > y + h - 70) { cy = sy + 22; cx += 150; }
-    }
-
-    // inventory list
-    const listX = x + 330;
-    const listY = y + 52;
-    ctx.fillStyle = "#d7e0ff";
-    ctx.fillText("Backpack:", listX, listY);
-
-    const items = hero.inventory.slice(-14).reverse();
-    let yy = listY + 14;
-    for (const it of items) {
-      ctx.fillStyle = rarityColor(it.rarity || "common");
-      ctx.fillText(`• ${it.name}`, listX, yy + 14);
-      yy += 18;
-    }
-
-    ctx.globalAlpha = 1;
-  }
-
-  drawSkills(ctx, hero) {
-    const W = ctx.canvas.width, H = ctx.canvas.height;
-    const w = Math.min(520, W - 80);
-    const h = Math.min(320, H - 80);
-    const x = (W - w) / 2;
-    const y = (H - h) / 2;
-
-    ctx.globalAlpha = 0.92;
-    ctx.fillStyle = "rgba(0,0,0,0.72)";
-    roundRect(ctx, x, y, w, h, 16);
-    ctx.fill();
-
-    ctx.fillStyle = "#d7e0ff";
-    ctx.font = "16px system-ui, sans-serif";
-    ctx.fillText("Skills (K to close)", x + 16, y + 28);
-
-    ctx.font = "13px system-ui, sans-serif";
-    const skills = ["fireball"];
-    let yy = y + 58;
-    for (const s of skills) {
-      const lvl = hero.skillLvl[s] || 1;
-      const xp = hero.skillXP[s] || 0;
-      const need = 20 + lvl * 18;
-      ctx.fillStyle = "#d7e0ff";
-      ctx.fillText(`${s.toUpperCase()}  Lv ${lvl}`, x + 20, yy);
-      // bar
-      ctx.globalAlpha = 0.85;
-      ctx.fillStyle = "rgba(255,255,255,0.06)";
-      roundRect(ctx, x + 20, yy + 8, w - 40, 12, 6);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = "#ff7a2f";
-      roundRect(ctx, x + 20, yy + 8, (w - 40) * clamp(xp / need, 0, 1), 12, 6);
-      ctx.fill();
-      yy += 44;
-    }
-    ctx.globalAlpha = 1;
-  }
-
-  drawGod(ctx, vm) {
-    const W = ctx.canvas.width, H = ctx.canvas.height;
-    const w = 360, h = 220;
-    const x = (W - w) / 2;
-    const y = (H - h) / 2;
-
-    ctx.globalAlpha = 0.92;
-    ctx.fillStyle = "rgba(0,0,0,0.72)";
-    roundRect(ctx, x, y, w, h, 16);
-    ctx.fill();
-
-    ctx.fillStyle = "#d7e0ff";
-    ctx.font = "16px system-ui, sans-serif";
-    ctx.fillText("God Menu (G to close)", x + 16, y + 28);
-
-    ctx.font = "13px system-ui, sans-serif";
-    ctx.fillStyle = "#d7e0ff";
-    ctx.fillText(`Invincible: ${vm.invincible ? "ON" : "OFF"} (toggle: 1)`, x + 20, y + 74);
-    ctx.fillText(`One-shot:   ${vm.oneshot ? "ON" : "OFF"} (toggle: 2)`, x + 20, y + 98);
-    ctx.fillText(`Free Mana:  ${vm.freeman ? "ON" : "OFF"} (toggle: 3)`, x + 20, y + 122);
-    ctx.fillText(`Spawn Boss: press 9`, x + 20, y + 154);
-
-    ctx.globalAlpha = 1;
-  }
 }
