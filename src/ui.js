@@ -1,5 +1,6 @@
 // src/ui.js
-import { rarityColor, GearSlots } from "./entities.js";
+import { rarityColor } from "./entities.js";
+import { clamp } from "./util.js";
 
 export default class UI {
   constructor() {
@@ -7,50 +8,93 @@ export default class UI {
     this.msg = "";
     this.msgT = 0;
 
-    this.skillName = "Fireball";
+    this.skillName = "";
     this.skillPulse = 0;
   }
 
-  setMsg(txt, t = 2.2) {
+  toggle(name) { this.open[name] = !this.open[name]; }
+  closeAll() { this.open.map = this.open.stats = this.open.skills = false; }
+
+  setMsg(txt) {
     this.msg = txt;
-    this.msgT = t;
+    this.msgT = 2.2;
   }
 
   update(dt) {
-    if (this.msgT > 0) this.msgT -= dt;
-    if (this.skillPulse > 0) this.skillPulse -= dt;
-  }
-
-  toggle(name) {
-    this.open[name] = !this.open[name];
-  }
-
-  closeAll() {
-    for (const k of Object.keys(this.open)) this.open[k] = false;
+    this.msgT = Math.max(0, this.msgT - dt);
+    this.skillPulse = Math.max(0, this.skillPulse - dt);
   }
 
   draw(ctx, game) {
-    const w = ctx.canvas.width, h = ctx.canvas.height;
+    const W = game.canvas.width;
+    const H = game.canvas.height;
     const hero = game.hero;
+    const st = hero.getStats();
 
-    // HUD
-    this.drawHUD(ctx, game);
+    // HUD backdrop
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = "rgba(5,8,18,0.70)";
+    roundRect(ctx, 14, 14, 340, 88, 16);
+    ctx.fill();
+    ctx.globalAlpha = 1;
 
-    // floating message
-    if (this.msgT > 0) {
-      ctx.globalAlpha = Math.min(1, this.msgT / 0.25);
-      box(ctx, w / 2 - 220, 16, 440, 32, 10, "rgba(0,0,0,0.45)");
-      text(ctx, this.msg, w / 2, 38, "#d7e0ff", 14, "center");
+    // HP bar
+    drawBar(ctx, 28, 30, 300, 14, hero.hp / st.maxHp, "#ff4a6e", "HP");
+    // Mana bar
+    drawBar(ctx, 28, 52, 300, 14, hero.mana / st.maxMana, "#4aa3ff", "Mana");
+
+    // XP bar
+    const xpP = clamp(hero.xp / hero.nextXp, 0, 1);
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.fillRect(28, 76, 300, 10);
+    ctx.fillStyle = "rgba(255,210,138,0.95)";
+    ctx.fillRect(28, 76, 300 * xpP, 10);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#d7e0ff";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText(`Lv ${hero.level}   Gold ${hero.gold}`, 28, 98);
+
+    // hint
+    if (game.hint) {
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = "rgba(5,8,18,0.70)";
+      roundRect(ctx, 14, 110, 340, 38, 14);
+      ctx.fill();
       ctx.globalAlpha = 1;
+      ctx.fillStyle = "#d7e0ff";
+      ctx.font = "13px system-ui, sans-serif";
+      ctx.fillText(game.hint, 28, 135);
     }
 
-    // active skill indicator
-    if (this.skillPulse > 0) {
-      const a = Math.min(1, this.skillPulse / 0.12);
-      ctx.globalAlpha = a * 0.9;
-      box(ctx, w - 200, 16, 184, 32, 10, "rgba(25,35,70,0.55)");
-      text(ctx, `Skill: ${this.skillName}`, w - 108, 38, "#ffd28a", 14, "center");
+    // skill indicator
+    if (this.skillName && this.skillPulse > 0) {
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = "rgba(5,8,18,0.75)";
+      const w = 220;
+      roundRect(ctx, (W - w) / 2, 14, w, 44, 14);
+      ctx.fill();
       ctx.globalAlpha = 1;
+      ctx.fillStyle = "#ffd28a";
+      ctx.font = "14px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(`Casting: ${this.skillName}`, W / 2, 42);
+      ctx.textAlign = "left";
+    }
+
+    // message toast
+    if (this.msgT > 0 && this.msg) {
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = "rgba(5,8,18,0.75)";
+      const w = Math.min(560, 24 + ctx.measureText(this.msg).width);
+      roundRect(ctx, (W - w) / 2, H - 70, w, 44, 14);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = "#d7e0ff";
+      ctx.font = "14px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(this.msg, W / 2, H - 42);
+      ctx.textAlign = "left";
     }
 
     // windows
@@ -59,165 +103,198 @@ export default class UI {
     if (this.open.skills) this.drawSkills(ctx, game);
   }
 
-  drawHUD(ctx, game) {
-    const hero = game.hero;
-    const st = hero.getStats();
-
-    const W = ctx.canvas.width;
-
-    // HP bar
-    bar(ctx, 16, 16, 240, 16, hero.hp / st.maxHp, "#ff5d5d", "HP");
-    // Mana bar
-    bar(ctx, 16, 38, 240, 16, hero.mana / st.maxMana, "#52b7ff", "Mana");
-
-    // XP
-    bar(ctx, 16, 60, 240, 12, hero.xp / hero.nextXp, "#5dff9a", `Lv ${hero.level}`);
-
-    // Gold + mode
-    box(ctx, 270, 16, 170, 56, 10, "rgba(0,0,0,0.35)");
-    text(ctx, `Gold: ${hero.gold}`, 286, 38, "#ffd36a", 14, "left");
-    text(ctx, `Sailing: ${hero.state.sailing ? "ON" : "OFF"}`, 286, 58, "#d7e0ff", 12, "left");
-    text(ctx, `God: ${hero.state.invulnerable ? "ON" : "OFF"}`, 286, 72, "#d7e0ff", 12, "left");
-
-    // hints
-    if (game.hint) {
-      box(ctx, W / 2 - 260, ctx.canvas.height - 54, 520, 38, 10, "rgba(0,0,0,0.38)");
-      text(ctx, game.hint, W / 2, ctx.canvas.height - 28, "#d7e0ff", 14, "center");
-    }
-  }
-
   drawMap(ctx, game) {
-    const W = ctx.canvas.width, H = ctx.canvas.height;
-    const ww = 520, hh = 360;
-    const x = W / 2 - ww / 2, y = H / 2 - hh / 2;
-
-    box(ctx, x, y, ww, hh, 14, "rgba(0,0,0,0.62)");
-    text(ctx, "Map (M to close, ESC closes)", x + ww / 2, y + 28, "#d7e0ff", 14, "center");
-
+    const W = game.canvas.width, H = game.canvas.height;
     const pad = 18;
-    const mx = x + pad, my = y + 44, mw = ww - pad * 2, mh = hh - 60;
+    const boxW = Math.min(720, W - 2 * pad);
+    const boxH = Math.min(460, H - 2 * pad);
 
-    // render low-res map sampling of world
-    const ctx2 = ctx;
-    const steps = 96;
-    const sx = game.world.width / steps;
-    const sy = game.world.height / steps;
+    const x = (W - boxW) / 2;
+    const y = (H - boxH) / 2;
 
-    for (let j = 0; j < steps; j++) {
-      for (let i = 0; i < steps; i++) {
-        const wx = (i + 0.5) * sx;
-        const wy = (j + 0.5) * sy;
-        const T = game.world.terrainAt(wx, wy);
-        ctx2.globalAlpha = 0.95;
-        ctx2.fillStyle = T.ocean ? "rgba(20,60,100,0.9)" : "rgba(40,120,70,0.9)";
-        const rx = mx + (i / steps) * mw;
-        const ry = my + (j / steps) * mh;
-        ctx2.fillRect(rx, ry, mw / steps + 0.3, mh / steps + 0.3);
-      }
-    }
-    ctx2.globalAlpha = 1;
+    ctx.globalAlpha = 0.92;
+    ctx.fillStyle = "rgba(8,12,26,0.90)";
+    roundRect(ctx, x, y, boxW, boxH, 18);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    ctx.fillStyle = "#d7e0ff";
+    ctx.font = "16px system-ui, sans-serif";
+    ctx.fillText("Map (M to close)", x + 18, y + 28);
+
+    const mini = game.world.getMinimapCanvas();
+    const mw = mini.width, mh = mini.height;
+
+    const scale = Math.min((boxW - 40) / mw, (boxH - 70) / mh);
+    const dw = mw * scale, dh = mh * scale;
+    const mx = x + (boxW - dw) / 2;
+    const my = y + 46;
+
+    ctx.globalAlpha = 0.95;
+    ctx.drawImage(mini, mx, my, dw, dh);
+    ctx.globalAlpha = 1;
 
     // player marker
-    const px = mx + (game.hero.x / game.world.width) * mw;
-    const py = my + (game.hero.y / game.world.height) * mh;
+    const px = mx + (game.hero.x / game.world.width) * dw;
+    const py = my + (game.hero.y / game.world.height) * dh;
+
     ctx.fillStyle = "#ffd28a";
     ctx.beginPath();
-    ctx.arc(px, py, 5, 0, Math.PI * 2);
+    ctx.arc(px, py, 4.5, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = "#0b1330";
-    ctx.lineWidth = 2;
-    ctx.stroke();
 
-    // waystones markers
-    ctx.globalAlpha = 0.8;
-    for (const wst of game.world.waystones) {
-      const wx = mx + (wst.x / game.world.width) * mw;
-      const wy = my + (wst.y / game.world.height) * mh;
-      ctx.fillStyle = wst.activated ? "#38d9ff" : "#9aa6d8";
-      ctx.fillRect(wx - 2, wy - 2, 4, 4);
-    }
+    ctx.globalAlpha = 0.6;
+    ctx.strokeStyle = "#ffd28a";
+    ctx.beginPath();
+    ctx.arc(px, py, 10, 0, Math.PI * 2);
+    ctx.stroke();
     ctx.globalAlpha = 1;
   }
 
   drawStats(ctx, game) {
-    const W = ctx.canvas.width, H = ctx.canvas.height;
-    const ww = 520, hh = 420;
-    const x = W / 2 - ww / 2, y = H / 2 - hh / 2;
-
-    box(ctx, x, y, ww, hh, 14, "rgba(0,0,0,0.62)");
-    text(ctx, "Stats / Gear (I to close, ESC closes)", x + ww / 2, y + 28, "#d7e0ff", 14, "center");
+    const W = game.canvas.width, H = game.canvas.height;
+    const boxW = Math.min(760, W - 36);
+    const boxH = Math.min(520, H - 36);
+    const x = (W - boxW) / 2;
+    const y = (H - boxH) / 2;
 
     const hero = game.hero;
     const st = hero.getStats();
 
-    const leftX = x + 24;
-    let yy = y + 56;
-    text(ctx, `Level: ${hero.level}`, leftX, yy, "#d7e0ff", 14, "left"); yy += 22;
-    text(ctx, `HP: ${Math.round(hero.hp)} / ${st.maxHp}`, leftX, yy, "#d7e0ff", 14, "left"); yy += 22;
-    text(ctx, `Mana: ${Math.round(hero.mana)} / ${st.maxMana}`, leftX, yy, "#d7e0ff", 14, "left"); yy += 22;
-    text(ctx, `Damage: ${st.dmg}`, leftX, yy, "#d7e0ff", 14, "left"); yy += 22;
-    text(ctx, `Armor: ${st.armor}`, leftX, yy, "#d7e0ff", 14, "left"); yy += 22;
-    text(ctx, `Gold: ${hero.gold}`, leftX, yy, "#ffd36a", 14, "left"); yy += 22;
+    ctx.globalAlpha = 0.92;
+    ctx.fillStyle = "rgba(8,12,26,0.92)";
+    roundRect(ctx, x, y, boxW, boxH, 18);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    ctx.fillStyle = "#d7e0ff";
+    ctx.font = "16px system-ui, sans-serif";
+    ctx.fillText("Stats / Equipment (I to close)", x + 18, y + 28);
+
+    ctx.font = "13px system-ui, sans-serif";
+    ctx.fillText(`Max HP: ${Math.round(st.maxHp)}   Armor: ${Math.round(st.armor)}`, x + 18, y + 56);
+    ctx.fillText(`Max Mana: ${Math.round(st.maxMana)}   Damage: ${Math.round(st.dmg)}`, x + 18, y + 76);
 
     // equipment slots
-    const sx = x + 280;
-    let sy = y + 56;
+    const slotX = x + 18, slotY = y + 100;
+    const slots = ["helm","chest","boots","weapon","ring"];
 
-    text(ctx, "Equipment", sx, sy, "#ffd28a", 14, "left");
-    sy += 18;
+    ctx.fillStyle = "#aab6d6";
+    ctx.fillText("Equipment:", slotX, slotY - 10);
 
-    for (const slot of GearSlots) {
-      const it = hero.equip[slot];
-      box(ctx, sx, sy, 220, 30, 10, "rgba(20,25,45,0.55)");
-      text(ctx, slot.toUpperCase(), sx + 10, sy + 20, "#9aa6d8", 12, "left");
+    let row = 0;
+    for (const s of slots) {
+      const yy = slotY + row * 56;
+      row++;
+
+      ctx.globalAlpha = 0.7;
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      roundRect(ctx, slotX, yy, 320, 46, 12);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      ctx.fillStyle = "#d7e0ff";
+      ctx.fillText(s.toUpperCase(), slotX + 12, yy + 28);
+
+      const it = hero.equip[s];
       if (it) {
-        text(ctx, it.name, sx + 80, sy + 20, rarityColor(it.rarity), 12, "left");
+        ctx.fillStyle = rarityColor(it.rarity);
+        ctx.fillText(it.name, slotX + 110, yy + 28);
       } else {
-        text(ctx, "(empty)", sx + 80, sy + 20, "rgba(215,224,255,0.55)", 12, "left");
+        ctx.globalAlpha = 0.6;
+        ctx.fillStyle = "#d7e0ff";
+        ctx.fillText("(empty)", slotX + 110, yy + 28);
+        ctx.globalAlpha = 1;
       }
-      sy += 38;
     }
 
-    text(ctx, "Tip: Pick up gear by touching drops.", x + ww / 2, y + hh - 18, "rgba(215,224,255,0.7)", 12, "center");
+    // inventory preview
+    const invX = x + 360;
+    const invY = y + 100;
+    ctx.fillStyle = "#aab6d6";
+    ctx.fillText("Inventory (auto-equip if slot empty):", invX, invY - 10);
+
+    const list = hero.inventory.slice(-10).reverse();
+    for (let i = 0; i < list.length; i++) {
+      const it = list[i];
+      const yy = invY + i * 30;
+
+      ctx.globalAlpha = 0.65;
+      ctx.fillStyle = "rgba(0,0,0,0.30)";
+      roundRect(ctx, invX, yy, boxW - (invX - x) - 18, 24, 10);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      ctx.fillStyle = it.kind === "gear" ? rarityColor(it.rarity) : "#ffd28a";
+      const label = it.kind === "gear" ? `${it.name} [${it.slot}]` : `Gold x${it.amt}`;
+      ctx.fillText(label, invX + 10, yy + 16);
+    }
   }
 
   drawSkills(ctx, game) {
-    const W = ctx.canvas.width, H = ctx.canvas.height;
-    const ww = 520, hh = 320;
-    const x = W / 2 - ww / 2, y = H / 2 - hh / 2;
+    const W = game.canvas.width, H = game.canvas.height;
+    const boxW = Math.min(720, W - 36);
+    const boxH = Math.min(480, H - 36);
+    const x = (W - boxW) / 2;
+    const y = (H - boxH) / 2;
 
-    box(ctx, x, y, ww, hh, 14, "rgba(0,0,0,0.62)");
-    text(ctx, "Skills (K to close, ESC closes)", x + ww / 2, y + 28, "#d7e0ff", 14, "center");
+    const hero = game.hero;
 
-    const sx = x + 24, sy = y + 60;
-    text(ctx, "Fireball", sx, sy, "#ffd28a", 16, "left");
-    text(ctx, "A = cast toward mouse (or last move dir)", sx, sy + 24, "rgba(215,224,255,0.8)", 12, "left");
-    text(ctx, "This is a scaffold for a larger skill XP system.", sx, sy + 46, "rgba(215,224,255,0.6)", 12, "left");
+    ctx.globalAlpha = 0.92;
+    ctx.fillStyle = "rgba(8,12,26,0.92)";
+    roundRect(ctx, x, y, boxW, boxH, 18);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    ctx.fillStyle = "#d7e0ff";
+    ctx.font = "16px system-ui, sans-serif";
+    ctx.fillText("Skills (K to close)", x + 18, y + 28);
+
+    ctx.font = "13px system-ui, sans-serif";
+
+    for (let i = 0; i < hero.skills.length; i++) {
+      const s = hero.skills[i];
+      const yy = y + 60 + i * 92;
+
+      ctx.globalAlpha = 0.7;
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      roundRect(ctx, x + 18, yy, boxW - 36, 78, 14);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      ctx.fillStyle = "#ffd28a";
+      ctx.fillText(`${s.name} (key: ${s.key.toUpperCase()})`, x + 34, yy + 24);
+
+      ctx.fillStyle = "#d7e0ff";
+      ctx.fillText(`Level: ${s.level}   XP: ${s.xp}/${s.nextXp}   Mana: ${s.mana}   CD: ${s.cd.toFixed(2)}s`, x + 34, yy + 46);
+
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.fillRect(x + 34, yy + 56, 260, 10);
+      ctx.fillStyle = "rgba(255,210,138,0.95)";
+      ctx.fillRect(x + 34, yy + 56, 260 * clamp(s.xp / s.nextXp, 0, 1), 10);
+      ctx.globalAlpha = 1;
+
+      ctx.globalAlpha = 0.75;
+      ctx.fillStyle = "#aab6d6";
+      ctx.fillText(s.desc, x + 320, yy + 46);
+      ctx.globalAlpha = 1;
+    }
   }
 }
 
-// ---------- helpers ----------
-function box(ctx, x, y, w, h, r, fill) {
-  ctx.fillStyle = fill;
-  roundRect(ctx, x, y, w, h, r);
-  ctx.fill();
-}
-
-function bar(ctx, x, y, w, h, t, col, label) {
-  t = Math.max(0, Math.min(1, t));
-  box(ctx, x, y, w, h, 10, "rgba(0,0,0,0.45)");
+function drawBar(ctx, x, y, w, h, p, col, label) {
+  p = clamp(p, 0, 1);
+  ctx.globalAlpha = 0.85;
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  ctx.fillRect(x, y, w, h);
   ctx.fillStyle = col;
-  roundRect(ctx, x + 2, y + 2, (w - 4) * t, h - 4, 8);
-  ctx.fill();
-  text(ctx, label, x + 10, y + h - 3, "rgba(215,224,255,0.85)", 11, "left");
-}
+  ctx.fillRect(x, y, w * p, h);
 
-function text(ctx, str, x, y, col, size = 14, align = "left") {
-  ctx.fillStyle = col;
-  ctx.font = `${size}px system-ui, sans-serif`;
-  ctx.textAlign = align;
-  ctx.textBaseline = "alphabetic";
-  ctx.fillText(str, x, y);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = "#d7e0ff";
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.fillText(label, x, y - 2);
 }
 
 function roundRect(ctx, x, y, w, h, r) {

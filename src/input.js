@@ -1,21 +1,23 @@
 // src/input.js
 export default class Input {
   constructor(canvas) {
-    this.keysDown = new Set();
-    this.keysPressed = new Set();
-    this.mouse = { x: 0, y: 0, down: false, clicked: false };
+    this.downKeys = new Set();
+    this.pressedKeys = new Set();
+
+    this.mouse = { x: 0, y: 0, down: false, pressed: false };
 
     window.addEventListener("keydown", (e) => {
       const k = e.key.toLowerCase();
-      if (!this.keysDown.has(k)) this.keysPressed.add(k);
-      this.keysDown.add(k);
+      if (!this.downKeys.has(k)) this.pressedKeys.add(k);
+      this.downKeys.add(k);
 
-      // prevent page scrolling with arrows / space
-      if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(e.key)) e.preventDefault();
-    }, { passive: false });
+      // prevent page scroll with arrows/space
+      if (["arrowup","arrowdown","arrowleft","arrowright"," "].includes(k)) e.preventDefault();
+    });
 
     window.addEventListener("keyup", (e) => {
-      this.keysDown.delete(e.key.toLowerCase());
+      const k = e.key.toLowerCase();
+      this.downKeys.delete(k);
     });
 
     canvas.addEventListener("mousemove", (e) => {
@@ -26,36 +28,19 @@ export default class Input {
 
     canvas.addEventListener("mousedown", () => {
       this.mouse.down = true;
-      this.mouse.clicked = true;
+      this.mouse.pressed = true;
     });
+
     window.addEventListener("mouseup", () => {
       this.mouse.down = false;
     });
   }
 
-  down(key) {
-    return this.keysDown.has(key.toLowerCase());
-  }
-
-  pressed(key) {
-    key = key.toLowerCase();
-    if (this.keysPressed.has(key)) {
-      this.keysPressed.delete(key);
-      return true;
-    }
-    return false;
-  }
-
-  consumeMouseClick() {
-    if (this.mouse.clicked) {
-      this.mouse.clicked = false;
-      return true;
-    }
-    return false;
-  }
+  down(k) { return this.downKeys.has(k.toLowerCase()); }
+  pressed(k) { return this.pressedKeys.has(k.toLowerCase()); }
 
   endFrame() {
-    this.keysPressed.clear();
-    this.mouse.clicked = false;
+    this.pressedKeys.clear();
+    this.mouse.pressed = false;
   }
 }

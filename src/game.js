@@ -20,9 +20,8 @@ export default class Game {
     this.projectiles = [];
     this.loot = [];
 
-    this.hint = "";
-
     this.cam = { x: 0, y: 0 };
+    this.hint = "";
 
     this.resize();
     window.addEventListener("resize", () => this.resize());
@@ -33,9 +32,9 @@ export default class Game {
     this._mouseWorld = { x: this.hero.x, y: this.hero.y };
     this._mouseMoved = false;
 
-    this.spawnTimer = 0;
+    this.spawnTimer = 0.0;
 
-    // load save (optional)
+    // Load save
     const s = loadGame();
     if (s && s.hero) {
       this.hero.x = s.hero.x ?? this.hero.x;
@@ -46,9 +45,11 @@ export default class Game {
       this.hero.gold = s.hero.gold ?? this.hero.gold;
       this.hero.hp = s.hero.hp ?? this.hero.hp;
       this.hero.mana = s.hero.mana ?? this.hero.mana;
+      // keep sailing off on load
+      this.hero.state.sailing = false;
     }
 
-    // safety: if save placed you in ocean, snap to spawn
+    // Safety: never start in ocean
     if (this.world.terrainAt(this.hero.x, this.hero.y).ocean) {
       this.hero.x = this.world.spawn.x;
       this.hero.y = this.world.spawn.y;
@@ -61,47 +62,46 @@ export default class Game {
     this.canvas.height = Math.floor(window.innerHeight * dpr);
     this.ctx.imageSmoothingEnabled = true;
 
-    // IMPORTANT: keep world viewport size in sync
-    if (this.world && this.world.setViewSize) {
+    if (this.world?.setViewSize) {
       this.world.setViewSize(this.canvas.width, this.canvas.height);
     }
   }
 
   update(dt) {
-    // toggles
+    // --- INPUT / MENUS ---
     if (this.input.pressed("escape")) this.ui.closeAll();
     if (this.input.pressed("m")) this.ui.toggle("map");
     if (this.input.pressed("k")) this.ui.toggle("skills");
     if (this.input.pressed("i")) this.ui.toggle("stats");
+
+    // God mode toggle
     if (this.input.pressed("g")) {
       this.hero.state.invulnerable = !this.hero.state.invulnerable;
       this.ui.setMsg(`God mode: ${this.hero.state.invulnerable ? "ON" : "OFF"}`);
     }
 
-    // mouse -> world coords
+    // Mouse -> world coords
     this._mouseWorld.x = this.cam.x + this.input.mouse.x;
     this._mouseWorld.y = this.cam.y + this.input.mouse.y;
-
     if (dist2(this._mouseWorld.x, this._mouseWorld.y, this.hero.x, this.hero.y) > 25) {
       this._mouseMoved = true;
     }
 
     const uiBlocking = this.ui.open.map || this.ui.open.stats || this.ui.open.skills;
 
+    // --- MOVEMENT ---
     if (!uiBlocking) {
-      // movement
       let mx = 0, my = 0;
       if (this.input.down("arrowleft")) mx -= 1;
       if (this.input.down("arrowright")) mx += 1;
       if (this.input.down("arrowup")) my -= 1;
       if (this.input.down("arrowdown")) my += 1;
 
-      const baseSpd = this.hero.state.sailing ? 190 : 145;
+      const baseSpd = this.hero.state.sailing ? 220 : 155;
 
       if (mx !== 0 || my !== 0) {
         const n = norm(mx, my);
-        mx = n.x;
-        my = n.y;
+        mx = n.x; my = n.y;
 
         this.hero.lastMove.x = mx;
         this.hero.lastMove.y = my;
@@ -112,7 +112,7 @@ export default class Game {
         this.hero.y = body.y;
       }
 
-      // sailing toggle only at dock
+      // Sailing toggle ONLY at dock
       if (this.input.pressed("b")) {
         const can = this.world.isNearDock(this.hero.x, this.hero.y);
         if (can) {
@@ -123,16 +123,16 @@ export default class Game {
         }
       }
 
-      // cast (A)
+      // Skill casting: A = Fireball
       if (this.input.pressed("a")) {
-        this.castFireball();
+        this.castSkill("fireball");
       }
     }
 
-    // update hero
+    // Update hero
     this.hero.update(dt);
 
-    // pickups
+    // Loot pickups
     for (let i = this.loot.length - 1; i >= 0; i--) {
       const L = this.loot[i];
       L.update(dt);
@@ -142,48 +142,52 @@ export default class Game {
       }
     }
 
-    // enemies
+    // Enemies
     for (const e of this.enemies) e.update(dt, this.hero, this.world);
 
-    // projectiles
+    // Projectiles
     for (const p of this.projectiles) p.update(dt, this.world, this.enemies);
     this.projectiles = this.projectiles.filter(p => p.alive);
 
-    // enemy deaths -> drops
+    // Enemy deaths -> loot + XP
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const e = this.enemies[i];
       if (!e.alive) {
-        this.hero.giveXP(e.xpValue());
-        this.ui.setMsg(`+${e.xpValue()} XP`);
+        const xp = e.xpValue();
+        this.hero.giveXP(xp);
+        this.ui.setMsg(`+${xp} XP`);
         this.dropLoot(e.x, e.y, e.tier);
         this.enemies.splice(i, 1);
       }
     }
 
-    // spawns
+    // Spawning
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0) {
-      this.spawnTimer = 1.2;
+      this.spawnTimer = 1.15;
       this.spawnEnemies();
     }
 
-    // camera clamp (make sure it can't go NaN)
+    // Camera
     const maxCamX = Math.max(0, this.world.width - this.canvas.width);
     const maxCamY = Math.max(0, this.world.height - this.canvas.height);
-
     this.cam.x = clamp(this.hero.x - this.canvas.width / 2, 0, maxCamX);
     this.cam.y = clamp(this.hero.y - this.canvas.height / 2, 0, maxCamY);
 
-    // hints
+    // Hints
     this.hint = "";
     if (this.world.isNearDock(this.hero.x, this.hero.y)) {
       this.hint = "Dock: press B to toggle sailing";
+    } else {
+      // show subtle hint if near water edge
+      const T = this.world.terrainAt(this.hero.x + 180, this.hero.y);
+      if (T.ocean && !this.hero.state.sailing) this.hint = "Find a dock to sail to islands.";
     }
 
-    // UI
+    // UI update
     this.ui.update(dt);
 
-    // periodic save
+    // Save periodically
     this._saveT = (this._saveT ?? 0) - dt;
     if (this._saveT <= 0) {
       this._saveT = 2.0;
@@ -202,25 +206,29 @@ export default class Game {
     this.input.endFrame();
   }
 
-  castFireball() {
-    const st = this.hero.getStats();
-    const manaCost = 10;
+  castSkill(id) {
+    const s = this.hero.skills.find(k => k.id === id);
+    if (!s) return;
 
-    if (this.hero.mana < manaCost) {
+    if (s.cdT > 0) return;
+
+    const st = this.hero.getStats();
+    if (this.hero.mana < s.mana) {
       this.ui.setMsg("Not enough mana.");
       return;
     }
-    this.hero.mana -= manaCost;
 
+    this.hero.mana -= s.mana;
+
+    // direction: mouse if moved, else last movement
     let dir;
-    if (this._mouseMoved) {
-      dir = norm(this._mouseWorld.x - this.hero.x, this._mouseWorld.y - this.hero.y);
-    } else {
-      dir = norm(this.hero.lastMove.x, this.hero.lastMove.y);
-    }
+    if (this._mouseMoved) dir = norm(this._mouseWorld.x - this.hero.x, this._mouseWorld.y - this.hero.y);
+    else dir = norm(this.hero.lastMove.x, this.hero.lastMove.y);
 
-    const spd = 520;
-    const dmg = st.dmg;
+    // v28 scaling: skill level improves damage + speed slightly
+    const lvl = s.level;
+    const spd = 520 + lvl * 18;
+    const dmg = Math.round((st.dmg * 0.85 + 10) * (1 + lvl * 0.08));
 
     const p = new Projectile(
       this.hero.x + dir.x * 18,
@@ -228,12 +236,18 @@ export default class Game {
       dir.x * spd,
       dir.y * spd,
       dmg,
-      1.05
+      0.95 + lvl * 0.03,
+      lvl
     );
     this.projectiles.push(p);
 
-    this.ui.skillName = "Fireball";
-    this.ui.skillPulse = 0.24;
+    s.cdT = Math.max(0.14, s.cd - lvl * 0.02);
+
+    // skill XP per successful cast attempt
+    this.hero.skillUse(id);
+
+    this.ui.skillName = `${s.name} Lv.${s.level}`;
+    this.ui.skillPulse = 0.26;
   }
 
   spawnEnemies() {
@@ -261,10 +275,10 @@ export default class Game {
     const gold = 2 + Math.round(tier * (2 + this.rng.float() * 3));
     this.loot.push(new Loot(x + 12, y + 6, { kind: "gold", amt: gold }));
 
-    if (this.rng.float() < 0.35) {
+    if (this.rng.float() < 0.40) {
       const rarity = this.rollRarity(tier);
       const slot = this.rng.pick(GearSlots);
-      const gear = makeGear(this.rng, slot, rarity);
+      const gear = makeGear(this.rng, slot, rarity, tier);
       this.loot.push(new Loot(x - 10, y - 8, gear));
     }
   }
@@ -285,8 +299,10 @@ export default class Game {
       return;
     }
 
+    // gear
     this.hero.inventory.push(item);
 
+    // auto-equip if empty slot
     if (!this.hero.equip[item.slot]) {
       this.hero.equip[item.slot] = item;
       this.ui.setMsg(`Equipped: ${item.name}`);
@@ -301,9 +317,11 @@ export default class Game {
   draw(t) {
     const ctx = this.ctx;
 
-    ctx.fillStyle = "#0b1020";
+    // screen clear
+    ctx.fillStyle = "#070a14";
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
+    // world
     ctx.save();
     ctx.translate(-this.cam.x, -this.cam.y);
 
@@ -314,6 +332,7 @@ export default class Game {
       h: this.canvas.height,
     });
 
+    // entities
     for (const L of this.loot) L.draw(ctx, t);
     for (const e of this.enemies) e.draw(ctx, t);
     for (const p of this.projectiles) p.draw(ctx, t);
@@ -321,10 +340,12 @@ export default class Game {
 
     ctx.restore();
 
+    // UI
     this.ui.draw(ctx, this);
 
+    // death overlay
     if (this.hero.hp <= 0) {
-      ctx.globalAlpha = 0.7;
+      ctx.globalAlpha = 0.72;
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
       ctx.globalAlpha = 1;
@@ -335,6 +356,7 @@ export default class Game {
       ctx.font = "14px system-ui, sans-serif";
       ctx.fillStyle = "#d7e0ff";
       ctx.fillText("Refresh to respawn (saving is on)", this.canvas.width / 2, this.canvas.height / 2 + 28);
+      ctx.textAlign = "left";
     }
   }
 }
