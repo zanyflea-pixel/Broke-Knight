@@ -1,10 +1,13 @@
 // src/game.js
-// v35 SAFE RESET CONFIRM + FAST TRAVEL + INVENTORY HOTKEY EQUIP (FULL FILE)
+// v36 DEATH + RESPAWN PASS (FULL FILE)
 // Adds:
 // - map fast travel with awakened waystones
 // - inventory quick-equip on 1-9 / 0 while inventory is open
 // - safe swap: old equipped item returns to bag
 // - SAFE hard reset / new game from Options menu with Delete twice
+// - real death / respawn flow with Enter to respawn
+// - respawn at latest awakened waystone or world spawn
+// - death overlay + small gold penalty
 // - keeps aim, spells, camps, loot, save/load, and progression systems intact
 
 import World from "./world.js";
@@ -28,7 +31,7 @@ export default class Game {
 
     this.input = new Input(window);
     this.ui = new UI(canvas);
-    this.save = new Save("broke-knight-save-v35");
+    this.save = new Save("broke-knight-save-v36");
 
     this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
     this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
@@ -87,6 +90,9 @@ export default class Game {
     this._spellMsgCooldown = 0;
     this._resetQueued = false;
     this._resetConfirmT = 0;
+
+    this._deathHandled = false;
+    this._respawnFlashT = 0;
 
     this.aim = { x: 1, y: 0 };
 
@@ -157,6 +163,7 @@ export default class Game {
       if (n.x || n.y) this.aim = { x: n.x, y: n.y };
     }
 
+    this.hero.alive = !this.hero.dead;
     this._levelMsgShown = this.hero.level || 1;
   }
 
@@ -380,6 +387,12 @@ export default class Game {
     }
   }
 
+  _tickRespawnFlash(dt) {
+    if (this._respawnFlashT > 0) {
+      this._respawnFlashT = Math.max(0, this._respawnFlashT - dt);
+    }
+  }
+
   _canCastSpell(key) {
     const def = this.spells[key];
     if (!def) return false;
@@ -595,6 +608,85 @@ export default class Game {
         const bi = Number.isFinite(b?.id) ? b.id : 0;
         return ai - bi;
       });
+  }
+
+  _getRespawnPoint() {
+    const ways = this._getDiscoveredWaystones();
+    if (ways.length) {
+      const w = ways[ways.length - 1];
+      return { x: w.x, y: w.y + 42, label: "waystone" };
+    }
+
+    return {
+      x: this.world?.spawn?.x ?? 0,
+      y: this.world?.spawn?.y ?? 0,
+      label: "spawn",
+    };
+  }
+
+  _handleHeroDeath() {
+    if (!this.hero.dead) {
+      this._deathHandled = false;
+      return;
+    }
+
+    if (this._deathHandled) return;
+    this._deathHandled = true;
+
+    this.menu.open = null;
+    this.ui?.closeAll?.();
+
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+    this.hero.state.sailing = false;
+    this.hero.state.dashT = 0;
+
+    const lostGold = Math.min(this.hero.gold | 0, Math.max(5, Math.floor((this.hero.gold || 0) * 0.2)));
+    this.hero.gold = Math.max(0, (this.hero.gold || 0) - lostGold);
+
+    this._msg(
+      lostGold > 0
+        ? `You were defeated. Lost ${lostGold} gold. Press Enter to respawn.`
+        : "You were defeated. Press Enter to respawn.",
+      3.2
+    );
+
+    this._shake(0.18, 6);
+  }
+
+  _respawnHero() {
+    const p = this._getRespawnPoint();
+    const st = this.hero.getStats?.() || { maxHp: 100, maxMana: 60 };
+
+    this.hero.x = p.x;
+    this.hero.y = p.y;
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+    this.hero.hp = Math.max(1, Math.round(st.maxHp * 0.7));
+    this.hero.mana = Math.round(st.maxMana * 0.7);
+    this.hero.alive = true;
+    this.hero.dead = false;
+    this.hero.state.sailing = false;
+    this.hero.state.dashT = 0;
+    this.hero.state.hurtT = 0;
+    this.hero.lastMove = { x: 1, y: 0 };
+
+    this.projectiles = [];
+    this._respawnFlashT = 0.45;
+    this._deathHandled = false;
+
+    this._msg(
+      p.label === "waystone" ? "Respawned at awakened waystone." : "Respawned at world spawn.",
+      2.4
+    );
+    this._shake(0.10, 4);
+  }
+
+  _handleDeathInput() {
+    if (!this.hero.dead) return;
+    if (this.input.wasPressed("Enter")) {
+      this._respawnHero();
+    }
   }
 
   _teleportToWaystone(index) {
@@ -1129,13 +1221,24 @@ export default class Game {
 
     this._tickSpellCooldowns(dt);
     this._tickResetConfirm(dt);
+    this._tickRespawnFlash(dt);
+
+    this._handleHeroDeath();
 
     this._handleMenus();
     this._handleFastTravelInput();
     this._handleInventoryHotkeys();
     this._handleResetHotkey();
+    this._handleDeathInput();
 
     this.world?.update?.(dt, this.hero);
+
+    if (this.hero.dead) {
+      this._updateCamera(dt);
+      this.ui?.update?.(dt, this);
+      this.input.endFrame();
+      return;
+    }
 
     const blockMove =
       this.menu.open === "inventory" ||
@@ -1229,6 +1332,29 @@ export default class Game {
     cam.zoom = lerp(cam.zoom, 1.0, 1 - Math.pow(0.001, dt));
   }
 
+  _drawDeathOverlay(ctx) {
+    ctx.save();
+
+    ctx.fillStyle = "rgba(0,0,0,0.52)";
+    ctx.fillRect(0, 0, this.w, this.h);
+
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.font = "bold 34px system-ui, Arial";
+    ctx.textAlign = "center";
+    ctx.fillText("YOU WERE DEFEATED", this.w * 0.5, this.h * 0.5 - 24);
+
+    ctx.font = "16px system-ui, Arial";
+    ctx.fillStyle = "rgba(235,235,240,0.92)";
+    ctx.fillText("Press Enter to respawn", this.w * 0.5, this.h * 0.5 + 10);
+
+    ctx.font = "13px system-ui, Arial";
+    ctx.fillStyle = "rgba(255,220,180,0.86)";
+    ctx.fillText("You respawn at your latest awakened waystone.", this.w * 0.5, this.h * 0.5 + 34);
+
+    ctx.textAlign = "left";
+    ctx.restore();
+  }
+
   draw() {
     const ctx = this.ctx;
     if (!ctx) return;
@@ -1279,5 +1405,17 @@ export default class Game {
     ctx.restore();
 
     this.ui?.draw?.(ctx, this);
+
+    if (this._respawnFlashT > 0) {
+      ctx.save();
+      const a = this._respawnFlashT / 0.45;
+      ctx.fillStyle = `rgba(255,255,255,${0.20 * a})`;
+      ctx.fillRect(0, 0, this.w, this.h);
+      ctx.restore();
+    }
+
+    if (this.hero.dead) {
+      this._drawDeathOverlay(ctx);
+    }
   }
 }

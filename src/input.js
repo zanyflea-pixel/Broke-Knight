@@ -1,33 +1,22 @@
 // src/input.js
-// v33 INPUT NORMALIZATION + DELETE/NUMPAD PASS (FULL FILE)
+// v33 INPUT NORMALIZATION + DELETE / NUMPAD PASS (FULL FILE)
 // Goals:
-// ✅ Fast and simple
-// ✅ Consistent key handling for game.js
-// ✅ Supports both e.key and e.code lookups
-// ✅ Prevents stuck key states on window blur
-// ✅ Normalizes Delete / Backspace / Enter / Tab
-// ✅ Makes 0-9 hotkeys work from BOTH top row and numpad
-// ✅ Keeps API compatible with current game.js:
-//    - new Input(canvas)
-//    - isDown(key)
-//    - wasPressed(key)
-//    - endFrame()
+// - keep current game.js compatibility
+// - normalize Delete / Backspace / Enter / Tab
+// - make 0-9 hotkeys work from BOTH top row and numpad
+// - prevent stuck key states on blur
+// - preserve wasPressed / isDown API
 
 export default class Input {
   constructor(target = window) {
     this.target = target || window;
 
-    // held keys
     this.down = new Set();
-
-    // pressed this frame
     this.pressed = new Set();
 
-    // bind once
     this._onKeyDown = (e) => {
       const variants = this._variants(e);
 
-      // mark newly pressed
       let alreadyDown = false;
       for (const v of variants) {
         if (this.down.has(v)) {
@@ -42,7 +31,6 @@ export default class Input {
 
       for (const v of variants) this.down.add(v);
 
-      // stop arrow keys / space / tab from affecting the page
       if (
         e.key === "ArrowUp" ||
         e.key === "ArrowDown" ||
@@ -66,8 +54,8 @@ export default class Input {
       this.pressed.clear();
     };
 
-    window.addEventListener("keydown", this._onKeyDown, { passive: false });
-    window.addEventListener("keyup", this._onKeyUp);
+    this.target.addEventListener("keydown", this._onKeyDown, { passive: false });
+    this.target.addEventListener("keyup", this._onKeyUp);
     window.addEventListener("blur", this._onBlur);
   }
 
@@ -89,7 +77,7 @@ export default class Input {
       out.add(String(code).toUpperCase());
     }
 
-    // normalize arrows
+    // arrows
     if (key === "ArrowLeft" || key === "Left") {
       out.add("ArrowLeft");
       out.add("arrowleft");
@@ -115,7 +103,7 @@ export default class Input {
       out.add("down");
     }
 
-    // normalize escape
+    // escape
     if (key === "Escape" || key === "Esc") {
       out.add("Escape");
       out.add("escape");
@@ -123,7 +111,7 @@ export default class Input {
       out.add("esc");
     }
 
-    // normalize delete
+    // delete
     if (key === "Delete" || code === "Delete" || code === "Del") {
       out.add("Delete");
       out.add("delete");
@@ -131,13 +119,13 @@ export default class Input {
       out.add("del");
     }
 
-    // normalize backspace
+    // backspace
     if (key === "Backspace" || code === "Backspace") {
       out.add("Backspace");
       out.add("backspace");
     }
 
-    // normalize enter
+    // enter
     if (key === "Enter" || code === "Enter" || code === "NumpadEnter") {
       out.add("Enter");
       out.add("enter");
@@ -145,19 +133,21 @@ export default class Input {
       out.add("numpadenter");
     }
 
-    // normalize tab
+    // tab
     if (key === "Tab" || code === "Tab") {
       out.add("Tab");
       out.add("tab");
     }
 
-    // normalize letters/digits into KeyX / DigitN forms too
+    // letters / top-row digits
     if (typeof key === "string" && key.length === 1) {
       const ch = key.toUpperCase();
+
       if (ch >= "A" && ch <= "Z") {
         out.add("Key" + ch);
         out.add(("Key" + ch).toLowerCase());
       }
+
       if (ch >= "0" && ch <= "9") {
         out.add("Digit" + ch);
         out.add(("Digit" + ch).toLowerCase());
@@ -165,7 +155,7 @@ export default class Input {
       }
     }
 
-    // normalize numpad digits to regular digit checks
+    // numpad digits -> regular digits
     if (typeof code === "string" && /^Numpad[0-9]$/.test(code)) {
       const n = code.slice("Numpad".length);
       out.add(n);
@@ -175,7 +165,24 @@ export default class Input {
       out.add(("Numpad" + n).toLowerCase());
     }
 
-    // normalize space
+    // numpad operators / extras
+    if (code === "NumpadAdd") {
+      out.add("+");
+      out.add("Plus");
+      out.add("plus");
+    }
+    if (code === "NumpadSubtract") {
+      out.add("-");
+      out.add("Minus");
+      out.add("minus");
+    }
+    if (code === "NumpadDecimal") {
+      out.add(".");
+      out.add("Period");
+      out.add("period");
+    }
+
+    // space
     if (key === " " || key === "Spacebar" || code === "Space") {
       out.add(" ");
       out.add("Space");
@@ -213,8 +220,8 @@ export default class Input {
   }
 
   destroy() {
-    window.removeEventListener("keydown", this._onKeyDown);
-    window.removeEventListener("keyup", this._onKeyUp);
+    this.target.removeEventListener("keydown", this._onKeyDown);
+    this.target.removeEventListener("keyup", this._onKeyUp);
     window.removeEventListener("blur", this._onBlur);
     this.down.clear();
     this.pressed.clear();
