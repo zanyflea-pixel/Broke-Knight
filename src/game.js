@@ -1,15 +1,11 @@
 // src/game.js
-// v37 REWARDING EXPLORATION + CAMP REWARD PASS (FULL FILE)
+// v37 REWARDING EXPLORATION + SAFE PROGRESSION PASS (FULL FILE)
 // Adds:
-// - map fast travel with awakened waystones
-// - inventory quick-equip on 1-9 / 0 while inventory is open
-// - safe swap: old equipped item returns to bag
-// - SAFE hard reset / new game from Options menu with Delete twice
 // - immediate save on important progression changes
-// - waystones fully heal + refill mana
-// - new docks grant potion restocks
-// - first-time camp clears grant a reward burst at camp center
-// - occasional potion bonus on level up
+// - waystones fully restore HP + mana
+// - docks grant supply restocks
+// - first-time camp clears create a reward burst
+// - even-numbered level ups grant +1 HP potion
 // - keeps aim, spells, camps, loot, save/load, and progression systems intact
 
 import World from "./world.js";
@@ -257,40 +253,38 @@ export default class Game {
   }
 
   _fullRestoreHero() {
-    const st = this.hero.getStats?.() || { maxHp: this.hero.maxHp || 100, maxMana: this.hero.maxMana || 60 };
+    const st = this.hero.getStats?.() || {
+      maxHp: this.hero.maxHp || 100,
+      maxMana: this.hero.maxMana || 60,
+    };
     this.hero.hp = st.maxHp;
     this.hero.mana = st.maxMana;
   }
 
-  _grantDockRestock(firstDock = false) {
-    const hpGain = firstDock ? 2 : 1;
-    const manaGain = 1;
-    this.hero.potions.hp = (this.hero.potions.hp | 0) + hpGain;
-    this.hero.potions.mana = (this.hero.potions.mana | 0) + manaGain;
+  _grantDockSupplies(firstDock = false) {
+    this.hero.potions.hp = (this.hero.potions.hp | 0) + (firstDock ? 2 : 1);
+    this.hero.potions.mana = (this.hero.potions.mana | 0) + 1;
   }
 
   _spawnCampRewardBurst(camp) {
     if (!camp) return;
-    if (this.loot.length >= this.perf.maxLoot - 4) return;
+    if (this.loot.length >= this.perf.maxLoot - 5) return;
 
     const cx = camp.x;
     const cy = camp.y;
     const tier = Math.max(1, camp.tier | 0);
 
-    this.loot.push(new Loot(cx - 14, cy - 8, "gold", { amount: 10 + tier * 4 }));
-    this.loot.push(new Loot(cx + 14, cy - 4, "gold", { amount: 8 + tier * 3 }));
-
-    if (Math.random() < 0.85) {
-      this.loot.push(new Loot(cx - 8, cy + 10, "potion", {
-        potionType: Math.random() < 0.5 ? "hp" : "mana",
-        amount: 1,
-      }));
-    }
+    this.loot.push(new Loot(cx - 16, cy - 6, "gold", { amount: 10 + tier * 4 }));
+    this.loot.push(new Loot(cx + 16, cy - 2, "gold", { amount: 8 + tier * 3 }));
+    this.loot.push(new Loot(cx, cy + 14, "potion", {
+      potionType: Math.random() < 0.55 ? "hp" : "mana",
+      amount: 1,
+    }));
 
     const slotRoll = Math.random();
     const slot =
-      slotRoll < 0.28 ? "weapon" :
-      slotRoll < 0.50 ? "armor" :
+      slotRoll < 0.30 ? "weapon" :
+      slotRoll < 0.52 ? "armor" :
       slotRoll < 0.66 ? "helm" :
       slotRoll < 0.80 ? "boots" :
       slotRoll < 0.90 ? "ring" : "trinket";
@@ -302,7 +296,7 @@ export default class Game {
 
     const gearSeed = hash2(this.seed ^ 0x7788, (camp.id | 0) * 97 + tier * 11);
     const gear = makeGear(slot, Math.max(1, this.hero.level || 1), rarity, gearSeed);
-    this.loot.push(new Loot(cx + 2, cy + 16, "gear", { gear }));
+    this.loot.push(new Loot(cx + 4, cy + 18, "gear", { gear }));
 
     this._shake(0.10, 4.5);
   }
@@ -602,14 +596,11 @@ export default class Game {
         if (!st.clearedOnce) {
           st.clearedOnce = true;
           this.progress.clearedCamps.add(c.id);
-
           const xp = 8 + c.tier * 4;
           const gold = 12 + c.tier * 4;
           this._grantGold(gold);
           this._grantXP(xp);
-
           this._spawnCampRewardBurst(c);
-
           this._msg(`Camp cleared! Reward cache found. (+${xp} XP, +${gold} Gold)`, 3.2);
           this._saveSoon();
         } else {
@@ -832,16 +823,16 @@ export default class Game {
 
         if (firstDock) {
           this._grantGold(10);
-          this._grantDockRestock(true);
+          this._grantDockSupplies(true);
           this._msg(
             this.hero.state.sailing
-              ? "New dock found. Sailing: ON (+10 Gold, dock supplies gained)"
-              : "New dock found (+10 Gold, dock supplies gained)",
+              ? "New dock found. Sailing: ON (+10 Gold, supplies gained)"
+              : "New dock found (+10 Gold, supplies gained)",
             3
           );
         } else {
-          this._grantDockRestock(false);
-          this._msg(this.hero.state.sailing ? "Sailing: ON (+dock supplies)" : "Sailing: OFF (+dock supplies)");
+          this._grantDockSupplies(false);
+          this._msg(this.hero.state.sailing ? "Sailing: ON (+supplies)" : "Sailing: OFF (+supplies)");
         }
 
         this._questAddProgress("q_sail", 1);
