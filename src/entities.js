@@ -3,9 +3,10 @@
 // Next polish pass:
 // - preserve working hero vertical sword
 // - preserve working enemy variety
-// - better enemy idle polish and elite readability
-// - stronger projectile glow/trail feel
-// - clearer loot visuals
+// - stronger enemy role readability
+// - clearer elite visuals
+// - better projectile trail/glow
+// - clearer loot pickup visuals
 // - keep current game.js compatibility
 
 import { clamp, dist, norm, RNG, hash2 } from "./util.js";
@@ -1031,6 +1032,13 @@ export class Loot {
       ctx.stroke();
     } else {
       const col = rarityColor(this.data?.gear?.rarity || "common");
+      const glow = rarityGlow(this.data?.gear?.rarity || "common");
+
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(x, y, 9.5 + Math.sin(this.age * 6) * 0.6, 0, Math.PI * 2);
+      ctx.fill();
+
       ctx.fillStyle = col;
       ctx.save();
       ctx.translate(x, y);
@@ -1056,6 +1064,13 @@ function rarityColor(r) {
   if (r === "rare") return "rgba(120,190,255,0.98)";
   if (r === "uncommon") return "rgba(145,230,145,0.98)";
   return "rgba(220,220,220,0.96)";
+}
+
+function rarityGlow(r) {
+  if (r === "epic") return "rgba(180,100,255,0.16)";
+  if (r === "rare") return "rgba(90,170,255,0.15)";
+  if (r === "uncommon") return "rgba(110,220,120,0.14)";
+  return "rgba(220,220,220,0.10)";
 }
 
 function enemyPalette(lookType, elite, shift, flash) {
