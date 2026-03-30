@@ -1,9 +1,7 @@
 // src/entities.js
 // FULL FILE
-// Goal:
-// - keep current game.js compatibility
-// - make enemy kinds look VERY different
-// - make hero sword point clearly straight up / straight down
+// Polished enemy variety + preserved working hero vertical sword
+// Keeps current game.js compatibility
 
 import { clamp, dist, norm, RNG, hash2 } from "./util.js";
 
@@ -255,13 +253,11 @@ export class Hero {
     const facingDown = vertical && fy > 0;
     const side = fx >= 0 ? 1 : -1;
 
-    // shadow
     ctx.fillStyle = "rgba(0,0,0,0.18)";
     ctx.beginPath();
     ctx.ellipse(this.x, this.y + 11, 9, 4.5, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // cape
     ctx.fillStyle = hurt ? "rgba(185,44,44,0.96)" : "rgba(150,32,36,0.96)";
     ctx.beginPath();
     if (facingUp) {
@@ -283,7 +279,6 @@ export class Hero {
     ctx.closePath();
     ctx.fill();
 
-    // legs
     ctx.strokeStyle = "rgba(58,62,72,0.98)";
     ctx.lineWidth = 2.4;
     ctx.beginPath();
@@ -300,7 +295,6 @@ export class Hero {
     }
     ctx.stroke();
 
-    // torso
     ctx.fillStyle = hurt ? "rgba(228,228,235,1)" : "rgba(202,204,214,1)";
     roundedRectFill(ctx, this.x - 5.8, this.y - 2 + bob, 11.6, 12.8, 3);
 
@@ -310,7 +304,6 @@ export class Hero {
     ctx.fillStyle = "rgba(118,84,44,0.98)";
     ctx.fillRect(this.x - 5.2, this.y + 4.7 + bob, 10.4, 2.2);
 
-    // arms
     ctx.strokeStyle = "rgba(214,214,224,0.98)";
     ctx.lineWidth = 2.2;
     ctx.beginPath();
@@ -332,13 +325,11 @@ export class Hero {
     }
     ctx.stroke();
 
-    // head
     ctx.fillStyle = hurt ? "rgba(255,214,214,1)" : "rgba(242,214,182,1)";
     ctx.beginPath();
     ctx.arc(this.x, this.y - 7 + bob, 5.3, 0, Math.PI * 2);
     ctx.fill();
 
-    // hair
     ctx.fillStyle = "rgba(78,56,38,0.98)";
     if (facingUp) {
       ctx.beginPath();
@@ -350,7 +341,6 @@ export class Hero {
       ctx.fill();
     }
 
-    // face
     ctx.fillStyle = "rgba(28,28,28,0.98)";
     if (facingUp) {
       ctx.fillRect(this.x - 2.4, this.y - 8.2 + bob, 1.2, 1.2);
@@ -364,7 +354,6 @@ export class Hero {
       ctx.fillRect(this.x + 1.2 + side * 0.5, this.y - 7.8 + bob, 1.2, 1.2);
     }
 
-    // shield
     ctx.fillStyle = "rgba(108,122,148,0.96)";
     if (vertical) {
       roundedRectFill(ctx, this.x - 2.5, this.y + 1 + bob, 5, 6, 1.2);
@@ -372,7 +361,6 @@ export class Hero {
       roundedRectFill(ctx, this.x - 8.5, this.y + 1 + bob, 2.4, 5.4, 1.2);
     }
 
-    // sword: forced obvious vertical for up/down
     ctx.save();
     if (facingUp) {
       ctx.translate(this.x, this.y - 11 + bob);
@@ -519,10 +507,10 @@ export class Enemy {
     this.wanderT = 0;
     this.wanderDir = { x: 0, y: 0 };
 
-    const rr = new RNG(hash2(this.seed, this.kind.length, this.tier));
-    this.skinShift = rr.int(0, 3);
-    this.oneEye = rr.chance(0.25);
-    this.tail = rr.chance(0.4);
+    this.lookType = Math.abs(hash2((x * 10) | 0, (y * 10) | 0, this.seed)) % 4;
+    this.skinShift = Math.abs(hash2((x * 7) | 0, (y * 7) | 0, this.tier)) % 4;
+    this.oneEye = (Math.abs(hash2((x * 13) | 0, (y * 13) | 0, 17 + this.seed)) % 5) === 0;
+    this.tail = (Math.abs(hash2((x * 17) | 0, (y * 17) | 0, 31 + this.seed)) % 2) === 0;
   }
 
   update(dt, hero, world, game) {
@@ -634,8 +622,8 @@ export class Enemy {
 
     const flash = this.hitFlash > 0;
     const bob = Math.sin(this.animT) * 1.15;
-    const colors = enemyPalette(this.kind, this.elite, this.skinShift, flash);
-    const eye = this.kind === "caster" ? "rgba(160,230,255,1)" : "rgba(255,232,120,1)";
+    const colors = enemyPalette(this.lookType, this.elite, this.skinShift, flash);
+    const eye = this.lookType === 3 ? "rgba(160,230,255,1)" : "rgba(255,232,120,1)";
 
     ctx.fillStyle = "rgba(0,0,0,0.18)";
     ctx.beginPath();
@@ -651,21 +639,28 @@ export class Enemy {
       ctx.stroke();
     }
 
-    if (this.kind === "blob") {
-      // round slime
+    // extra accent to make differences clearer
+    if (this.lookType === 0) {
       ctx.fillStyle = colors.body;
       ctx.beginPath();
       ctx.ellipse(this.x, this.y + 2 + bob, 13, 9, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = colors.accent;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y + 2 + bob, 4.2, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.fillStyle = colors.head;
       ctx.beginPath();
       ctx.arc(this.x, this.y - 5 + bob, 5.5, 0, Math.PI * 2);
       ctx.fill();
-    } else if (this.kind === "brute") {
-      // big square brute
+    } else if (this.lookType === 1) {
       ctx.fillStyle = colors.body;
       ctx.fillRect(this.x - 10, this.y - 2 + bob, 20, 14);
+
+      ctx.fillStyle = colors.accent;
+      ctx.fillRect(this.x - 4, this.y + 1 + bob, 8, 4);
 
       ctx.fillStyle = colors.head;
       ctx.fillRect(this.x - 7.5, this.y - 11 + bob, 15, 8);
@@ -673,17 +668,24 @@ export class Enemy {
       ctx.fillStyle = colors.detail;
       ctx.fillRect(this.x - 12, this.y - 1 + bob, 3, 6);
       ctx.fillRect(this.x + 9, this.y - 1 + bob, 3, 6);
-
       ctx.fillRect(this.x - 8.5, this.y + 11 + bob, 3, 4);
       ctx.fillRect(this.x + 5.5, this.y + 11 + bob, 3, 4);
-    } else if (this.kind === "stalker") {
-      // diamond / lizard
+    } else if (this.lookType === 2) {
       ctx.fillStyle = colors.body;
       ctx.beginPath();
       ctx.moveTo(this.x, this.y - 12 + bob);
       ctx.lineTo(this.x + 11, this.y + 1 + bob);
       ctx.lineTo(this.x, this.y + 13 + bob);
       ctx.lineTo(this.x - 11, this.y + 1 + bob);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = colors.accent;
+      ctx.beginPath();
+      ctx.moveTo(this.x, this.y - 5 + bob);
+      ctx.lineTo(this.x + 4, this.y + 1 + bob);
+      ctx.lineTo(this.x, this.y + 7 + bob);
+      ctx.lineTo(this.x - 4, this.y + 1 + bob);
       ctx.closePath();
       ctx.fill();
 
@@ -695,7 +697,6 @@ export class Enemy {
       ctx.closePath();
       ctx.fill();
     } else {
-      // caster robe / hood
       ctx.fillStyle = colors.back;
       ctx.beginPath();
       ctx.moveTo(this.x - 9, this.y - 2 + bob);
@@ -707,6 +708,9 @@ export class Enemy {
 
       ctx.fillStyle = colors.body;
       ctx.fillRect(this.x - 7, this.y - 2 + bob, 14, 12);
+
+      ctx.fillStyle = colors.accent;
+      ctx.fillRect(this.x - 2, this.y + 1 + bob, 4, 7);
 
       ctx.fillStyle = colors.head;
       ctx.beginPath();
@@ -978,7 +982,7 @@ function rarityColor(r) {
   return "rgba(220,220,220,0.96)";
 }
 
-function enemyPalette(kind, elite, shift, flash) {
+function enemyPalette(lookType, elite, shift, flash) {
   if (flash) {
     return {
       back: "rgba(255,255,255,1)",
@@ -989,51 +993,18 @@ function enemyPalette(kind, elite, shift, flash) {
     };
   }
 
+  const palettes = [
+    { back: "rgba(112,20,20,0.98)", body: "rgba(178,42,42,1)", head: "rgba(150,36,36,1)", detail: "rgba(94,22,22,1)", accent: "rgba(212,76,70,0.95)" },
+    { back: "rgba(44,76,54,0.98)", body: "rgba(72,146,106,1)", head: "rgba(60,124,90,1)", detail: "rgba(26,58,40,1)", accent: "rgba(122,218,166,0.95)" },
+    { back: "rgba(68,42,88,0.98)", body: "rgba(108,78,162,1)", head: "rgba(92,66,142,1)", detail: "rgba(54,32,76,1)", accent: "rgba(156,130,220,0.95)" },
+    { back: "rgba(84,48,18,0.98)", body: "rgba(146,92,34,1)", head: "rgba(132,82,30,1)", detail: "rgba(68,34,14,1)", accent: "rgba(226,156,76,0.95)" },
+  ];
+
   if (elite) {
-    const sets = [
-      { back: "rgba(112,72,18,0.98)", body: "rgba(222,154,46,1)", head: "rgba(214,164,78,1)", detail: "rgba(120,72,18,1)", accent: "rgba(255,212,120,0.95)" },
-      { back: "rgba(116,52,18,0.98)", body: "rgba(205,128,52,1)", head: "rgba(216,152,78,1)", detail: "rgba(128,60,20,1)", accent: "rgba(255,225,110,0.95)" },
-      { back: "rgba(96,74,28,0.98)", body: "rgba(188,150,66,1)", head: "rgba(210,176,94,1)", detail: "rgba(112,82,26,1)", accent: "rgba(250,232,130,0.95)" },
-      { back: "rgba(90,64,22,0.98)", body: "rgba(170,118,44,1)", head: "rgba(190,148,72,1)", detail: "rgba(98,70,20,1)", accent: "rgba(255,238,150,0.95)" },
-    ];
-    return sets[shift % sets.length];
+    return { back: "rgba(112,72,18,0.98)", body: "rgba(222,154,46,1)", head: "rgba(214,164,78,1)", detail: "rgba(120,72,18,1)", accent: "rgba(255,212,120,0.95)" };
   }
 
-  const blobSets = [
-    { back: "rgba(112,20,20,0.98)", body: "rgba(178,42,42,1)", head: "rgba(150,36,36,1)", detail: "rgba(94,22,22,1)", accent: "rgba(212,76,70,0.95)" },
-    { back: "rgba(88,26,54,0.98)", body: "rgba(150,54,112,1)", head: "rgba(126,46,96,1)", detail: "rgba(76,20,54,1)", accent: "rgba(214,92,158,0.95)" },
-    { back: "rgba(68,42,88,0.98)", body: "rgba(108,78,162,1)", head: "rgba(92,66,142,1)", detail: "rgba(54,32,76,1)", accent: "rgba(156,130,220,0.95)" },
-    { back: "rgba(44,76,54,0.98)", body: "rgba(72,146,106,1)", head: "rgba(60,124,90,1)", detail: "rgba(26,58,40,1)", accent: "rgba(122,218,166,0.95)" },
-  ];
-
-  const stalkerSets = [
-    { back: "rgba(60,74,24,0.98)", body: "rgba(96,142,56,1)", head: "rgba(88,132,54,1)", detail: "rgba(44,58,18,1)", accent: "rgba(150,210,86,0.95)" },
-    { back: "rgba(50,70,48,0.98)", body: "rgba(78,126,98,1)", head: "rgba(72,114,90,1)", detail: "rgba(34,52,40,1)", accent: "rgba(126,200,152,0.95)" },
-    { back: "rgba(72,64,20,0.98)", body: "rgba(128,118,46,1)", head: "rgba(116,104,42,1)", detail: "rgba(54,48,18,1)", accent: "rgba(204,194,96,0.95)" },
-    { back: "rgba(44,70,68,0.98)", body: "rgba(60,132,128,1)", head: "rgba(54,116,112,1)", detail: "rgba(24,54,52,1)", accent: "rgba(118,226,220,0.95)" },
-  ];
-
-  const casterSets = [
-    { back: "rgba(42,54,108,0.98)", body: "rgba(72,104,188,1)", head: "rgba(68,96,166,1)", detail: "rgba(28,42,90,1)", accent: "rgba(138,188,255,0.95)" },
-    { back: "rgba(40,78,110,0.98)", body: "rgba(58,142,188,1)", head: "rgba(54,124,166,1)", detail: "rgba(24,60,84,1)", accent: "rgba(124,226,255,0.95)" },
-    { back: "rgba(58,42,112,0.98)", body: "rgba(112,78,188,1)", head: "rgba(98,70,164,1)", detail: "rgba(44,28,92,1)", accent: "rgba(176,142,255,0.95)" },
-    { back: "rgba(30,66,118,0.98)", body: "rgba(46,116,212,1)", head: "rgba(44,100,190,1)", detail: "rgba(20,48,94,1)", accent: "rgba(164,220,255,0.95)" },
-  ];
-
-  const bruteSets = [
-    { back: "rgba(92,32,20,0.98)", body: "rgba(160,66,42,1)", head: "rgba(142,58,38,1)", detail: "rgba(74,22,16,1)", accent: "rgba(214,108,74,0.95)" },
-    { back: "rgba(84,48,18,0.98)", body: "rgba(146,92,34,1)", head: "rgba(132,82,30,1)", detail: "rgba(68,34,14,1)", accent: "rgba(226,156,76,0.95)" },
-    { back: "rgba(76,30,42,0.98)", body: "rgba(138,58,84,1)", head: "rgba(122,50,76,1)", detail: "rgba(60,18,34,1)", accent: "rgba(220,112,154,0.95)" },
-    { back: "rgba(70,54,18,0.98)", body: "rgba(122,108,38,1)", head: "rgba(110,96,34,1)", detail: "rgba(56,44,14,1)", accent: "rgba(210,196,96,0.95)" },
-  ];
-
-  const sets =
-    kind === "caster" ? casterSets :
-    kind === "stalker" ? stalkerSets :
-    kind === "brute" ? bruteSets :
-    blobSets;
-
-  return sets[shift % sets.length];
+  return palettes[shift % palettes.length];
 }
 
 function roundedRectPath(path, x, y, w, h, r) {
