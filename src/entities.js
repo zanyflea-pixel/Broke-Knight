@@ -1,9 +1,10 @@
 // src/entities.js
 // FULL FILE
-// Next polish pass:
+// Next logical polish pass:
 // - preserve working hero vertical sword
-// - improve enemy readability and elite visuals
-// - improve loot visuals
+// - preserve working enemy variety
+// - stronger enemy readability and polish
+// - improved projectile glow and loot visuals
 // - keep current game.js compatibility
 
 import { clamp, dist, norm, RNG, hash2 } from "./util.js";
@@ -515,6 +516,7 @@ export class Enemy {
     this.oneEye = (Math.abs(hash2((x * 13) | 0, (y * 13) | 0, 17 + this.seed)) % 5) === 0;
     this.tail = (Math.abs(hash2((x * 17) | 0, (y * 17) | 0, 31 + this.seed)) % 2) === 0;
     this.floatSeed = (Math.abs(hash2((x * 19) | 0, (y * 19) | 0, this.seed + 51)) % 1000) / 1000;
+    this.pulse = 0;
   }
 
   update(dt, hero, world, game) {
@@ -523,6 +525,7 @@ export class Enemy {
     this.animT += dt * (5.7 + this.floatSeed * 2.2);
     this.hitFlash = Math.max(0, this.hitFlash - dt * 6);
     this.attackCd = Math.max(0, this.attackCd - dt);
+    this.pulse = Math.max(0, this.pulse - dt * 4);
 
     const dx = hero.x - this.x;
     const dy = hero.y - this.y;
@@ -614,6 +617,7 @@ export class Enemy {
   takeDamage(amount = 0) {
     this.hp -= Math.max(1, amount | 0);
     this.hitFlash = 1;
+    this.pulse = 1;
 
     if (this.hp <= 0) {
       this.alive = false;
@@ -626,7 +630,7 @@ export class Enemy {
 
     const flash = this.hitFlash > 0;
     const bob = Math.sin(this.animT) * 1.15;
-    const squash = 1 + Math.sin(this.animT * 0.85) * 0.04;
+    const squash = 1 + Math.sin(this.animT * 0.85) * 0.04 + this.pulse * 0.08;
     const colors = enemyPalette(this.lookType, this.elite, this.skinShift, flash);
     const eye = this.lookType === 3 ? "rgba(160,230,255,1)" : "rgba(255,232,120,1)";
 
@@ -733,7 +737,6 @@ export class Enemy {
       ctx.arc(this.x, this.y + 2 + bob, 9, 0, Math.PI * 2);
       ctx.stroke();
 
-      // staff
       ctx.strokeStyle = colors.detail;
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -867,7 +870,7 @@ export class Projectile {
     if (this.meta?.type === "orb") {
       ctx.fillStyle = "rgba(190,160,255,0.20)";
       ctx.beginPath();
-      ctx.arc(this.x, this.y, r * 2.2 * pulse, 0, Math.PI * 2);
+      ctx.arc(this.x, this.y, r * 2.4 * pulse, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.fillStyle = color;
@@ -887,6 +890,11 @@ export class Projectile {
     const ang = Math.atan2(this.vy, this.vx || 0.0001);
     ctx.translate(this.x, this.y);
     ctx.rotate(ang);
+
+    ctx.fillStyle = "rgba(255,255,255,0.10)";
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 3.2, r * 1.8, 0, 0, Math.PI * 2);
+    ctx.fill();
 
     ctx.fillStyle = "rgba(255,255,255,0.18)";
     ctx.beginPath();
@@ -989,6 +997,9 @@ export class Loot {
       ctx.beginPath();
       ctx.arc(x, y, 4.1 * pulse, 0, Math.PI * 2);
       ctx.stroke();
+
+      ctx.fillStyle = "rgba(255,255,255,0.55)";
+      ctx.fillRect(x - 1.1, y - 1.1, 2.2, 2.2);
     } else if (this.kind === "potion") {
       const potionType = this.data?.potionType || "hp";
       ctx.fillStyle = potionType === "mana"
@@ -1001,6 +1012,11 @@ export class Loot {
       ctx.fillStyle = "rgba(255,255,255,0.65)";
       ctx.fillRect(x - 2, y - 7, 4, 2);
       ctx.fillRect(x - 1.2, y - 9, 2.4, 2);
+
+      ctx.strokeStyle = "rgba(255,255,255,0.35)";
+      ctx.beginPath();
+      ctx.arc(x - 1.4, y - 1.5, 1.2, 0, Math.PI * 2);
+      ctx.stroke();
     } else {
       const col = rarityColor(this.data?.gear?.rarity || "common");
       ctx.fillStyle = col;
@@ -1012,6 +1028,11 @@ export class Loot {
       ctx.lineWidth = 1;
       ctx.strokeRect(-5, -5, 10, 10);
       ctx.restore();
+
+      ctx.fillStyle = "rgba(255,255,255,0.6)";
+      ctx.beginPath();
+      ctx.arc(x, y, 1.5, 0, Math.PI * 2);
+      ctx.fill();
     }
 
     ctx.restore();
