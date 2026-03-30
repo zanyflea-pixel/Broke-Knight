@@ -1,11 +1,10 @@
 // src/game.js
-// v31 HARD AIM FIX PASS (FULL FILE)
-// Fixes:
-// - spell aim now reads LIVE arrow-key direction first
-// - straight up/down casting works reliably
-// - arrows remain the only movement keys
-// - Q/W/E/R remain spells
-// - mana regen / cooldowns / progression kept intact
+// v32 WAYSTONE FAST TRAVEL PASS (FULL FILE)
+// Adds:
+// - real waystone fast travel from the map menu
+// - press M to open map, then 1-9 to teleport to unlocked waystones
+// - blocks fast travel while sailing
+// - keeps existing combat, save, loot, and progression systems intact
 
 import World from "./world.js";
 import { clamp, lerp, dist2, norm, RNG, hash2 } from "./util.js";
@@ -365,15 +364,12 @@ export default class Game {
   }
 
   _currentAim() {
-    // 1) live arrows right now
     const live = this._liveArrowAim();
     if (live) return live;
 
-    // 2) saved explicit aim
     const saved = norm(this.aim.x || 0, this.aim.y || 0);
     if (saved.x || saved.y) return saved;
 
-    // 3) hero last move
     const lm = this.hero.lastMove || { x: 1, y: 0 };
     const fallback = norm(lm.x || 0, lm.y || 0);
     if (fallback.x || fallback.y) return fallback;
@@ -532,6 +528,60 @@ export default class Game {
         this._msg(`Enemy camp nearby (Tier ${nearest.tier}).`, 2.2);
       }
     }
+  }
+
+  _getDiscoveredWaystones() {
+    const all = Array.isArray(this.world?.waystones) ? this.world.waystones.slice() : [];
+    return all
+      .filter(w => this.progress?.discoveredWaystones?.has?.(w.id))
+      .sort((a, b) => {
+        const ai = Number.isFinite(a?.id) ? a.id : 0;
+        const bi = Number.isFinite(b?.id) ? b.id : 0;
+        return ai - bi;
+      });
+  }
+
+  _teleportToWaystone(index) {
+    const ways = this._getDiscoveredWaystones();
+
+    if (!ways.length) {
+      this._msg("No awakened waystones yet.", 2);
+      return;
+    }
+
+    if (this.hero.state?.sailing) {
+      this._msg("Cannot fast travel while sailing.", 2);
+      return;
+    }
+
+    const w = ways[index | 0];
+    if (!w) return;
+
+    this.hero.x = w.x;
+    this.hero.y = w.y + 42;
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+    this.hero.state.dashT = 0;
+
+    this.menu.open = null;
+    this.ui?.closeAll?.();
+
+    this._msg(`Fast traveled to Waystone ${index + 1}`, 2.2);
+    this._shake(0.12, 4);
+  }
+
+  _handleFastTravelInput() {
+    if (this.menu.open !== "map") return;
+
+    if (this.input.wasPressed("1")) this._teleportToWaystone(0);
+    else if (this.input.wasPressed("2")) this._teleportToWaystone(1);
+    else if (this.input.wasPressed("3")) this._teleportToWaystone(2);
+    else if (this.input.wasPressed("4")) this._teleportToWaystone(3);
+    else if (this.input.wasPressed("5")) this._teleportToWaystone(4);
+    else if (this.input.wasPressed("6")) this._teleportToWaystone(5);
+    else if (this.input.wasPressed("7")) this._teleportToWaystone(6);
+    else if (this.input.wasPressed("8")) this._teleportToWaystone(7);
+    else if (this.input.wasPressed("9")) this._teleportToWaystone(8);
   }
 
   _handleMenus() {
@@ -989,10 +1039,11 @@ export default class Game {
 
     this._tickSpellCooldowns(dt);
     this._handleMenus();
+    this._handleFastTravelInput();
 
     this.world?.update?.(dt, this.hero);
 
-    const blockMove = this.menu.open === "inventory" || this.menu.open === "options";
+    const blockMove = this.menu.open === "inventory" || this.menu.open === "options" || this.menu.open === "map";
     if (!blockMove) this._handleMovement(dt);
     else {
       this.hero.vx = 0;
