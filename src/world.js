@@ -1,789 +1,1113 @@
 // src/world.js
-// v30: restore docks + sailing support + keep improved visuals.
-// Water rules:
-// - Walking: land only (ocean + river are blocked)
-// - Sailing: water only (land blocked)
-// Dock-only boarding/disembark happens in game.js, using nearestDock/isNearDock.
-//
-// Public API used across game:
-// - terrainAt(x,y) -> { ocean, biome, height }
-// - biomeAt(x,y), biomeColor(biomeName)
-// - isOcean/isRiver/isWater/isLand
-// - canWalk/canSail
-// - nearestDock/isNearDock
-// - nearestWaystone
-// - projectileHitsSolid
-// - draw(ctx,t,view)
-// - drawMinimap(ctx,x,y,w,h,heroX,heroY)
+// v42 SAFE MINIMAP READABILITY PASS
+// Keeps the known-good blue water + shoreline + grass + rock + sand + POI baseline intact.
+// Adds better minimap readability without touching the safe water path.
 
-import { RNG, clamp, fbm, dist2, lerp, hash01 } from "./util.js";
+import { clamp, hash2, fbm, RNG } from "./util.js";
 
-/* ============================
-   Small helpers
-   ============================ */
-function rgb(r, g, b) { return `rgb(${r|0},${g|0},${b|0})`; }
+export default class World {
+  constructor(seed = 12345, opts = {}) {
+    this.seed = (seed | 0) || 12345;
 
-function parseColor(c) {
-  if (!c || typeof c !== "string") return { r: 0, g: 0, b: 0 };
-  if (c[0] === "#") {
-    const r = parseInt(c.slice(1, 3), 16);
-    const g = parseInt(c.slice(3, 5), 16);
-    const b = parseInt(c.slice(5, 7), 16);
-    return { r: Number.isFinite(r) ? r : 0, g: Number.isFinite(g) ? g : 0, b: Number.isFinite(b) ? b : 0 };
-  }
-  const m = c.match(/rgba?\(([^)]+)\)/i);
-  if (m) {
-    const parts = m[1].split(",").map(s => parseFloat(s.trim()));
-    const r = parts[0] ?? 0, g = parts[1] ?? 0, b = parts[2] ?? 0;
-    return { r: Number.isFinite(r) ? r : 0, g: Number.isFinite(g) ? g : 0, b: Number.isFinite(b) ? b : 0 };
-  }
-  return { r: 0, g: 0, b: 0 };
-}
+    this.tileSize = opts.tileSize || 24;
+    this.chunkTiles = opts.chunkTiles || 32;
+    this.chunkSize = this.tileSize * this.chunkTiles;
 
-function mix(c1, c2, t) {
-  const a = parseColor(c1);
-  const b = parseColor(c2);
-  return rgb(lerp(a.r, b.r, t), lerp(a.g, b.g, t), lerp(a.b, b.b, t));
-}
+    this.viewW = opts.viewW || 960;
+    this.viewH = opts.viewH || 540;
 
-function shade(c, amt) {
-  const col = parseColor(c);
-  return rgb(clamp(col.r + amt, 0, 255), clamp(col.g + amt, 0, 255), clamp(col.b + amt, 0, 255));
-}
+    this.spawn = { x: 0, y: 0 };
+    this.boundsRadius = 1280;
 
-function softShadow(ctx, x, y, rx, ry, a) {
-  ctx.save();
-  ctx.globalAlpha = a;
-  ctx.fillStyle = "#000";
-  ctx.beginPath();
-  ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-}
-
-function sparkle(ctx, x, y, t, a = 1) {
-  const s = (Math.sin(t * 10) * 0.5 + 0.5) * a;
-  ctx.save();
-  ctx.globalAlpha = 0.12 + s * 0.28;
-  ctx.strokeStyle = "rgba(255,255,255,0.9)";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(x - 4, y);
-  ctx.lineTo(x + 4, y);
-  ctx.moveTo(x, y - 4);
-  ctx.lineTo(x, y + 4);
-  ctx.stroke();
-  ctx.restore();
-}
-
-function makeWaystoneName(rng, index) {
-  const prefixes = ["Ancient", "Forgotten", "Shattered", "Silent", "Stormbound", "Ember", "Frost", "Sunken", "Iron", "Runed"];
-  const cores = ["Waystone", "Obelisk", "Monolith", "Beacon", "Pillar", "Spire"];
-  const suffixes = ["of Ash", "of Tides", "of Dawn", "of Dusk", "of Echoes", "of Kings", "of Exiles", "of Broken Oaths"];
-  const p = prefixes[rng.int(0, prefixes.length - 1)];
-  const c = cores[rng.int(0, cores.length - 1)];
-  const s = rng.float() > 0.6 ? " " + suffixes[rng.int(0, suffixes.length - 1)] : "";
-  return `${p} ${c}${s} #${index + 1}`;
-}
-
-/* ============================
-   World
-   ============================ */
-export class World {
-  constructor(viewW, viewH) {
-    this.viewW = viewW;
-    this.viewH = viewH;
-
-    // world extents
-    this.width = 9000;
-    this.height = 5200;
-
-    this.seed = Math.floor(100000 + Math.random() * 900000);
-    this.rng = new RNG(this.seed);
-    this._t = 0;
-
-    // River: center channel around nx=0.5
-    this.river = { cx: 0.5, w: 0.085, meander: 0.012 };
-
-    // Spawn on land near center
-    const s = this.findNearestLand(this.width * 0.52, this.height * 0.58);
-    this.spawn = { x: s.x, y: s.y };
-
-    // Waystones
+    this.camps = [];
     this.waystones = [];
-    this._makeWaystones();
-
-    // Docks (visible + consistent). These are SHORE docks near the ocean channel.
     this.docks = [];
-    this._makeDocks();
 
-    // Scatter seed (stable)
-    this._scatterSeed = this.seed * 9973 + 1337;
+    this._chunks = new Map();
+    this._buildQueue = [];
+    this._queued = new Set();
+
+    this._minimap = null;
+    this._minimapDirty = true;
+    this._minimapTimer = 0;
+
+    this._poiRng = new RNG(hash2(this.seed, 777));
+
+    this._initPOIs();
+    this._queueAround(this.spawn.x, this.spawn.y, 2);
   }
 
-  setViewSize(w, h) { this.viewW = w; this.viewH = h; }
-  update(dt) { this._t += dt; }
-
-  /* ============================
-     Core terrain & biome
-     ============================ */
-  terrainAt(x, y) {
-    const nx = x / this.width;
-    const ny = y / this.height;
-
-    const n1 = fbm(nx * 3.0 + 10, ny * 3.0 - 7, this.seed + 11, 5);
-    const n2 = fbm(nx * 9.5 - 20, ny * 9.5 + 3, this.seed + 77, 3);
-
-    const cx = nx - 0.48;
-    const cy = ny - 0.55;
-    const radial = Math.sqrt(cx * cx + cy * cy);
-
-    let land = n1 * 0.78 + n2 * 0.22;
-    land -= radial * 0.22;
-
-    land += this._islandBump(nx, ny, 0.14, 0.28, 0.14, 0.20);
-    land += this._islandBump(nx, ny, 0.82, 0.22, 0.16, 0.18);
-    land += this._islandBump(nx, ny, 0.86, 0.70, 0.20, 0.18);
-    land += this._islandBump(nx, ny, 0.20, 0.72, 0.20, 0.16);
-
-    // Middle sea channel to encourage docks/sailing
-    const channel = Math.exp(-Math.pow((nx - 0.5) / 0.06, 2));
-    land -= channel * 0.16;
-
-    const ocean = land < 0.30;
-
-    const heat = fbm(nx * 2.2 + 100, ny * 2.2 - 50, this.seed + 999, 4);
-    const wet  = fbm(nx * 2.0 - 33,  ny * 2.0 + 44, this.seed + 444, 4);
-
-    let biome = "grass";
-    if (!ocean) {
-      if (heat > 0.64 && wet < 0.46) biome = "desert";
-      else if (wet > 0.66) biome = "swamp";
-      else if (heat < 0.40) biome = "snow";
-      else if (wet > 0.55) biome = "forest";
-      else biome = "grass";
-    }
-
-    // pseudo-height for depth illusion (rolling hills)
-    const h0 = fbm(nx * 1.1 + 50, ny * 1.1 - 25, this.seed + 313, 4);
-    const hill = (1 - radial) * 0.6 + (h0 - 0.5) * 0.5;
-    const height = clamp(hill, 0, 1);
-
-    return { ocean, biome, height, landVal: land, heat, wet };
+  setViewSize(w, h) {
+    this.viewW = w | 0;
+    this.viewH = h | 0;
   }
 
-  biomeAt(x, y) {
-    const t = this.terrainAt(x, y);
-    const b = t?.biome || "grass";
-    if (b === "forest") return "forest";
-    if (b === "snow") return "snow";
-    if (b === "desert") return "desert";
-    if (b === "swamp") return "swamp";
-    return "plains";
+  getTileSize() {
+    return this.tileSize;
   }
 
-  biomeColor(b) {
-    switch (b) {
-      case "desert": return "#c9b27c";
-      case "plains": return "#5da35f";
-      case "forest": return "#2f6f3a";
-      case "snow": return "#cfd7e6";
-      case "swamp": return "#3a6a4c";
-      default: return "#5da35f";
-    }
+  worldToTile(x, y) {
+    return {
+      tx: Math.floor(x / this.tileSize),
+      ty: Math.floor(y / this.tileSize),
+    };
   }
 
-  /* ============================
-     River & water
-     ============================ */
-  _riverCenterY(nx) {
-    const a = fbm(nx * 1.15 + 3.1, 0.0, this.seed + 222, 4);
-    const b = fbm(nx * 2.05 - 9.7, 0.0, this.seed + 333, 3);
-    const m = (a * 0.7 + b * 0.3) - 0.5;
-    return 0.54 + m * this.river.meander;
+  tileToWorld(tx, ty) {
+    return {
+      x: tx * this.tileSize,
+      y: ty * this.tileSize,
+    };
   }
 
-  isRiver(x, y) {
-    const nx = x / this.width;
-    const ny = y / this.height;
-
-    const channel = Math.exp(-Math.pow((nx - this.river.cx) / this.river.w, 2));
-    if (channel < 0.16) return false;
-
-    const cy = this._riverCenterY(nx);
-    const d = Math.abs(ny - cy);
-    const rw = 0.018 + (1 - channel) * 0.008;
-    return d < rw;
+  getTile(tx, ty) {
+    const x = (tx + 0.5) * this.tileSize;
+    const y = (ty + 0.5) * this.tileSize;
+    const t = this._terrainN(x, y);
+    const biome = this._biomeFromT(t);
+    return {
+      biome,
+      water: biome === "water",
+      solid: biome === "rock",
+      col: this._tileColorFor(biome, t, x, y),
+      t,
+    };
   }
 
-  isOcean(x, y) {
-    const t = this.terrainAt(x, y);
-    return !!t.ocean;
+  getTileAt(x, y) {
+    const t = this._terrainN(x, y);
+    const biome = this._biomeFromT(t);
+    return {
+      biome,
+      water: biome === "water",
+      solid: biome === "rock",
+      col: this._tileColorFor(biome, t, x, y),
+      t,
+    };
+  }
+
+  canWalk(x, y) {
+    const t = this._terrainN(x, y);
+    return t >= 0.34 && t <= 0.83;
   }
 
   isWater(x, y) {
-    return this.isOcean(x, y) || this.isRiver(x, y);
+    return this._terrainN(x, y) < 0.34;
   }
 
-  isLand(x, y) {
-    return !this.isWater(x, y);
+  isSolid(x, y) {
+    return this._terrainN(x, y) > 0.83;
   }
 
-  // walking: land only
-  canWalk(x, y) {
-    if (x < 20 || y < 20 || x > this.width - 20 || y > this.height - 20) return false;
-    if (this.isWater(x, y)) return false;
-    return true;
+  clampPointToBounds(x, y, pad = 16) {
+    const dx = x - this.spawn.x;
+    const dy = y - this.spawn.y;
+    const r = this.boundsRadius - pad;
+    const d2 = dx * dx + dy * dy;
+
+    if (d2 <= r * r) return { x, y };
+
+    const d = Math.sqrt(d2) || 1;
+    const k = r / d;
+
+    return {
+      x: this.spawn.x + dx * k,
+      y: this.spawn.y + dy * k,
+    };
   }
 
-  // sailing: water only (boat cannot go onto land)
-  canSail(x, y) {
-    if (x < 20 || y < 20 || x > this.width - 20 || y > this.height - 20) return false;
-    if (!this.isWater(x, y)) return false;
-    return true;
-  }
-
-  // for projectiles: ocean blocks, but river does not block
-  projectileHitsSolid(x, y) {
-    const t = this.terrainAt(x, y);
-    if (t.ocean) return true;
-    if (this.isRiver(x, y)) return false;
-
-    // rare blockers (rocks/trees)
-    const gx = Math.floor(x / 84);
-    const gy = Math.floor(y / 84);
-    const h = hash01(gx, gy, this._scatterSeed + 777);
-    return h > 0.985;
-  }
-
-  /* ============================
-     Docks
-     ============================ */
-  _makeDocks() {
-    // Create 6 docks along the shores of the sea channel.
-    // They are deterministic by seed and forced onto land near ocean.
-    const rng = new RNG(this.seed + 8080);
-
-    const docks = [];
-    const tries = 2000;
-
-    while (docks.length < 6 && docks.length < tries) {
-      const side = rng.float() < 0.5 ? -1 : 1; // left/right shore of channel
-      const nx = 0.50 + side * (0.06 + rng.float() * 0.07); // near ocean border of channel
-      const ny = 0.22 + rng.float() * 0.62;
-
-      let x = clamp(nx * this.width, 120, this.width - 120);
-      let y = clamp(ny * this.height, 120, this.height - 120);
-
-      // shift onto land but close to ocean
-      const p = this.findDockSpot(x, y);
-      if (!p) continue;
-
-      // de-dupe by distance
-      let ok = true;
-      for (const d of docks) {
-        if (dist2(d.x, d.y, p.x, p.y) < 320 * 320) { ok = false; break; }
-      }
-      if (!ok) continue;
-
-      docks.push({
-        x: p.x,
-        y: p.y,
-        facing: side, // -1 means faces left/ocean, 1 faces right/ocean (roughly)
-        name: rng.float() < 0.5 ? "Old Dock" : "Weathered Dock",
-      });
+  update(dt, hero) {
+    if (hero && Number.isFinite(hero.x) && Number.isFinite(hero.y)) {
+      this._queueAround(hero.x, hero.y, 2);
     }
 
-    this.docks = docks;
-  }
+    this._buildSome(2.0);
 
-  // Find a land tile that is adjacent to ocean (shore)
-  findDockSpot(x, y) {
-    const step = 24;
-    for (let r = 0; r < 500; r += step) {
-      for (let a = 0; a < Math.PI * 2; a += 0.35) {
-        const px = clamp(x + Math.cos(a) * r, 80, this.width - 80);
-        const py = clamp(y + Math.sin(a) * r, 80, this.height - 80);
-
-        if (!this.canWalk(px, py)) continue;
-
-        // must be near ocean, not river
-        if (this.isRiver(px, py)) continue;
-        if (!this._isOceanNearby(px, py, 140)) continue;
-
-        return { x: px, y: py };
+    if (this._minimapDirty) {
+      this._minimapTimer += dt;
+      if (this._minimapTimer >= 0.35) {
+        this._minimapTimer = 0;
+        this._rebuildMinimap();
       }
     }
-    return null;
   }
 
-  _isOceanNearby(x, y, r) {
-    const step = 50;
-    for (let yy = -1; yy <= 1; yy++) {
-      for (let xx = -1; xx <= 1; xx++) {
-        const px = clamp(x + xx * step, 40, this.width - 40);
-        const py = clamp(y + yy * step, 40, this.height - 40);
-        if (dist2(x, y, px, py) > r * r) continue;
-        if (this.isOcean(px, py)) return true;
+  draw(ctx, cam) {
+    const view = this._normalizeCam(cam);
+
+    const minCX = Math.floor(view.x0 / this.chunkSize) - 1;
+    const maxCX = Math.floor(view.x1 / this.chunkSize) + 1;
+    const minCY = Math.floor(view.y0 / this.chunkSize) - 1;
+    const maxCY = Math.floor(view.y1 / this.chunkSize) + 1;
+
+    for (let cy = minCY; cy <= maxCY; cy++) {
+      for (let cx = minCX; cx <= maxCX; cx++) {
+        this._ensureChunk(cx, cy);
+        const key = `${cx},${cy}`;
+        const ch = this._chunks.get(key);
+        if (!ch || !ch.canvas) continue;
+
+        const px = cx * this.chunkSize;
+        const py = cy * this.chunkSize;
+        ctx.drawImage(ch.canvas, px, py);
       }
     }
-    return false;
+
+    this._drawAnimatedWaterOverlay(ctx, view);
+    this._drawBoundsHint(ctx);
+    this._drawPOIs(ctx);
   }
 
-  nearestDock(x, y, r = 80) {
-    let best = null;
-    let bestD = r * r;
-    for (const d of this.docks) {
-      const dd = dist2(x, y, d.x, d.y);
-      if (dd < bestD) { bestD = dd; best = d; }
-    }
-    return best;
+  getMinimapCanvas() {
+    if (!this._minimap) this._rebuildMinimap();
+    return this._minimap;
   }
 
-  isNearDock(x, y, r = 80) {
-    return !!this.nearestDock(x, y, r);
-  }
+  /* ===========================
+     Chunking
+  =========================== */
 
-  /* ============================
-     Waystones
-     ============================ */
-  _makeWaystones() {
-    const rng = new RNG(this.seed + 4242);
-    const count = 5;
+  _queueAround(x, y, rChunks = 2) {
+    const cx = Math.floor(x / this.chunkSize);
+    const cy = Math.floor(y / this.chunkSize);
 
-    for (let i = 0; i < count; i++) {
-      const x = clamp(this.width * (0.18 + rng.float() * 0.64), 120, this.width - 120);
-      const y = clamp(this.height * (0.18 + rng.float() * 0.64), 120, this.height - 120);
-      const p = this.findNearestLand(x, y);
-      this.waystones.push({
-        x: p.x,
-        y: p.y,
-        activated: i === 0,
-        name: makeWaystoneName(rng, i),
-      });
-    }
-  }
-
-  nearestWaystone(x, y, r = 60) {
-    let best = null;
-    let bestD = r * r;
-    for (const w of this.waystones) {
-      const d = dist2(x, y, w.x, w.y);
-      if (d < bestD) { bestD = d; best = w; }
-    }
-    return best;
-  }
-
-  /* ============================
-     Land finding
-     ============================ */
-  _islandBump(nx, ny, cx, cy, rx, ry) {
-    const dx = (nx - cx) / rx;
-    const dy = (ny - cy) / ry;
-    const d = Math.sqrt(dx * dx + dy * dy);
-    const bump = clamp(1 - d, 0, 1);
-    return bump * 0.18;
-  }
-
-  findNearestLand(x, y) {
-    let best = { x, y };
-    let bestD = 1e9;
-    const step = 40;
-    for (let r = 0; r < 600; r += step) {
-      for (let a = 0; a < Math.PI * 2; a += 0.25) {
-        const px = clamp(x + Math.cos(a) * r, 30, this.width - 30);
-        const py = clamp(y + Math.sin(a) * r, 30, this.height - 30);
-        if (!this.canWalk(px, py)) continue;
-        const d = dist2(x, y, px, py);
-        if (d < bestD) { bestD = d; best = { x: px, y: py }; }
+    for (let yy = cy - rChunks; yy <= cy + rChunks; yy++) {
+      for (let xx = cx - rChunks; xx <= cx + rChunks; xx++) {
+        const key = `${xx},${yy}`;
+        if (this._chunks.has(key) || this._queued.has(key)) continue;
+        this._queued.add(key);
+        this._buildQueue.push({ cx: xx, cy: yy });
       }
-      if (bestD < 2400) break;
     }
-    return best;
   }
 
-  /* ============================
-     Minimap
-     ============================ */
-  drawMinimap(ctx, x, y, w, h, heroX, heroY) {
+  _buildSome(msBudget = 2.0) {
+    const t0 = performance.now();
+    while (this._buildQueue.length) {
+      const job = this._buildQueue.shift();
+      this._queued.delete(`${job.cx},${job.cy}`);
+      this._buildChunk(job.cx, job.cy);
+      if (performance.now() - t0 >= msBudget) break;
+    }
+  }
+
+  _ensureChunk(cx, cy) {
+    const key = `${cx},${cy}`;
+    if (this._chunks.has(key) || this._queued.has(key)) return;
+    this._queued.add(key);
+    this._buildQueue.push({ cx, cy });
+    this._buildSome(4.0);
+  }
+
+  _buildChunk(cx, cy) {
+    const key = `${cx},${cy}`;
+    if (this._chunks.has(key)) return this._chunks.get(key);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = this.chunkSize;
+    canvas.height = this.chunkSize;
+    const c = canvas.getContext("2d");
+
+    const baseX = cx * this.chunkTiles;
+    const baseY = cy * this.chunkTiles;
+
+    for (let ty = 0; ty < this.chunkTiles; ty++) {
+      for (let tx = 0; tx < this.chunkTiles; tx++) {
+        const wx = (baseX + tx) * this.tileSize;
+        const wy = (baseY + ty) * this.tileSize;
+        const x = wx + this.tileSize * 0.5;
+        const y = wy + this.tileSize * 0.5;
+
+        const t = this._terrainN(x, y);
+        const biome = this._biomeFromT(t);
+        const col = this._tileColorFor(biome, t, x, y);
+
+        const px = tx * this.tileSize;
+        const py = ty * this.tileSize;
+
+        c.fillStyle = rgb(col[0], col[1], col[2]);
+        c.fillRect(px, py, this.tileSize, this.tileSize);
+
+        this._drawShoreEdge(c, px, py, x, y, biome);
+        this._drawRockEdgeShade(c, px, py, x, y, biome);
+        this._drawTileDecor(c, px, py, biome, x, y, t);
+      }
+    }
+
+    const ch = { cx, cy, canvas };
+    this._chunks.set(key, ch);
+    this._minimapDirty = true;
+    return ch;
+  }
+
+  /* ===========================
+     Rendering helpers
+  =========================== */
+
+  _normalizeCam(cam) {
+    if (!cam) {
+      return {
+        x0: -this.viewW * 0.5,
+        y0: -this.viewH * 0.5,
+        x1: this.viewW * 0.5,
+        y1: this.viewH * 0.5,
+      };
+    }
+
+    const z = cam.zoom || 1;
+    const halfW = this.viewW * 0.5 / z;
+    const halfH = this.viewH * 0.5 / z;
+
+    return {
+      x0: cam.x - halfW,
+      y0: cam.y - halfH,
+      x1: cam.x + halfW,
+      y1: cam.y + halfH,
+    };
+  }
+
+  _drawBoundsHint(ctx) {
     ctx.save();
-    ctx.globalAlpha = 0.92;
+    ctx.strokeStyle = "rgba(120,180,255,0.14)";
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.arc(this.spawn.x, this.spawn.y, this.boundsRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
 
-    ctx.fillStyle = "rgba(0,0,0,0.45)";
-    ctx.fillRect(x - 3, y - 3, w + 6, h + 6);
+  _drawPOIs(ctx) {
+    for (const camp of this.camps) this._drawCamp(ctx, camp);
+    for (const ws of this.waystones) this._drawWaystone(ctx, ws);
+    for (const dock of this.docks) this._drawDock(ctx, dock);
+  }
 
-    const step = 10;
-    for (let yy = 0; yy < h; yy += step) {
-      for (let xx = 0; xx < w; xx += step) {
-        const wx = (xx / w) * this.width;
-        const wy = (yy / h) * this.height;
-        const t = this.terrainAt(wx, wy);
+  _drawPOIShadow(ctx, x, y, rx, ry, alpha = 0.16) {
+    ctx.save();
+    ctx.fillStyle = `rgba(0,0,0,${alpha})`;
+    ctx.beginPath();
+    ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
 
-        let c = "#3b8e49";
-        if (t.ocean) c = "#0f2a55";
-        else if (this.isRiver(wx, wy)) c = "#3f86cf";
-        else if (t.biome === "forest") c = "#2f6f3a";
-        else if (t.biome === "snow") c = "#cfd7e6";
-        else if (t.biome === "desert") c = "#c9b27c";
-        else if (t.biome === "swamp") c = "#3a6a4c";
+  _drawCamp(ctx, camp) {
+    ctx.save();
 
-        ctx.fillStyle = c;
-        ctx.fillRect(x + xx, y + yy, step, step);
-      }
-    }
+    this._drawPOIShadow(ctx, camp.x + 2, camp.y + 16, 26, 11, 0.18);
 
-    // docks
-    for (const d of this.docks) {
-      ctx.fillStyle = "rgba(220,170,110,0.95)";
-      ctx.fillRect(x + (d.x / this.width) * w - 2, y + (d.y / this.height) * h - 2, 4, 4);
-    }
+    ctx.strokeStyle = "rgba(118,76,48,0.28)";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.arc(camp.x, camp.y + 6, 24, 0, Math.PI * 2);
+    ctx.stroke();
 
-    // waystones
-    for (const ws of this.waystones) {
-      ctx.fillStyle = ws.activated ? "rgba(255,220,160,0.95)" : "rgba(140,160,200,0.85)";
-      ctx.fillRect(x + (ws.x / this.width) * w - 2, y + (ws.y / this.height) * h - 2, 4, 4);
-    }
+    ctx.fillStyle = "rgba(128,82,54,0.98)";
+    ctx.fillRect(camp.x - 18, camp.y - 10, 36, 20);
 
-    // hero
-    ctx.fillStyle = "rgba(255,255,255,0.95)";
-    ctx.fillRect(x + (heroX / this.width) * w - 2, y + (heroY / this.height) * h - 2, 4, 4);
+    ctx.fillStyle = "rgba(204,142,94,0.98)";
+    ctx.beginPath();
+    ctx.moveTo(camp.x - 21, camp.y - 10);
+    ctx.lineTo(camp.x, camp.y - 24);
+    ctx.lineTo(camp.x + 21, camp.y - 10);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(255,236,210,0.18)";
+    ctx.fillRect(camp.x - 14, camp.y - 7, 28, 2);
+
+    ctx.fillStyle = "rgba(88,58,38,0.95)";
+    ctx.fillRect(camp.x - 5, camp.y - 1, 10, 11);
+
+    ctx.fillStyle = "rgba(255,172,88,0.95)";
+    ctx.beginPath();
+    ctx.arc(camp.x + 22, camp.y + 11, 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(255,214,130,0.34)";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(camp.x + 22, camp.y + 11, 8, 0, Math.PI * 2);
+    ctx.stroke();
 
     ctx.restore();
   }
 
-  /* ============================
-     World draw (better visuals, less blocky)
-     ============================ */
-  draw(ctx, t, view) {
-    const STEP = 36; // smaller looks less blocky; still fast
-    const PAD = 160;
+  _drawWaystone(ctx, ws) {
+    ctx.save();
 
-    const x0 = Math.floor((view.x - PAD) / STEP) * STEP;
-    const y0 = Math.floor((view.y - PAD) / STEP) * STEP;
-    const x1 = view.x + view.w + PAD;
-    const y1 = view.y + view.h + PAD;
+    this._drawPOIShadow(ctx, ws.x + 1, ws.y + 15, 14, 8, 0.15);
 
-    for (let y = y0; y <= y1; y += STEP) {
-      for (let x = x0; x <= x1; x += STEP) {
-        const wx = clamp(x + STEP * 0.5, 0, this.width);
-        const wy = clamp(y + STEP * 0.5, 0, this.height);
+    ctx.fillStyle = "rgba(102,112,142,0.98)";
+    ctx.beginPath();
+    ctx.moveTo(ws.x, ws.y - 26);
+    ctx.lineTo(ws.x + 13, ws.y - 6);
+    ctx.lineTo(ws.x + 10, ws.y + 22);
+    ctx.lineTo(ws.x - 10, ws.y + 22);
+    ctx.lineTo(ws.x - 13, ws.y - 6);
+    ctx.closePath();
+    ctx.fill();
 
-        const terr = this.terrainAt(wx, wy);
+    ctx.fillStyle = "rgba(166,210,255,0.24)";
+    ctx.beginPath();
+    ctx.moveTo(ws.x, ws.y - 21);
+    ctx.lineTo(ws.x + 6, ws.y - 6);
+    ctx.lineTo(ws.x + 4, ws.y + 15);
+    ctx.lineTo(ws.x - 4, ws.y + 15);
+    ctx.lineTo(ws.x - 6, ws.y - 6);
+    ctx.closePath();
+    ctx.fill();
 
-        if (terr.ocean) this._drawOcean(ctx, x, y, STEP, wx, wy, t);
-        else this._drawLand(ctx, x, y, STEP, wx, wy, terr, t);
+    ctx.strokeStyle = "rgba(188,232,255,0.55)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(ws.x, ws.y - 26);
+    ctx.lineTo(ws.x + 13, ws.y - 6);
+    ctx.lineTo(ws.x + 10, ws.y + 22);
+    ctx.lineTo(ws.x - 10, ws.y + 22);
+    ctx.lineTo(ws.x - 13, ws.y - 6);
+    ctx.closePath();
+    ctx.stroke();
 
-        // slight “grain” to break tile feel
-        const h = hash01(Math.floor(wx / 40), Math.floor(wy / 40), this._scatterSeed + 202);
-        if (h > 0.92) {
-          ctx.save();
-          ctx.globalAlpha = 0.06;
-          ctx.fillStyle = "rgba(0,0,0,0.35)";
-          ctx.fillRect(x + (h * 7 % 1) * STEP, y + (h * 13 % 1) * STEP, 2, 2);
-          ctx.restore();
+    const glow = 0.10 + 0.03 * Math.sin(performance.now() * 0.004 + ws.x * 0.01);
+    ctx.fillStyle = `rgba(160,220,255,${glow.toFixed(3)})`;
+    ctx.beginPath();
+    ctx.arc(ws.x, ws.y - 4, 16, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  _drawDock(ctx, dock) {
+    ctx.save();
+
+    this._drawPOIShadow(ctx, dock.x + 2, dock.y + 14, 34, 10, 0.16);
+
+    ctx.fillStyle = "rgba(112,80,52,0.98)";
+    ctx.fillRect(dock.x - 42, dock.y - 8, 84, 16);
+
+    ctx.fillStyle = "rgba(164,122,86,0.22)";
+    ctx.fillRect(dock.x - 42, dock.y - 8, 84, 2);
+
+    for (let i = -34; i <= 34; i += 17) {
+      ctx.fillStyle = "rgba(86,60,38,0.98)";
+      ctx.fillRect(dock.x + i, dock.y + 8, 6, 12);
+    }
+
+    ctx.strokeStyle = "rgba(214,178,126,0.30)";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(dock.x - 36, dock.y - 5);
+    ctx.lineTo(dock.x + 36, dock.y - 5);
+    ctx.moveTo(dock.x - 36, dock.y + 5);
+    ctx.lineTo(dock.x + 36, dock.y + 5);
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(82,56,36,0.96)";
+    ctx.fillRect(dock.x + 42, dock.y - 16, 3, 12);
+
+    ctx.fillStyle = "rgba(212,66,52,0.96)";
+    ctx.beginPath();
+    ctx.moveTo(dock.x + 45, dock.y - 16);
+    ctx.lineTo(dock.x + 53, dock.y - 13);
+    ctx.lineTo(dock.x + 45, dock.y - 10);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  _drawShoreEdge(ctx, px, py, x, y, biome) {
+    const ts = this.tileSize;
+    const up = this._biomeFromT(this._terrainN(x, y - ts));
+    const down = this._biomeFromT(this._terrainN(x, y + ts));
+    const left = this._biomeFromT(this._terrainN(x - ts, y));
+    const right = this._biomeFromT(this._terrainN(x + ts, y));
+
+    ctx.save();
+
+    if (biome === "water") {
+      ctx.fillStyle = "rgba(180,230,255,0.10)";
+      ctx.strokeStyle = "rgba(255,255,255,0.10)";
+      ctx.lineWidth = 1;
+
+      if (up !== "water") {
+        ctx.fillRect(px, py, ts, 4);
+        ctx.beginPath();
+        ctx.moveTo(px + 2, py + 3);
+        ctx.lineTo(px + ts - 2, py + 3);
+        ctx.stroke();
+      }
+      if (down !== "water") {
+        ctx.fillRect(px, py + ts - 4, ts, 4);
+        ctx.beginPath();
+        ctx.moveTo(px + 2, py + ts - 3);
+        ctx.lineTo(px + ts - 2, py + ts - 3);
+        ctx.stroke();
+      }
+      if (left !== "water") {
+        ctx.fillRect(px, py, 4, ts);
+      }
+      if (right !== "water") {
+        ctx.fillRect(px + ts - 4, py, 4, ts);
+      }
+    }
+
+    if (biome === "sand") {
+      ctx.fillStyle = "rgba(255,244,210,0.08)";
+      if (up === "water") ctx.fillRect(px, py, ts, 3);
+      if (down === "water") ctx.fillRect(px, py + ts - 3, ts, 3);
+      if (left === "water") ctx.fillRect(px, py, 3, ts);
+      if (right === "water") ctx.fillRect(px + ts - 3, py, 3, ts);
+    }
+
+    ctx.restore();
+  }
+
+  _drawRockEdgeShade(ctx, px, py, x, y, biome) {
+    if (biome !== "rock") return;
+
+    const ts = this.tileSize;
+    const up = this._biomeFromT(this._terrainN(x, y - ts));
+    const down = this._biomeFromT(this._terrainN(x, y + ts));
+    const left = this._biomeFromT(this._terrainN(x - ts, y));
+    const right = this._biomeFromT(this._terrainN(x + ts, y));
+
+    ctx.save();
+
+    if (up !== "rock") {
+      ctx.fillStyle = "rgba(255,255,255,0.07)";
+      ctx.fillRect(px, py, ts, 3);
+    }
+    if (left !== "rock") {
+      ctx.fillStyle = "rgba(255,255,255,0.04)";
+      ctx.fillRect(px, py, 3, ts);
+    }
+    if (down !== "rock") {
+      ctx.fillStyle = "rgba(0,0,0,0.10)";
+      ctx.fillRect(px, py + ts - 4, ts, 4);
+    }
+    if (right !== "rock") {
+      ctx.fillStyle = "rgba(0,0,0,0.08)";
+      ctx.fillRect(px + ts - 4, py, 4, ts);
+    }
+
+    ctx.restore();
+  }
+
+  _drawTileDecor(ctx, px, py, biome, x, y, t) {
+    if (biome === "grass") {
+      const n = hash2((x / this.tileSize) | 0, (y / this.tileSize) | 0, this.seed);
+      const gv = this._grassVariant(x, y);
+
+      if ((n & 7) === 0) this._drawGrassTuft(ctx, px, py, n, gv);
+      if ((n & 31) === 2) this._drawPebble(ctx, px, py, n);
+      if (gv > 0.68 && (n & 31) === 9) this._drawFlower(ctx, px, py, n);
+      if (gv < 0.30 && (n & 15) === 5) this._drawDryTuft(ctx, px, py, n);
+    } else if (biome === "sand") {
+      const n = hash2((x / this.tileSize) | 0, (y / this.tileSize) | 0, this.seed ^ 88);
+      const sv = this._sandVariant(x, y);
+
+      if ((n & 15) === 1) this._drawPebble(ctx, px, py, n);
+      if (sv > 0.58 && (n & 31) === 4) this._drawSandStreak(ctx, px, py, n);
+      if (sv > 0.68 && (n & 31) === 12) this._drawShell(ctx, px, py, n);
+      if (sv < 0.30 && (n & 63) === 9) this._drawDriftMark(ctx, px, py, n);
+    } else if (biome === "water") {
+      const n = hash2((x / this.tileSize) | 0, (y / this.tileSize) | 0, this.seed ^ 222);
+      if ((n & 3) === 0) this._drawRipple(ctx, px, py, n, t);
+    } else if (biome === "rock") {
+      const n = hash2((x / this.tileSize) | 0, (y / this.tileSize) | 0, this.seed ^ 444);
+      const rv = this._rockVariant(x, y);
+
+      if ((n & 7) <= 1) this._drawCrack(ctx, px, py, n, rv);
+      if ((n & 15) === 5) this._drawRockSpeck(ctx, px, py, n, rv);
+      if (rv > 0.64 && (n & 31) === 9) this._drawSmallStone(ctx, px, py, n);
+    }
+  }
+
+  _drawGrassTuft(ctx, px, py, n, gv = 0.5) {
+    const ox = 4 + (n % 14);
+    const oy = 9 + ((n >> 4) % 8);
+    const lush = gv > 0.62;
+
+    ctx.save();
+    ctx.strokeStyle = lush ? "rgba(34,110,44,0.58)" : "rgba(40,94,42,0.50)";
+    ctx.lineWidth = lush ? 1.35 : 1.25;
+    ctx.beginPath();
+    ctx.moveTo(px + ox, py + oy + 7);
+    ctx.lineTo(px + ox - 2, py + oy);
+    ctx.moveTo(px + ox, py + oy + 7);
+    ctx.lineTo(px + ox + 1, py + oy - 1);
+    ctx.moveTo(px + ox, py + oy + 7);
+    ctx.lineTo(px + ox + 3, py + oy + 1);
+    if (lush) {
+      ctx.moveTo(px + ox + 1, py + oy + 7);
+      ctx.lineTo(px + ox + 5, py + oy + 2);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  _drawDryTuft(ctx, px, py, n) {
+    const ox = 5 + (n % 12);
+    const oy = 10 + ((n >> 3) % 7);
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(146,132,74,0.42)";
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.moveTo(px + ox, py + oy + 5);
+    ctx.lineTo(px + ox - 2, py + oy + 1);
+    ctx.moveTo(px + ox, py + oy + 5);
+    ctx.lineTo(px + ox + 2, py + oy);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  _drawFlower(ctx, px, py, n) {
+    const ox = 6 + (n % 10);
+    const oy = 7 + ((n >> 4) % 10);
+
+    ctx.save();
+    ctx.fillStyle = "rgba(255,238,120,0.82)";
+    ctx.beginPath();
+    ctx.arc(px + ox, py + oy, 1.25, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(255,255,255,0.72)";
+    ctx.beginPath();
+    ctx.arc(px + ox - 1.5, py + oy, 1, 0, Math.PI * 2);
+    ctx.arc(px + ox + 1.5, py + oy, 1, 0, Math.PI * 2);
+    ctx.arc(px + ox, py + oy - 1.5, 1, 0, Math.PI * 2);
+    ctx.arc(px + ox, py + oy + 1.5, 1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  _drawPebble(ctx, px, py, n) {
+    const ox = 5 + (n % 12);
+    const oy = 5 + ((n >> 3) % 12);
+    const r = 1 + ((n >> 6) % 2);
+
+    ctx.save();
+    ctx.fillStyle = "rgba(255,255,255,0.18)";
+    ctx.beginPath();
+    ctx.arc(px + ox, py + oy, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(0,0,0,0.10)";
+    ctx.beginPath();
+    ctx.arc(px + ox + 1, py + oy + 1, Math.max(1, r - 0.2), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  _drawSandStreak(ctx, px, py, n) {
+    const ox = 3 + (n % 12);
+    const oy = 6 + ((n >> 4) % 10);
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,241,198,0.18)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(px + ox - 2, py + oy);
+    ctx.lineTo(px + ox + 4, py + oy + 1);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  _drawShell(ctx, px, py, n) {
+    const ox = 6 + (n % 10);
+    const oy = 7 + ((n >> 4) % 10);
+
+    ctx.save();
+    ctx.fillStyle = "rgba(245,236,215,0.82)";
+    ctx.beginPath();
+    ctx.ellipse(px + ox, py + oy, 2.4, 1.7, 0.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(196,170,144,0.22)";
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(px + ox - 1.4, py + oy);
+    ctx.lineTo(px + ox + 1.4, py + oy);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  _drawDriftMark(ctx, px, py, n) {
+    const ox = 4 + (n % 12);
+    const oy = 11 + ((n >> 5) % 6);
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(154,128,92,0.18)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(px + ox - 2, py + oy);
+    ctx.lineTo(px + ox + 3, py + oy + 1);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  _drawRipple(ctx, px, py, n) {
+    const ox = 6 + (n % 12);
+    const oy = 6 + ((n >> 4) % 12);
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,255,255,0.16)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(px + ox, py + oy, 3 + ((n >> 7) % 3), 0, Math.PI * 1.7);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  _drawCrack(ctx, px, py, n, rv = 0.5) {
+    const x0 = px + 4 + (n % 8);
+    const y0 = py + 5 + ((n >> 4) % 8);
+    const alpha = 0.12 + rv * 0.06;
+
+    ctx.save();
+    ctx.strokeStyle = `rgba(0,0,0,${alpha.toFixed(3)})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x0 + 4, y0 + 2);
+    ctx.lineTo(x0 + 8, y0 - 1);
+    if (rv > 0.60) {
+      ctx.moveTo(x0 + 4, y0 + 2);
+      ctx.lineTo(x0 + 6, y0 + 5);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  _drawRockSpeck(ctx, px, py, n, rv) {
+    const ox = 4 + (n % 14);
+    const oy = 4 + ((n >> 5) % 14);
+
+    ctx.save();
+    ctx.fillStyle = `rgba(255,255,255,${(0.04 + rv * 0.05).toFixed(3)})`;
+    ctx.fillRect(px + ox, py + oy, 1, 1);
+    ctx.fillStyle = "rgba(0,0,0,0.08)";
+    ctx.fillRect(px + ox + 1, py + oy + 1, 1, 1);
+    ctx.restore();
+  }
+
+  _drawSmallStone(ctx, px, py, n) {
+    const ox = 6 + (n % 8);
+    const oy = 8 + ((n >> 4) % 7);
+
+    ctx.save();
+    ctx.fillStyle = "rgba(148,154,162,0.72)";
+    ctx.beginPath();
+    ctx.ellipse(px + ox, py + oy, 3, 2, 0.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(255,255,255,0.10)";
+    ctx.beginPath();
+    ctx.ellipse(px + ox - 1, py + oy - 1, 2, 1, 0.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(0,0,0,0.10)";
+    ctx.beginPath();
+    ctx.ellipse(px + ox + 1, py + oy + 1, 2.4, 1.4, 0.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  _drawAnimatedWaterOverlay(ctx, view) {
+    const time = performance.now() * 0.0014;
+    const startTX = Math.floor(view.x0 / this.tileSize) - 1;
+    const endTX = Math.floor(view.x1 / this.tileSize) + 1;
+    const startTY = Math.floor(view.y0 / this.tileSize) - 1;
+    const endTY = Math.floor(view.y1 / this.tileSize) + 1;
+
+    ctx.save();
+
+    for (let ty = startTY; ty <= endTY; ty++) {
+      for (let tx = startTX; tx <= endTX; tx++) {
+        const wx = tx * this.tileSize + this.tileSize * 0.5;
+        const wy = ty * this.tileSize + this.tileSize * 0.5;
+        const t = this._terrainN(wx, wy);
+        if (t >= 0.34) continue;
+
+        const n = hash2(tx, ty, this.seed ^ 9123);
+        const px = tx * this.tileSize;
+        const py = ty * this.tileSize;
+
+        const shimmer =
+          0.022 +
+          0.018 * Math.sin(time * 2.7 + tx * 0.55 + ty * 0.31 + (n & 7));
+
+        ctx.fillStyle = `rgba(255,255,255,${Math.max(0, shimmer).toFixed(3)})`;
+        ctx.fillRect(px, py, this.tileSize, this.tileSize);
+
+        if ((n & 3) === 0) {
+          const ox = 5 + (n % 12);
+          const oy = 6 + ((n >> 4) % 10);
+          const drift = Math.sin(time * 3.2 + (n & 15)) * 1.8;
+          const r = 3 + ((n >> 7) % 3);
+
+          ctx.strokeStyle = `rgba(255,255,255,${
+            0.10 + 0.08 * Math.sin(time * 2.4 + (n & 31))
+          })`;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(px + ox + drift, py + oy, r, 0, Math.PI * 1.65);
+          ctx.stroke();
         }
       }
     }
 
-    // draw docks + waystones on top
-    for (const d of this.docks) drawDock(ctx, d.x, d.y, d.facing, t);
-    for (const ws of this.waystones) drawWaystone(ctx, ws.x, ws.y, ws.activated, t);
-
-    // subtle sparkle near activated waystones
-    for (const ws of this.waystones) {
-      if (!ws.activated) continue;
-      if (Math.sin(t * 1.2 + (ws.x + ws.y) * 0.001) > 0.92) sparkle(ctx, ws.x + 18, ws.y - 22, t + ws.x * 0.0003, 0.8);
-    }
-  }
-
-  _drawOcean(ctx, x, y, s, wx, wy, t) {
-    const nx = wx / this.width;
-
-    const deep = "#0b1a35";
-    const mid = "#102850";
-    const shallow = "#17396b";
-
-    const n = fbm(wx / 820 + 10, wy / 820 - 10, this.seed + 909, 2);
-    const depth = clamp(0.25 + (1 - Math.abs(nx - 0.5)) * 0.25 + (n - 0.5) * 0.25, 0, 1);
-
-    const base = mix(deep, mid, depth);
-    ctx.fillStyle = base;
-    ctx.fillRect(x, y, s, s);
-
-    const wv = Math.sin(t * 1.25 + (wx + wy) * 0.0025) * 0.5 + 0.5;
-    ctx.save();
-    ctx.globalAlpha = 0.10 + wv * 0.10;
-    ctx.fillStyle = shallow;
-    ctx.fillRect(x, y + s * (0.18 + wv * 0.18), s, s * 0.10);
     ctx.restore();
-
-    // glints
-    if (hash01(Math.floor(wx / 120), Math.floor(wy / 120), this.seed + 111) > 0.92) {
-      ctx.save();
-      ctx.globalAlpha = 0.10 + wv * 0.10;
-      ctx.fillStyle = "rgba(180,220,255,0.22)";
-      ctx.fillRect(x + s * 0.20, y + s * 0.20, s * 0.60, 2);
-      ctx.restore();
-    }
   }
 
-  _drawLand(ctx, x, y, s, wx, wy, terr, t) {
-    let a = "#4aa055", b = "#3b8e49", c = "#6ab36c";
-    if (terr.biome === "forest") { a = "#2f7a3f"; b = "#246a35"; c = "#3b8a4a"; }
-    if (terr.biome === "desert") { a = "#c3ad74"; b = "#b59b60"; c = "#d2c08c"; }
-    if (terr.biome === "snow")   { a = "#cfd7e6"; b = "#bfc7d6"; c = "#e6eefc"; }
-    if (terr.biome === "swamp")  { a = "#3a6a4c"; b = "#2f5f43"; c = "#4b7a57"; }
+  /* ===========================
+     World / POI generation
+  =========================== */
 
-    const patch = fbm(wx / 950 + 2.7, wy / 950 - 1.9, this.seed + 707, 3);
-    const patchT = clamp(patch, 0, 1);
-    const micro = fbm(wx / 260 + 1.7, wy / 260 - 2.2, this.seed + 555, 3);
-    const microAmt = (micro - 0.5) * 26;
+  _initPOIs() {
+    const ringR = 560;
+    const angles = [0, Math.PI * 0.5, Math.PI, Math.PI * 1.5];
 
-    const heightShade = ((terr.height || 0.5) - 0.5) * 34;
-
-    // darken near shore by sampling ocean neighbors
-    const shore = this._shoreFactor(wx, wy);
-
-    let base = mix(a, c, patchT);
-    base = shade(base, microAmt * 0.55 + heightShade - shore * 22);
-
-    // river overlay
-    const river = this.isRiver(wx, wy);
-
-    ctx.fillStyle = base;
-    ctx.fillRect(x, y, s, s);
-
-    // rim light (top-left)
-    ctx.save();
-    ctx.globalAlpha = 0.14;
-    ctx.fillStyle = "rgba(255,255,255,0.20)";
-    ctx.fillRect(x, y, s, 2);
-    ctx.fillRect(x, y, 2, s);
-    ctx.restore();
-
-    // river paint
-    if (river) {
-      const wave = Math.sin(t * 1.2 + (wx + wy) * 0.003) * 0.5 + 0.5;
-
-      ctx.save();
-      ctx.globalAlpha = 0.90;
-      ctx.fillStyle = "#3f86cf";
-      ctx.fillRect(x, y, s, s);
-
-      ctx.globalAlpha = 0.18 + wave * 0.12;
-      ctx.fillStyle = "rgba(210,245,255,0.55)";
-      ctx.fillRect(x, y + s * (0.25 + wave * 0.10), s, s * 0.10);
-
-      ctx.globalAlpha = 0.12;
-      ctx.fillStyle = "rgba(255,255,255,0.35)";
-      ctx.fillRect(x, y + s * 0.06, s, 2);
-      ctx.fillRect(x, y + s * 0.92, s, 2);
-      ctx.restore();
+    for (let i = 0; i < angles.length; i++) {
+      const a = angles[i];
+      const x = this.spawn.x + Math.cos(a) * ringR;
+      const y = this.spawn.y + Math.sin(a) * ringR;
+      const p = this._findNearbyLand(x, y, 220);
+      this.waystones.push({
+        id: `ws_${i}`,
+        x: p.x,
+        y: p.y,
+      });
     }
 
-    // scatter detail (tufts/rocks/trees)
-    this._scatter(ctx, x, y, s, wx, wy, terr, t, shore, river);
+    const campAngles = [
+      Math.PI * 0.2,
+      Math.PI * 0.72,
+      Math.PI * 1.24,
+      Math.PI * 1.72,
+    ];
+    for (let i = 0; i < campAngles.length; i++) {
+      const a = campAngles[i];
+      const x = this.spawn.x + Math.cos(a) * 860;
+      const y = this.spawn.y + Math.sin(a) * 860;
+      const p = this._findNearbyLand(x, y, 260);
+      this.camps.push({
+        id: `camp_${i}`,
+        x: p.x,
+        y: p.y,
+        r: 120,
+      });
+    }
+
+    const dockAngles = [Math.PI * 0.12, Math.PI * 1.12];
+    for (let i = 0; i < dockAngles.length; i++) {
+      const a = dockAngles[i];
+      const x = this.spawn.x + Math.cos(a) * 720;
+      const y = this.spawn.y + Math.sin(a) * 720;
+      const p = this._findShoreline(x, y, 300);
+      this.docks.push({
+        id: `dock_${i}`,
+        x: p.x,
+        y: p.y,
+      });
+    }
+
+    const sp = this._findNearbyLand(0, 0, 400);
+    this.spawn.x = sp.x;
+    this.spawn.y = sp.y;
   }
 
-  _shoreFactor(wx, wy) {
-    const step = 90;
-    let oceanNear = 0;
-    for (let yy = -1; yy <= 1; yy++) {
-      for (let xx = -1; xx <= 1; xx++) {
-        if (xx === 0 && yy === 0) continue;
-        const px = clamp(wx + xx * step, 60, this.width - 60);
-        const py = clamp(wy + yy * step, 60, this.height - 60);
-        if (this.isOcean(px, py)) oceanNear = Math.max(oceanNear, 1 - (Math.abs(xx) + Math.abs(yy)) * 0.2);
+  _findNearbyLand(x, y, maxR = 260) {
+    if (this.canWalk(x, y)) return { x, y };
+
+    for (let r = this.tileSize; r <= maxR; r += this.tileSize) {
+      for (let i = 0; i < 24; i++) {
+        const a = (i / 24) * Math.PI * 2;
+        const px = x + Math.cos(a) * r;
+        const py = y + Math.sin(a) * r;
+        if (this.canWalk(px, py)) return { x: px, y: py };
       }
     }
-    return clamp(oceanNear, 0, 1);
+
+    return { x, y };
   }
 
-  _scatter(ctx, x, y, s, wx, wy, terr, t, shore, river) {
-    const gx = Math.floor(wx / 84);
-    const gy = Math.floor(wy / 84);
-    const h = hash01(gx, gy, this._scatterSeed);
+  _findShoreline(x, y, maxR = 300) {
+    for (let r = this.tileSize; r <= maxR; r += this.tileSize) {
+      for (let i = 0; i < 36; i++) {
+        const a = (i / 36) * Math.PI * 2;
+        const px = x + Math.cos(a) * r;
+        const py = y + Math.sin(a) * r;
 
-    const density = clamp(1 - shore * 0.9 - (river ? 0.85 : 0), 0, 1);
+        if (!this.canWalk(px, py)) continue;
 
-    // rocks
-    if (h > 0.972 && density > 0.25 && terr.biome !== "snow") {
-      const rx = x + (h * 97 % 1) * s;
-      const ry = y + (h * 41 % 1) * s;
-      drawRock(ctx, rx, ry, 9 + (h * 19 % 1) * 10);
+        const offsets = [
+          [this.tileSize, 0],
+          [-this.tileSize, 0],
+          [0, this.tileSize],
+          [0, -this.tileSize],
+        ];
+
+        for (const [ox, oy] of offsets) {
+          if (this.isWater(px + ox, py + oy)) {
+            return { x: px, y: py };
+          }
+        }
+      }
     }
 
-    // tufts (plains/forest/swamp/desert)
-    if (h > 0.78 && h < 0.93 && density > 0.12 && !river) {
-      const tx = x + (h * 13 % 1) * s;
-      const ty = y + (h * 29 % 1) * s;
-      const amt = 1 + ((h * 101) | 0) % 3;
-      for (let i = 0; i < amt; i++) drawTuft(ctx, tx + i * 4, ty + (i % 2) * 2, terr.biome);
+    return this._findNearbyLand(x, y, maxR);
+  }
+
+  /* ===========================
+     Minimap
+  =========================== */
+
+  _rebuildMinimap() {
+    const size = 220;
+    const c = document.createElement("canvas");
+    c.width = size;
+    c.height = size;
+    const g = c.getContext("2d");
+
+    g.fillStyle = "rgba(8,12,16,0.98)";
+    g.fillRect(0, 0, size, size);
+
+    const half = this.boundsRadius;
+    const worldSize = half * 2;
+    const step = worldSize / size;
+
+    for (let py = 2; py < size - 2; py++) {
+      for (let px = 2; px < size - 2; px++) {
+        const wx = this.spawn.x - half + px * step;
+        const wy = this.spawn.y - half + py * step;
+        const t = this._terrainN(wx, wy);
+        const biome = this._biomeFromT(t);
+        const col = this._miniColorFor(biome, t, wx, wy);
+        g.fillStyle = rgb(col[0], col[1], col[2]);
+        g.fillRect(px, py, 1, 1);
+      }
     }
 
-    // trees in forest
-    if (terr.biome === "forest" && h > 0.90 && density > 0.20 && !river) {
-      const tx = x + (h * 67 % 1) * s;
-      const ty = y + (h * 23 % 1) * s;
-      drawTree(ctx, tx, ty, 1.0 + (h * 11 % 1) * 0.45);
+    for (const camp of this.camps) {
+      const p = this._worldToMini(camp.x, camp.y, size);
+      this._drawMiniDot(g, p.x, p.y, "rgba(255,132,96,0.98)", "rgba(60,18,12,0.90)");
     }
 
-    // snow sparkles
-    if (terr.biome === "snow" && h > 0.945 && density > 0.12) sparkle(ctx, x + s * 0.5, y + s * 0.5, t + h * 10, 0.8);
+    for (const ws of this.waystones) {
+      const p = this._worldToMini(ws.x, ws.y, size);
+      this._drawMiniDot(g, p.x, p.y, "rgba(166,226,255,0.98)", "rgba(18,38,52,0.90)");
+    }
+
+    for (const dock of this.docks) {
+      const p = this._worldToMini(dock.x, dock.y, size);
+      this._drawMiniDot(g, p.x, p.y, "rgba(236,210,126,0.98)", "rgba(60,44,18,0.90)");
+    }
+
+    const sp = this._worldToMini(this.spawn.x, this.spawn.y, size);
+    this._drawMiniDot(g, sp.x, sp.y, "rgba(255,255,255,0.98)", "rgba(30,30,30,0.92)", 2);
+
+    g.strokeStyle = "rgba(255,255,255,0.22)";
+    g.lineWidth = 2;
+    g.strokeRect(1, 1, size - 2, size - 2);
+
+    g.strokeStyle = "rgba(120,180,255,0.18)";
+    g.lineWidth = 1;
+    g.strokeRect(3, 3, size - 6, size - 6);
+
+    this._minimap = c;
+    this._minimapDirty = false;
+    this._minimapTimer = 0;
+  }
+
+  _drawMiniDot(g, x, y, fill, stroke, r = 1.5) {
+    if (x < 3 || y < 3 || x > g.canvas.width - 4 || y > g.canvas.height - 4) return;
+
+    g.fillStyle = stroke;
+    g.fillRect(x - 2, y - 2, 5, 5);
+
+    g.fillStyle = fill;
+    g.fillRect(x - r, y - r, r * 2 + 1, r * 2 + 1);
+  }
+
+  _worldToMini(x, y, size) {
+    const half = this.boundsRadius;
+    const nx = clamp((x - (this.spawn.x - half)) / (half * 2), 0, 1);
+    const ny = clamp((y - (this.spawn.y - half)) / (half * 2), 0, 1);
+    return {
+      x: (nx * (size - 1)) | 0,
+      y: (ny * (size - 1)) | 0,
+    };
+  }
+
+  /* ===========================
+     Terrain
+  =========================== */
+
+  _terrainN(x, y) {
+    const s = 0.00135;
+    const n1 = fbm(x * s, y * s, 4, 2, 0.5, this.seed);
+    const n2 = fbm(
+      (x + 999) * s * 2.1,
+      (y - 777) * s * 2.1,
+      3,
+      2,
+      0.55,
+      this.seed ^ 1234
+    );
+    const radial = 1 - clamp(
+      Math.hypot(x - this.spawn.x, y - this.spawn.y) / (this.boundsRadius * 1.18),
+      0,
+      1
+    );
+    const t = clamp(n1 * 0.64 + n2 * 0.16 + radial * 0.20, 0, 1);
+    return t;
+  }
+
+  _grassVariant(x, y) {
+    const g = fbm(
+      (x + 211) * 0.0035,
+      (y - 157) * 0.0035,
+      3,
+      2,
+      0.55,
+      this.seed ^ 7711
+    );
+    return clamp(g, 0, 1);
+  }
+
+  _rockVariant(x, y) {
+    const r = fbm(
+      (x - 333) * 0.0042,
+      (y + 517) * 0.0042,
+      3,
+      2,
+      0.58,
+      this.seed ^ 9901
+    );
+    return clamp(r, 0, 1);
+  }
+
+  _sandVariant(x, y) {
+    const s = fbm(
+      (x + 97) * 0.0052,
+      (y - 221) * 0.0052,
+      3,
+      2,
+      0.56,
+      this.seed ^ 6611
+    );
+    return clamp(s, 0, 1);
+  }
+
+  _biomeFromT(t) {
+    if (t < 0.34) return "water";
+    if (t < 0.39) return "sand";
+    if (t < 0.83) return "grass";
+    return "rock";
+  }
+
+  _tileColorFor(biome, t, x = 0, y = 0) {
+    if (biome === "water") {
+      const deep = [22, 120, 230];
+      const mid = [36, 155, 245];
+      const shallow = [92, 205, 255];
+
+      const k = clamp(t / 0.34, 0, 1);
+      const c = lerpRgb(deep, mid, Math.min(1, k * 1.2));
+      return lerpRgb(c, shallow, Math.max(0, (k - 0.45) / 0.55));
+    }
+
+    if (biome === "sand") {
+      const sv = this._sandVariant(x, y);
+
+      const cool = [209, 191, 128];
+      const base = [224, 205, 142];
+      const warm = [236, 218, 158];
+
+      let out;
+      if (sv < 0.45) {
+        out = lerpRgb(cool, base, sv / 0.45);
+      } else {
+        out = lerpRgb(base, warm, (sv - 0.45) / 0.55);
+      }
+
+      const k = clamp((t - 0.34) / 0.05, 0, 1);
+      out = lerpRgb(out, [out[0] + 4, out[1] + 3, out[2] + 2], k * 0.16);
+
+      return out;
+    }
+
+    if (biome === "grass") {
+      const gv = this._grassVariant(x, y);
+
+      const dry = [112, 150, 78];
+      const base = [84, 150, 82];
+      const lush = [72, 170, 88];
+
+      let out;
+      if (gv < 0.42) {
+        out = lerpRgb(dry, base, gv / 0.42);
+      } else {
+        out = lerpRgb(base, lush, (gv - 0.42) / 0.58);
+      }
+
+      const h = clamp((t - 0.39) / 0.44, 0, 1);
+      out = lerpRgb(out, [out[0] + 6, out[1] + 8, out[2] + 4], h * 0.18);
+
+      return out;
+    }
+
+    const rv = this._rockVariant(x, y);
+    const dark = [98, 104, 112];
+    const base = [116, 122, 130];
+    const light = [142, 148, 158];
+
+    let out;
+    if (rv < 0.45) {
+      out = lerpRgb(dark, base, rv / 0.45);
+    } else {
+      out = lerpRgb(base, light, (rv - 0.45) / 0.55);
+    }
+
+    const h = clamp((t - 0.83) / 0.17, 0, 1);
+    out = lerpRgb(out, [out[0] + 8, out[1] + 8, out[2] + 10], h * 0.18);
+
+    return out;
+  }
+
+  _miniColorFor(biome, t, x = 0, y = 0) {
+    if (biome === "water") {
+      return this._tileColorFor(biome, t, x, y);
+    }
+    if (biome === "sand") {
+      const sv = this._sandVariant(x, y);
+      return sv > 0.60 ? [224, 205, 144] : sv < 0.32 ? [192, 174, 112] : [208, 188, 126];
+    }
+    if (biome === "grass") {
+      const gv = this._grassVariant(x, y);
+      return gv > 0.62 ? [70, 140, 72] : gv < 0.32 ? [98, 130, 68] : [78, 136, 74];
+    }
+    return [122, 128, 138];
   }
 }
 
-/* ============================
-   Decorative draw helpers
-   ============================ */
-function drawRock(ctx, x, y, s) {
-  softShadow(ctx, x, y + s * 0.35, s * 0.78, s * 0.35, 0.18);
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.fillStyle = "rgba(55,65,80,0.95)";
-  ctx.beginPath();
-  ctx.ellipse(0, 0, s * 0.75, s * 0.55, -0.35, 0, Math.PI * 2);
-  ctx.fill();
+/* ===========================
+   Small color helpers
+=========================== */
 
-  ctx.globalAlpha = 0.22;
-  ctx.fillStyle = "rgba(255,255,255,0.85)";
-  ctx.beginPath();
-  ctx.ellipse(-s * 0.15, -s * 0.10, s * 0.35, s * 0.18, -0.35, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.restore();
+function rgb(r, g, b) {
+  return `rgb(${r | 0}, ${g | 0}, ${b | 0})`;
 }
 
-function drawTuft(ctx, x, y, biome) {
-  let c = "rgba(20,80,35,0.85)";
-  if (biome === "desert") c = "rgba(150,120,70,0.85)";
-  if (biome === "snow") c = "rgba(160,190,210,0.85)";
-  if (biome === "swamp") c = "rgba(30,80,60,0.85)";
-
-  ctx.save();
-  ctx.globalAlpha = 0.9;
-  ctx.strokeStyle = c;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(x, y);
-  ctx.lineTo(x - 2, y - 6);
-  ctx.moveTo(x + 2, y);
-  ctx.lineTo(x + 1, y - 7);
-  ctx.moveTo(x + 4, y);
-  ctx.lineTo(x + 6, y - 5);
-  ctx.stroke();
-  ctx.restore();
-}
-
-function drawTree(ctx, x, y, scale) {
-  const s = 18 * scale;
-  softShadow(ctx, x, y + s * 0.55, s * 0.95, s * 0.45, 0.22);
-
-  ctx.save();
-  ctx.translate(x, y);
-
-  // trunk
-  ctx.fillStyle = "rgba(92,62,40,0.95)";
-  ctx.fillRect(-s * 0.10, s * 0.15, s * 0.20, s * 0.55);
-
-  // canopy
-  ctx.fillStyle = "rgba(20,90,45,0.95)";
-  ctx.beginPath();
-  ctx.ellipse(0, 0, s * 0.85, s * 0.70, -0.15, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.globalAlpha = 0.20;
-  ctx.fillStyle = "rgba(255,255,255,0.8)";
-  ctx.beginPath();
-  ctx.ellipse(-s * 0.18, -s * 0.18, s * 0.45, s * 0.28, -0.25, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.restore();
-}
-
-function drawWaystone(ctx, x, y, active, t) {
-  const h = 42;
-  const w = 22;
-
-  softShadow(ctx, x, y + 20, 18, 10, 0.22);
-
-  ctx.save();
-  ctx.translate(x, y);
-
-  if (active) {
-    const pulse = Math.sin(t * 3.2) * 0.5 + 0.5;
-    ctx.globalAlpha = 0.16 + pulse * 0.18;
-    ctx.fillStyle = "rgba(140,210,255,0.85)";
-    ctx.beginPath();
-    ctx.ellipse(0, 18, 22, 10, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  ctx.globalAlpha = 1;
-  ctx.fillStyle = active ? "rgba(170,210,255,0.92)" : "rgba(140,160,190,0.92)";
-  ctx.beginPath();
-  // safe rounded rect
-  const r = 6;
-  ctx.moveTo(-w * 0.5 + r, -h * 0.5);
-  ctx.arcTo(w * 0.5, -h * 0.5, w * 0.5, h * 0.5, r);
-  ctx.arcTo(w * 0.5, h * 0.5, -w * 0.5, h * 0.5, r);
-  ctx.arcTo(-w * 0.5, h * 0.5, -w * 0.5, -h * 0.5, r);
-  ctx.arcTo(-w * 0.5, -h * 0.5, w * 0.5, -h * 0.5, r);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.globalAlpha = 0.22;
-  ctx.fillStyle = "rgba(255,255,255,0.85)";
-  ctx.fillRect(-w * 0.5 + 2, -h * 0.5 + 2, 3, h - 4);
-
-  ctx.globalAlpha = 0.65;
-  ctx.fillStyle = active ? "rgba(40,140,220,0.95)" : "rgba(60,80,120,0.9)";
-  ctx.fillRect(-2, -10, 4, 20);
-
-  ctx.restore();
-}
-
-function drawDock(ctx, x, y, facing, t) {
-  // facing: -1 left, +1 right (visual only)
-  softShadow(ctx, x, y + 12, 34, 12, 0.20);
-
-  ctx.save();
-  ctx.translate(x, y);
-
-  // base planks
-  ctx.fillStyle = "rgba(120,85,50,0.95)";
-  ctx.fillRect(-28, -6, 56, 12);
-
-  // highlight
-  ctx.globalAlpha = 0.22;
-  ctx.fillStyle = "rgba(255,255,255,0.85)";
-  ctx.fillRect(-28, -6, 56, 2);
-
-  // posts
-  ctx.globalAlpha = 1;
-  ctx.fillStyle = "rgba(95,65,40,0.95)";
-  ctx.fillRect(-24, -10, 6, 24);
-  ctx.fillRect(18, -10, 6, 24);
-
-  // rope / little flag
-  const bob = Math.sin(t * 2 + x * 0.002) * 0.5 + 0.5;
-  ctx.globalAlpha = 0.55;
-  ctx.strokeStyle = "rgba(230,220,190,0.65)";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(-21, -8);
-  ctx.lineTo(21, -8);
-  ctx.stroke();
-
-  ctx.globalAlpha = 0.70;
-  ctx.fillStyle = "rgba(220,170,110,0.85)";
-  const fx = facing < 0 ? -30 : 30;
-  ctx.beginPath();
-  ctx.moveTo(fx, -14);
-  ctx.lineTo(fx, -6);
-  ctx.lineTo(fx + (facing < 0 ? -10 : 10), -10 - bob * 4);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.restore();
+function lerpRgb(a, b, t) {
+  return [
+    a[0] + (b[0] - a[0]) * t,
+    a[1] + (b[1] - a[1]) * t,
+    a[2] + (b[2] - a[2]) * t,
+  ];
 }

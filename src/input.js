@@ -1,175 +1,182 @@
 // src/input.js
-// v30: robust input (no sticking), dt/fps helpers, optional wheel support
+// v31 STABLE INPUT REWRITE (FULL FILE)
+// Goals:
+// ✅ Fast and simple
+// ✅ Consistent key handling for game.js
+// ✅ Supports both e.key and e.code lookups
+// ✅ Prevents stuck key states on window blur
+// ✅ Keeps API compatible with current game.js:
+//    - new Input(canvas)
+//    - isDown(key)
+//    - wasPressed(key)
+//    - endFrame()
 //
-// This file is intentionally small + reliable.
-// Exposes:
-// - down(key), pressed(key), released(key)
-// - update() to be called once per frame
-// - dt(), fps()
-// - wheelDelta() returns wheel steps since last update (optional)
-//
-// Keys are normalized to lowercase.
-// Arrow keys are: "arrowup", "arrowdown", "arrowleft", "arrowright"
-// Escape: "escape"
+// Replace ENTIRE file: src/input.js
 
 export default class Input {
-  constructor(canvas = null) {
-    this.canvas = canvas;
+  constructor(target = window) {
+    this.target = target || window;
 
-    this._down = new Set();
-    this._pressed = new Set();
-    this._released = new Set();
+    // held keys
+    this.down = new Set();
 
-    this._wheel = 0;
+    // pressed this frame
+    this.pressed = new Set();
 
-    this._lastT = performance.now();
-    this._dt = 1 / 60;
-    this._fps = 60;
+    // bind once
+    this._onKeyDown = (e) => {
+      const variants = this._variants(e);
 
-    this._bind();
-  }
-
-  setCanvas(canvas) {
-    this.canvas = canvas;
-  }
-
-  _normKey(e) {
-    // prefer e.key for layout-aware mapping; we normalize
-    let k = (e.key || "").toLowerCase();
-
-    // unify spacebar
-    if (k === " ") k = "space";
-
-    // unify esc
-    if (k === "esc") k = "escape";
-
-    // unify old browsers
-    if (k === "arrowup" || k === "arrowdown" || k === "arrowleft" || k === "arrowright") return k;
-
-    return k;
-  }
-
-  _bind() {
-    // Important: prevent key “sticking” when window loses focus
-    window.addEventListener(
-      "blur",
-      () => {
-        this._down.clear();
-        this._pressed.clear();
-        this._released.clear();
-        this._wheel = 0;
-      },
-      { passive: true }
-    );
-
-    window.addEventListener(
-      "keydown",
-      (e) => {
-        const k = this._normKey(e);
-
-        // prevent browser scrolling for arrows/space
-        if (k.startsWith("arrow") || k === "space") e.preventDefault();
-
-        // first-frame press detection
-        if (!this._down.has(k)) this._pressed.add(k);
-        this._down.add(k);
-      },
-      { passive: false }
-    );
-
-    window.addEventListener(
-      "keyup",
-      (e) => {
-        const k = this._normKey(e);
-        if (this._down.has(k)) this._released.add(k);
-        this._down.delete(k);
-      },
-      { passive: true }
-    );
-
-    // Mouse wheel (optional)
-    window.addEventListener(
-      "wheel",
-      (e) => {
-        // normalize wheel "steps"
-        // most mice: deltaY ~ 100-120 per notch, trackpads smaller
-        const dy = e.deltaY || 0;
-        if (!dy) return;
-        // accumulate steps
-        this._wheel += dy;
-      },
-      { passive: true }
-    );
-
-    // Prevent right-click menu if desired (safe no-op if canvas not set)
-    window.addEventListener(
-      "contextmenu",
-      (e) => {
-        if (!this.canvas) return;
-        // If user right clicks on canvas, block menu (helps games)
-        const rect = this.canvas.getBoundingClientRect();
-        const mx = e.clientX;
-        const my = e.clientY;
-        if (mx >= rect.left && mx <= rect.right && my >= rect.top && my <= rect.bottom) {
-          e.preventDefault();
+      // mark newly pressed
+      let alreadyDown = false;
+      for (const v of variants) {
+        if (this.down.has(v)) {
+          alreadyDown = true;
+          break;
         }
-      },
-      { passive: false }
-    );
+      }
+
+      if (!alreadyDown) {
+        for (const v of variants) this.pressed.add(v);
+      }
+
+      for (const v of variants) this.down.add(v);
+
+      // stop arrow keys / space from scrolling page
+      if (
+        e.key === "ArrowUp" ||
+        e.key === "ArrowDown" ||
+        e.key === "ArrowLeft" ||
+        e.key === "ArrowRight" ||
+        e.key === " " ||
+        e.code === "Space"
+      ) {
+        e.preventDefault();
+      }
+    };
+
+    this._onKeyUp = (e) => {
+      const variants = this._variants(e);
+      for (const v of variants) this.down.delete(v);
+    };
+
+    this._onBlur = () => {
+      this.down.clear();
+      this.pressed.clear();
+    };
+
+    window.addEventListener("keydown", this._onKeyDown, { passive: false });
+    window.addEventListener("keyup", this._onKeyUp);
+    window.addEventListener("blur", this._onBlur);
   }
 
-  update() {
-    // dt/fps
-    const now = performance.now();
-    const raw = (now - this._lastT) / 1000;
-    this._lastT = now;
+  _variants(e) {
+    const out = new Set();
 
-    // clamp dt to avoid huge spikes when tab was inactive
-    this._dt = Math.max(1 / 240, Math.min(1 / 20, raw || 1 / 60));
-    this._fps = this._dt > 0 ? 1 / this._dt : 60;
+    const key = e?.key;
+    const code = e?.code;
 
-    // pressed/released are "edge" sets; clear them each frame AFTER consumers used them.
-    // call order: game.update reads pressed/released then calls input.update next frame.
-    // To make it foolproof, we clear at the start of each update for the previous frame’s state.
-    this._pressed.clear();
-    this._released.clear();
+    if (key != null) {
+      out.add(key);
+      out.add(String(key).toLowerCase());
+      out.add(String(key).toUpperCase());
+    }
 
-    // decay wheel each frame (keep remainder)
-    // we keep raw delta to allow trackpads; wheelDelta() returns steps.
-    // leave as-is; wheelDelta() will consume.
+    if (code != null) {
+      out.add(code);
+      out.add(String(code).toLowerCase());
+      out.add(String(code).toUpperCase());
+    }
+
+    // normalize arrows
+    if (key === "ArrowLeft" || key === "Left") {
+      out.add("ArrowLeft");
+      out.add("arrowleft");
+      out.add("Left");
+      out.add("left");
+    }
+    if (key === "ArrowRight" || key === "Right") {
+      out.add("ArrowRight");
+      out.add("arrowright");
+      out.add("Right");
+      out.add("right");
+    }
+    if (key === "ArrowUp" || key === "Up") {
+      out.add("ArrowUp");
+      out.add("arrowup");
+      out.add("Up");
+      out.add("up");
+    }
+    if (key === "ArrowDown" || key === "Down") {
+      out.add("ArrowDown");
+      out.add("arrowdown");
+      out.add("Down");
+      out.add("down");
+    }
+
+    // normalize escape
+    if (key === "Escape" || key === "Esc") {
+      out.add("Escape");
+      out.add("escape");
+      out.add("Esc");
+      out.add("esc");
+    }
+
+    // normalize letters/digits into KeyX / DigitN forms too
+    if (typeof key === "string" && key.length === 1) {
+      const ch = key.toUpperCase();
+      if (ch >= "A" && ch <= "Z") {
+        out.add("Key" + ch);
+        out.add(("Key" + ch).toLowerCase());
+      }
+      if (ch >= "0" && ch <= "9") {
+        out.add("Digit" + ch);
+        out.add(("Digit" + ch).toLowerCase());
+      }
+    }
+
+    // normalize space
+    if (key === " " || key === "Spacebar" || code === "Space") {
+      out.add(" ");
+      out.add("Space");
+      out.add("space");
+      out.add("Spacebar");
+    }
+
+    return Array.from(out);
   }
 
-  dt() {
-    return this._dt;
+  isDown(key) {
+    if (key == null) return false;
+    if (this.down.has(key)) return true;
+
+    const s = String(key);
+    if (this.down.has(s.toLowerCase())) return true;
+    if (this.down.has(s.toUpperCase())) return true;
+
+    return false;
   }
 
-  fps() {
-    return this._fps;
+  wasPressed(key) {
+    if (key == null) return false;
+    if (this.pressed.has(key)) return true;
+
+    const s = String(key);
+    if (this.pressed.has(s.toLowerCase())) return true;
+    if (this.pressed.has(s.toUpperCase())) return true;
+
+    return false;
   }
 
-  down(key) {
-    return this._down.has(String(key).toLowerCase());
+  endFrame() {
+    this.pressed.clear();
   }
 
-  pressed(key) {
-    return this._pressed.has(String(key).toLowerCase());
-  }
-
-  released(key) {
-    return this._released.has(String(key).toLowerCase());
-  }
-
-  wheelDelta() {
-    // Convert accumulated delta to steps.
-    // Positive should mean "scroll down" in UI panels.
-    const d = this._wheel;
-    if (!d) return 0;
-
-    // typical mouse wheel notch ~ 120
-    const steps = d / 120;
-
-    // consume all
-    this._wheel = 0;
-    return steps;
+  destroy() {
+    window.removeEventListener("keydown", this._onKeyDown);
+    window.removeEventListener("keyup", this._onKeyUp);
+    window.removeEventListener("blur", this._onBlur);
+    this.down.clear();
+    this.pressed.clear();
   }
 }

@@ -1,17 +1,119 @@
+<!-- index.html -->
+<!-- v32 SAFE PAGE SHELL + CANVAS POLISH (FULL FILE)
+Purpose:
+- keep the current simple boot flow
+- preserve loading src/main.js
+- improve fullscreen presentation
+- improve canvas crispness / browser behavior
+- stay low-risk and not touch game logic
+-->
+
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, viewport-fit=cover"
+  />
+  <meta name="theme-color" content="#0b0f16" />
   <title>Broke Knight</title>
-  <link rel="icon" href="favicon.png" />
+
   <style>
-    html, body { margin:0; padding:0; width:100%; height:100%; background:#070a14; overflow:hidden; }
-    canvas { display:block; width:100vw; height:100vh; }
+    :root {
+      --bg0: #070b11;
+      --bg1: #0d1420;
+      --bg2: #111a28;
+      --edge: rgba(255,255,255,0.06);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at top, rgba(65, 95, 140, 0.14), transparent 34%),
+        linear-gradient(180deg, var(--bg2) 0%, var(--bg1) 42%, var(--bg0) 100%);
+    }
+
+    body {
+      font-family: Arial, sans-serif;
+      color: #e8eefc;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+      overscroll-behavior: none;
+    }
+
+    #game-shell {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at center, rgba(255,255,255,0.02), transparent 55%);
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      outline: none;
+      background: transparent;
+      image-rendering: auto;
+    }
+
+    /* subtle outer frame glow for a more finished look */
+    #game-shell::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      box-shadow:
+        inset 0 0 0 1px var(--edge),
+        inset 0 18px 50px rgba(255,255,255,0.015),
+        inset 0 -30px 80px rgba(0,0,0,0.18);
+    }
+
+    /* tiny fallback label if JS fails */
+    #noscript-msg {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      padding: 14px 18px;
+      border-radius: 12px;
+      background: rgba(0,0,0,0.55);
+      color: #eef4ff;
+      font-size: 14px;
+      border: 1px solid rgba(255,255,255,0.08);
+      backdrop-filter: blur(6px);
+    }
+
+    .js-ready #noscript-msg {
+      display: none;
+    }
   </style>
 </head>
+
 <body>
-  <canvas id="game"></canvas>
+  <div id="game-shell">
+    <canvas id="overworld" tabindex="0" aria-label="Broke Knight game canvas"></canvas>
+  </div>
+
+  <div id="noscript-msg">Enable JavaScript to run Broke Knight.</div>
+
+  <script>
+    document.documentElement.classList.add("js-ready");
+  </script>
   <script type="module" src="./src/main.js"></script>
 </body>
 </html>

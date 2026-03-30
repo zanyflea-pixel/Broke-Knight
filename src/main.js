@@ -1,71 +1,61 @@
 // src/main.js
-// v30 hard-fix: robust fullscreen canvas sizing + correct canvas id (overworld/game).
-// This fixes "still zoomed / UI huge / world missing" issues caused by resizing the wrong canvas
-// or CSS stretching the drawing buffer.
-//
-// - Prefer <canvas id="overworld"> (used in many Broke Knight versions)
-// - Fallback to <canvas id="game">
-// - Force fullscreen CSS size
-// - Set DPR backing buffer (crisp)
-// - Notify game via game.onResize()
+// v31 FIXED BOOT FILE
+// Works with current game.js, which expects: new Game(canvas)
 
 import Game from "./game.js";
 
-const canvas =
-  document.getElementById("overworld") ||
-  document.getElementById("game");
+function findCanvas() {
+  let c = document.getElementById("overworld");
+  if (!c) c = document.querySelector("canvas");
 
-if (!canvas) {
-  throw new Error("Canvas not found. Expected <canvas id='overworld'> or <canvas id='game'> in index.html.");
+  if (!c) {
+    c = document.createElement("canvas");
+    c.id = "overworld";
+    document.body.style.margin = "0";
+    document.body.style.overflow = "hidden";
+    document.body.appendChild(c);
+  }
+
+  c.style.display = "block";
+  return c;
 }
 
-// Force fullscreen canvas styling (prevents CSS stretch weirdness)
-document.documentElement.style.margin = "0";
-document.documentElement.style.padding = "0";
-document.body.style.margin = "0";
-document.body.style.padding = "0";
-document.body.style.overflow = "hidden";
-
-canvas.style.position = "fixed";
-canvas.style.left = "0";
-canvas.style.top = "0";
-canvas.style.width = "100vw";
-canvas.style.height = "100vh";
-canvas.style.display = "block";
-canvas.style.cursor = "crosshair";
-
+const canvas = findCanvas();
 const game = new Game(canvas);
 
-function resizeCanvas() {
-  // CSS pixels (what player sees)
-  const cssW = Math.max(1, window.innerWidth);
-  const cssH = Math.max(1, window.innerHeight);
+function fitCanvas() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
 
-  // DPR backing buffer
-  const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
-  const bufW = Math.floor(cssW * dpr);
-  const bufH = Math.floor(cssH * dpr);
+  if (canvas.width !== w) canvas.width = w;
+  if (canvas.height !== h) canvas.height = h;
 
-  if (canvas.width !== bufW) canvas.width = bufW;
-  if (canvas.height !== bufH) canvas.height = bufH;
-
-  // Ensure clientWidth/clientHeight are correct (some browsers need a reflow)
-  // but the style is already 100vw/100vh.
-
-  if (typeof game.onResize === "function") game.onResize();
+  if (typeof game.setViewSize === "function") {
+    game.setViewSize(w, h);
+  } else if (typeof game.resize === "function") {
+    game.resize(w, h);
+  }
 }
 
-window.addEventListener("resize", resizeCanvas, { passive: true });
-resizeCanvas();
+window.addEventListener("resize", fitCanvas);
+
+fitCanvas();
 
 let last = performance.now();
 
 function loop(now) {
-  const dt = Math.min(0.05, (now - last) / 1000);
+  let dt = (now - last) / 1000;
   last = now;
 
-  game.update(dt);
-  game.draw(now / 1000);
+  if (!Number.isFinite(dt)) dt = 0.016;
+  dt = Math.min(0.05, Math.max(0.001, dt));
+
+  try {
+    game.update(dt);
+    game.draw();
+  } catch (err) {
+    console.error("Game loop error:", err);
+  }
 
   requestAnimationFrame(loop);
 }

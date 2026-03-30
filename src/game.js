@@ -1,834 +1,1134 @@
 // src/game.js
-// v30 gameplay/control fixes:
-// - Movement is ARROW KEYS ONLY (NO WASD) so QWERT can be spells.
-// - Spells: Q/W/R/F (E reserved for interact/docks/waystones)
-// - Enemy spawns are grouped into deterministic camps with a leash (no more "from all over the map").
-// - Options menu hotkeys moved off 1/2 (those are potions).
+// v31 HARD AIM FIX PASS (FULL FILE)
+// Fixes:
+// - spell aim now reads LIVE arrow-key direction first
+// - straight up/down casting works reliably
+// - arrows remain the only movement keys
+// - Q/W/E/R remain spells
+// - mana regen / cooldowns / progression kept intact
 
+import World from "./world.js";
+import { clamp, lerp, dist2, norm, RNG, hash2 } from "./util.js";
+import { Hero, Enemy, Projectile, Loot, makeGear } from "./entities.js";
 import Input from "./input.js";
 import UI from "./ui.js";
-import { RNG, clamp, dist2, norm } from "./util.js";
-import { World } from "./world.js";
-import { Hero, Enemy, Projectile, Loot, makeGear, GearSlots } from "./entities.js";
-import { saveGame, loadGame } from "./save.js";
+import Save from "./save.js";
 
 export default class Game {
   constructor(canvas) {
+    if (!canvas) throw new Error("Game: canvas is required");
+
     this.canvas = canvas;
-    this.ctx = canvas.getContext("2d", { alpha: false });
+    this.ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
 
-    // Fullscreen canvas styling (prevents CSS stretch mismatches)
-    this._applyCanvasStyle();
+    this.w = canvas.width | 0;
+    this.h = canvas.height | 0;
 
-    this.input = new Input(canvas);
-    this.ui = new UI();
+    this.seed = (Date.now() & 0x7fffffff) | 0;
 
-    // View in CSS pixels
-    this.viewW = 800;
-    this.viewH = 600;
-    this.dpr = 1;
+    this.input = new Input(window);
+    this.ui = new UI(canvas);
+    this.save = new Save("broke-knight-save-v31");
 
-    // World created now; view size is set in _syncCanvasSize()
-    this.world = new World(this.viewW, this.viewH);
+    this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
+    this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
 
-    // Create hero at spawn
-    this.hero = new Hero(this.world.spawn.x, this.world.spawn.y);
-
-    // Stable defaults
-    this.hero.level = this.hero.level || 1;
-    this.hero.xp = this.hero.xp || 0;
-    this.hero.nextXp = this.hero.nextXp || 30;
-    this.hero.gold = this.hero.gold || 0;
-    this.hero.potions = this.hero.potions || { hp: 3, mana: 2 };
-    this.hero.state = this.hero.state || { sailing: false, invulnerable: false, invulnT: 0 };
-    this.hero.inventory = this.hero.inventory || [];
-    this.hero.equip = this.hero.equip || { helm: null, chest: null, boots: null, weapon: null, ring: null };
-    this.hero.lastMove = this.hero.lastMove || { x: 1, y: 0 };
-
-    // Camera in world units (same space as world coords)
-    this.cam = { x: 0, y: 0 };
-
-    // Lists
     this.enemies = [];
     this.projectiles = [];
     this.loot = [];
 
-    // UI hint string
-    this.hint = "";
-
-    // Settings (options menu)
-    this.settings = {
-      particles: true,
-      screenshake: true,
-      showFps: false,
-      autoPickupGear: true,
+    this.camera = {
+      x: this.hero.x,
+      y: this.hero.y,
+      zoom: 1,
+      shakeT: 0,
+      shakeMag: 0,
+      sx: 0,
+      sy: 0,
     };
 
-    // Skills definition (QWERT)
-    this.skills = {
-      q: { id: "bolt", name: "Shock Bolt", mana: 6, cd: 0.22, desc: "Fast bolt" },
-      w: { id: "nova", name: "Shock Nova", mana: 14, cd: 1.2, desc: "AoE burst" },
-      r: { id: "dash", name: "Dash", mana: 10, cd: 1.0, desc: "Quick dash" },
-      f: { id: "pierce", name: "Arc Pierce", mana: 10, cd: 0.75, desc: "Piercing bolt" },
+    this.perf = {
+      enemyUpdateRadius: 1100,
+      lootUpdateRadius: 700,
+      projectileUpdateRadius: 1300,
+      spawnRadius: 1200,
+      drawPad: 180,
+      maxEnemies: 72,
+      maxLoot: 100,
+      cleanupTimer: 0,
+      cleanupEvery: 0.35,
     };
 
-    // Cooldowns
-    this.cd = { q: 0, w: 0, r: 0, f: 0 };
+    this.time = 0;
+    this._dtClamp = 0.05;
+    this._autosaveT = 0;
 
-    // Deterministic spawn camps
-    this.spawnCamps = [];
-    this._spawnTimers = new Map();
-    this._buildSpawnCamps();
+    this._spawnTimer = 0;
+    this._campRespawn = 60;
+    this._campState = new Map();
+    this._rng = new RNG(hash2(this.seed, 9001));
 
-    // Quests
-    this.quests = [];
-    this._initQuests();
+    this.menu = { open: null };
 
-    // Timers
-    this._saveT = 0;
-    this._t = 0;
+    this.quests = this._makeQuests();
 
-    // Make sizing correct immediately
-    this._syncCanvasSize(true);
+    this.progress = {
+      discoveredWaystones: new Set(),
+      discoveredDocks: new Set(),
+      clearedCamps: new Set(),
+      eliteKills: 0,
+      currentZoneText: "",
+      currentZoneId: "",
+      zoneMsgCooldown: 0,
+    };
 
-    // Load save
-    const save = loadGame();
-    if (save) this.applySave(save);
+    this._pickupMsgCooldown = 0;
+    this._levelMsgShown = this.hero.level || 1;
+    this._spellMsgCooldown = 0;
 
-    // Ensure enemies exist
-    this._ensureCampsSpawned(true);
+    this.aim = { x: 1, y: 0 };
+
+    this.spells = {
+      q: { name: "Bolt", mana: 6, cd: 0.22 },
+      w: { name: "Nova", mana: 14, cd: 1.8 },
+      e: { name: "Dash", mana: 8, cd: 1.05 },
+      r: { name: "Orb", mana: 18, cd: 2.4 },
+    };
+    this.spellCd = { q: 0, w: 0, e: 0, r: 0 };
+
+    this._tryLoad();
+    this._primeCamps();
+
+    this.setViewSize(this.w, this.h);
   }
 
-  _applyCanvasStyle() {
-    try {
-      document.documentElement.style.margin = "0";
-      document.documentElement.style.padding = "0";
-      document.body.style.margin = "0";
-      document.body.style.padding = "0";
-      document.body.style.overflow = "hidden";
-    } catch {}
+  setViewSize(w, h) {
+    this.w = w | 0;
+    this.h = h | 0;
 
-    const c = this.canvas;
-    c.style.position = "fixed";
-    c.style.left = "0";
-    c.style.top = "0";
-    c.style.width = "100vw";
-    c.style.height = "100vh";
-    c.style.display = "block";
+    if (this.canvas) {
+      this.canvas.width = this.w;
+      this.canvas.height = this.h;
+    }
+
+    this.world?.setViewSize?.(this.w, this.h);
+    this.ui?.setViewSize?.(this.w, this.h);
   }
 
-  // Called externally if desired; safe to call any time.
-  onResize() {
-    this._syncCanvasSize(true);
+  resize(w, h) {
+    this.setViewSize(w, h);
   }
 
-  _syncCanvasSize(force = false) {
-    // Use window size in CSS pixels (the actual visible screen space)
-    const cssW = Math.max(1, window.innerWidth);
-    const cssH = Math.max(1, window.innerHeight);
+  _tryLoad() {
+    const s = this.save.load();
+    if (!s) return;
 
-    // DPR backing buffer
-    const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
-    const bufW = Math.floor(cssW * dpr);
-    const bufH = Math.floor(cssH * dpr);
+    if (Number.isFinite(s.seed) && s.seed !== 0) {
+      this.seed = s.seed | 0;
+      this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
+    }
 
-    const changed =
-      force ||
-      cssW !== this.viewW ||
-      cssH !== this.viewH ||
-      dpr !== this.dpr ||
-      this.canvas.width !== bufW ||
-      this.canvas.height !== bufH;
+    if (s.hero) {
+      Object.assign(this.hero, s.hero);
+      this._nudgeToLand();
+    }
 
-    if (!changed) return;
+    if (Array.isArray(s.quests)) {
+      this.quests = s.quests;
+    }
 
-    this.viewW = cssW;
-    this.viewH = cssH;
-    this.dpr = dpr;
+    if (s.progress && typeof s.progress === "object") {
+      this.progress.discoveredWaystones = new Set(
+        Array.isArray(s.progress.discoveredWaystones) ? s.progress.discoveredWaystones : []
+      );
+      this.progress.discoveredDocks = new Set(
+        Array.isArray(s.progress.discoveredDocks) ? s.progress.discoveredDocks : []
+      );
+      this.progress.clearedCamps = new Set(
+        Array.isArray(s.progress.clearedCamps) ? s.progress.clearedCamps : []
+      );
+      this.progress.eliteKills = Math.max(0, s.progress.eliteKills | 0);
+    }
 
-    // Apply backing buffer size
-    this.canvas.width = bufW;
-    this.canvas.height = bufH;
+    if (s.hero?.lastMove && Number.isFinite(s.hero.lastMove.x) && Number.isFinite(s.hero.lastMove.y)) {
+      const n = norm(s.hero.lastMove.x, s.hero.lastMove.y);
+      if (n.x || n.y) this.aim = { x: n.x, y: n.y };
+    }
 
-    // Let world sync view metrics
-    this.world.setViewSize?.(this.viewW, this.viewH);
+    this._levelMsgShown = this.hero.level || 1;
   }
 
-  /* ============================
-     SAVE / LOAD
-     ============================ */
-  applySave(s) {
-    try {
-      if (s.settings) this.settings = { ...this.settings, ...s.settings };
+  _save() {
+    this.save.save({
+      seed: this.seed,
+      hero: {
+        x: this.hero.x,
+        y: this.hero.y,
+        hp: this.hero.hp,
+        mana: this.hero.mana,
+        gold: this.hero.gold,
+        level: this.hero.level,
+        xp: this.hero.xp,
+        nextXp: this.hero.nextXp,
+        potions: this.hero.potions,
+        inventory: this.hero.inventory,
+        equip: this.hero.equip,
+        state: this.hero.state,
+        lastMove: this.hero.lastMove,
+      },
+      quests: this.quests,
+      progress: {
+        discoveredWaystones: Array.from(this.progress.discoveredWaystones),
+        discoveredDocks: Array.from(this.progress.discoveredDocks),
+        clearedCamps: Array.from(this.progress.clearedCamps),
+        eliteKills: this.progress.eliteKills | 0,
+      },
+    });
+  }
 
-      if (s.hero) {
-        Object.assign(this.hero, s.hero);
+  _msg(text, t = 2.2) {
+    this.ui?.setMsg?.(text, t);
+  }
 
-        this.hero.potions = this.hero.potions || { hp: 3, mana: 2 };
-        this.hero.state = this.hero.state || { sailing: false, invulnerable: false, invulnT: 0 };
-        this.hero.inventory = this.hero.inventory || [];
-        this.hero.equip = this.hero.equip || { helm: null, chest: null, boots: null, weapon: null, ring: null };
-        this.hero.lastMove = this.hero.lastMove || { x: 1, y: 0 };
+  _shake(t = 0.08, mag = 3) {
+    this.camera.shakeT = Math.max(this.camera.shakeT, t);
+    this.camera.shakeMag = Math.max(this.camera.shakeMag, mag);
+  }
 
-        if (!Number.isFinite(this.hero.x)) this.hero.x = this.world.spawn.x;
-        if (!Number.isFinite(this.hero.y)) this.hero.y = this.world.spawn.y;
-        if (!Number.isFinite(this.hero.hp)) this.hero.hp = this.hero.getStats().maxHp;
-        if (!Number.isFinite(this.hero.mana)) this.hero.mana = this.hero.getStats().maxMana;
-      }
+  _withinRadius(x, y, r) {
+    return dist2(x, y, this.camera.x, this.camera.y) <= r * r;
+  }
 
-      if (s.world?.waystonesActivated && Array.isArray(s.world.waystonesActivated)) {
-        for (const i of s.world.waystonesActivated) {
-          const w = this.world.waystones?.[i];
-          if (w) w.activated = true;
+  _viewBoundsWorld() {
+    const cam = this.camera;
+    const z = cam.zoom || 1;
+    const halfW = (this.w * 0.5) / z;
+    const halfH = (this.h * 0.5) / z;
+    const pad = this.perf.drawPad;
+    return {
+      x0: cam.x - halfW - pad,
+      x1: cam.x + halfW + pad,
+      y0: cam.y - halfH - pad,
+      y1: cam.y + halfH + pad,
+    };
+  }
+
+  _inView(x, y, vb) {
+    return x >= vb.x0 && x <= vb.x1 && y >= vb.y0 && y <= vb.y1;
+  }
+
+  _nudgeToLand() {
+    if (this.world?.canWalk?.(this.hero.x, this.hero.y)) return;
+
+    const sx = this.hero.x;
+    const sy = this.hero.y;
+    for (let r = 0; r <= 600; r += 24) {
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2;
+        const x = sx + Math.cos(a) * r;
+        const y = sy + Math.sin(a) * r;
+        if (this.world.canWalk(x, y)) {
+          this.hero.x = x;
+          this.hero.y = y;
+          return;
         }
       }
+    }
+  }
 
-      if (Array.isArray(s.quests)) this.quests = s.quests;
-      else if (s.quests?.active && Array.isArray(s.quests.active)) this.quests = s.quests.active;
+  _grantGold(n) {
+    this.hero.gold += Math.max(0, n | 0);
+  }
 
-      // If saved while sailing, clamp to valid water spot
-      if (this.hero.state?.sailing && !this.world.canSail(this.hero.x, this.hero.y)) {
-        const d = this.world.nearestDock(this.hero.x, this.hero.y, 800) || this.world.docks?.[0];
-        if (d) {
-          const p = this._pushFromDockToWater(d);
-          if (p) {
-            this.hero.x = p.x;
-            this.hero.y = p.y;
-          } else this.hero.state.sailing = false;
-        } else {
-          this.hero.state.sailing = false;
+  _grantXP(n) {
+    this.hero.giveXP?.(Math.max(0, n | 0));
+  }
+
+  _coolMsg(text, t = 1.6) {
+    if (this._pickupMsgCooldown > 0) return;
+    this._pickupMsgCooldown = 0.45;
+    this._msg(text, t);
+  }
+
+  _spellMsg(text, t = 1.0) {
+    if (this._spellMsgCooldown > 0) return;
+    this._spellMsgCooldown = 0.3;
+    this._msg(text, t);
+  }
+
+  _itemPower(it) {
+    if (!it) return -999999;
+    const s = it.stats || {};
+    return (s.dmg || 0) * 3 + (s.armor || 0) * 2 + (s.crit || 0) * 100 + (it.level || 0);
+  }
+
+  _maybeAutoEquip(gear) {
+    if (!gear || !gear.slot) return false;
+
+    const slot = gear.slot;
+    const current = this.hero.equip?.[slot] || null;
+
+    if (!current) {
+      this.hero.equip[slot] = gear;
+      return true;
+    }
+
+    const oldPower = this._itemPower(current);
+    const newPower = this._itemPower(gear);
+
+    if (newPower > oldPower) {
+      this.hero.equip[slot] = gear;
+      return true;
+    }
+
+    return false;
+  }
+
+  _pickupNearbyLootBonus() {
+    for (const l of this.loot) {
+      if (!l.alive) continue;
+      if (dist2(this.hero.x, this.hero.y, l.x, l.y) < 26 * 26) {
+        const kind = l.kind;
+        const data = l.data || {};
+
+        if (kind === "gold") {
+          const amt = Math.max(1, data.amount | 0);
+          this.hero.gold += amt;
+          this._coolMsg(`+${amt} Gold`);
+        } else if (kind === "potion") {
+          const type = data.potionType || "hp";
+          const amt = Math.max(1, data.amount | 0);
+          this.hero.potions[type] = (this.hero.potions[type] | 0) + amt;
+          this._coolMsg(type === "mana" ? "Mana potion found" : "HP potion found");
+        } else if (kind === "gear" && data.gear) {
+          this.hero.inventory.push(data.gear);
+          const equipped = this._maybeAutoEquip(data.gear);
+          this._coolMsg(equipped ? `Equipped: ${data.gear.name}` : `Found: ${data.gear.name}`, 1.8);
         }
-      }
-    } catch {
-      // ignore corrupt save
-    }
-  }
 
-  /* ============================
-     QUESTS
-     ============================ */
-  _initQuests() {
-    if (Array.isArray(this.quests) && this.quests.length) return;
-
-    this.quests = [
-      { id: "welcome", name: "A Knight, Broke", desc: "Find a dock and board a boat (Press E at a dock).", state: "active", progress: { boarded: 0 } },
-      { id: "attune", name: "Waystone Attunement", desc: "Attune a waystone (Press E near a waystone).", state: "active", progress: { attuned: 0 } },
-      { id: "kills", name: "Clear the Camps", desc: "Defeat 12 enemies.", state: "active", progress: { kills: 0, goal: 12 }, rewardGold: 45 },
-      { id: "gold", name: "Earn Some Coin", desc: "Collect 120 gold.", state: "active", progress: { gold: 0, goal: 120 }, rewardGold: 25 },
-    ];
-  }
-
-  _questById(id) {
-    return this.quests.find((q) => q.id === id);
-  }
-
-  _completeQuest(id) {
-    const q = this._questById(id);
-    if (!q || q.state === "done") return;
-    q.state = "done";
-    if (q.rewardGold) {
-      this.hero.gold += q.rewardGold;
-      this.ui.setMsg(`Quest complete! +${q.rewardGold} gold`);
-    } else {
-      this.ui.setMsg("Quest complete!");
-    }
-  }
-
-  onQuestKill() {
-    const q = this._questById("kills");
-    if (q && q.state !== "done") {
-      q.progress.kills = (q.progress.kills || 0) + 1;
-      if (q.progress.kills >= q.progress.goal) this._completeQuest("kills");
-    }
-  }
-
-  onQuestGold(amt) {
-    const q = this._questById("gold");
-    if (q && q.state !== "done") {
-      q.progress.gold = (q.progress.gold || 0) + Math.max(0, amt);
-      if (q.progress.gold >= q.progress.goal) this._completeQuest("gold");
-    }
-  }
-
-  onQuestBoarded() {
-    const q = this._questById("welcome");
-    if (q && q.state !== "done") {
-      q.progress.boarded = 1;
-      this._completeQuest("welcome");
-    }
-  }
-
-  onQuestAttuned() {
-    const q = this._questById("attune");
-    if (q && q.state !== "done") {
-      q.progress.attuned = 1;
-      this._completeQuest("attune");
-    }
-  }
-
-  /* ============================
-     SPAWNS
-     ============================ */
-  _buildSpawnCamps() {
-    const rng = new RNG((this.world.seed || 12345) + 99111);
-    const camps = [];
-    let tries = 0;
-
-    while (camps.length < 10 && tries++ < 4000) {
-      const x = 200 + rng.float() * (this.world.width - 400);
-      const y = 200 + rng.float() * (this.world.height - 400);
-
-      if (!this.world.canWalk(x, y)) continue;
-      if (dist2(x, y, this.world.spawn.x, this.world.spawn.y) < 900 * 900) continue;
-
-      let ok = true;
-      for (const c of camps) {
-        if (dist2(x, y, c.x, c.y) < 600 * 600) {
-          ok = false;
-          break;
-        }
-      }
-      if (!ok) continue;
-
-      const biome = this.world.biomeAt(x, y);
-      const types = this._enemyPoolForBiome(biome);
-
-      camps.push({
-        x,
-        y,
-        biome,
-        tier: 1 + ((rng.float() * 3) | 0),
-        groupSize: 4 + ((rng.float() * 3) | 0),
-        types,
-      });
-    }
-
-    this.spawnCamps = camps;
-    for (let i = 0; i < this.spawnCamps.length; i++) this._spawnTimers.set(i, 0);
-  }
-
-  _enemyPoolForBiome(biome) {
-    if (biome === "desert") return ["scorpion", "raider", "grunt"];
-    if (biome === "swamp") return ["slime", "leech", "grunt"];
-    if (biome === "snow") return ["wisp", "wolf", "grunt"];
-    if (biome === "forest") return ["sprite", "brute", "grunt"];
-    return ["grunt", "brute", "slime"];
-  }
-
-  _ensureCampsSpawned(force = false) {
-    for (let i = 0; i < this.spawnCamps.length; i++) {
-      const c = this.spawnCamps[i];
-      const timer = this._spawnTimers.get(i) || 0;
-
-      // only consider enemies in/near this camp
-      const aliveNear = this.enemies.some((e) => e.alive && e.ai && e.ai.campId === i);
-      if (!aliveNear && (force || timer <= 0)) {
-        this._spawnCampGroup(c, i);
-        this._spawnTimers.set(i, 60.0);
+        l.alive = false;
       }
     }
   }
 
-  _spawnCampGroup(c, campId) {
-    const rng = new RNG(((this.world.seed || 12345) ^ ((c.x | 0) * 31) ^ ((c.y | 0) * 97) ^ (campId * 131)) >>> 0);
+  _regenMana(dt) {
+    const st = this.hero.getStats?.() || { maxMana: 60 };
+    if (this.hero.mana >= st.maxMana) return;
 
-    for (let k = 0; k < c.groupSize; k++) {
-      const ang = rng.float() * Math.PI * 2;
-      const rad = 70 + rng.float() * 120;
-      const ex = c.x + Math.cos(ang) * rad;
-      const ey = c.y + Math.sin(ang) * rad;
+    const base = this.hero.state?.sailing ? 3.0 : 4.5;
+    this.hero.mana = Math.min(st.maxMana, this.hero.mana + base * dt);
+  }
 
-      if (!this.world.canWalk(ex, ey)) continue;
-
-      const t = c.types[rng.int(0, c.types.length - 1)];
-      const e = new Enemy(ex, ey, c.tier, t, c.biome);
-
-      // Camp AI: enemies stay grouped, only aggro nearby, and leash back to camp.
-      e.ai = {
-        campId,
-        centerX: c.x,
-        centerY: c.y,
-        leash: 280,
-        aggro: false,
-        roamT: rng.float() * 3.0,
-        roamAng: rng.float() * Math.PI * 2,
-      };
-
-      this.enemies.push(e);
+  _tickSpellCooldowns(dt) {
+    for (const k of Object.keys(this.spellCd)) {
+      this.spellCd[k] = Math.max(0, this.spellCd[k] - dt);
     }
   }
 
-  /* ============================
-     INTERACTIONS
-     ============================ */
-  _nearestWaystone() {
-    let best = null;
-    let bestD = 1e18;
-    for (const w of this.world.waystones || []) {
-      const d = dist2(this.hero.x, this.hero.y, w.x, w.y);
-      if (d < bestD) {
-        bestD = d;
-        best = w;
-      }
+  _canCastSpell(key) {
+    const def = this.spells[key];
+    if (!def) return false;
+    if ((this.spellCd[key] || 0) > 0) {
+      this._spellMsg(`${def.name} cooling down`, 0.8);
+      return false;
     }
-    return best ? { w: best, d: bestD } : null;
+    if ((this.hero.mana || 0) < def.mana) {
+      this._spellMsg("Not enough mana", 0.9);
+      return false;
+    }
+    return true;
   }
 
-  _pushFromDockToWater(dock) {
-    const dir = dock.facing || 1;
-    let x = dock.x + dir * 90;
-    let y = dock.y;
+  _startSpell(key) {
+    const def = this.spells[key];
+    this.hero.mana -= def.mana;
+    this.spellCd[key] = def.cd;
+  }
 
-    for (let i = 0; i < 18; i++) {
-      if (this.world.canSail(x, y)) return { x, y };
-      x += dir * 22;
-      y += i % 2 === 0 ? 8 : -8;
-    }
+  _liveArrowAim() {
+    const left = this.input.isDown("ArrowLeft");
+    const right = this.input.isDown("ArrowRight");
+    const up = this.input.isDown("ArrowUp");
+    const down = this.input.isDown("ArrowDown");
 
-    const step = 26;
-    for (let r = 40; r < 420; r += step) {
-      for (let a = 0; a < Math.PI * 2; a += 0.35) {
-        const px = dock.x + Math.cos(a) * r;
-        const py = dock.y + Math.sin(a) * r;
-        if (this.world.canSail(px, py)) return { x: px, y: py };
-      }
+    let ax = 0;
+    let ay = 0;
+    if (left) ax -= 1;
+    if (right) ax += 1;
+    if (up) ay -= 1;
+    if (down) ay += 1;
+
+    if (ax !== 0 || ay !== 0) {
+      return norm(ax, ay);
     }
     return null;
   }
 
-  _handleOptionsInputs() {
-    if (!this.ui.open.options) return;
+  _currentAim() {
+    // 1) live arrows right now
+    const live = this._liveArrowAim();
+    if (live) return live;
 
-    // Options menu hotkeys (avoid 1/2 because those are potions)
-    // Z: particles, X: screenshake, C: show FPS, V: auto-pickup gear
-    const z = this.input.pressed("z");
-    const x = this.input.pressed("x");
-    const c = this.input.pressed("c");
-    const v = this.input.pressed("v");
+    // 2) saved explicit aim
+    const saved = norm(this.aim.x || 0, this.aim.y || 0);
+    if (saved.x || saved.y) return saved;
 
-    if (z) this.settings.particles = !this.settings.particles;
-    if (x) this.settings.screenshake = !this.settings.screenshake;
-    if (c) this.settings.showFps = !this.settings.showFps;
-    if (v) this.settings.autoPickupGear = !this.settings.autoPickupGear;
+    // 3) hero last move
+    const lm = this.hero.lastMove || { x: 1, y: 0 };
+    const fallback = norm(lm.x || 0, lm.y || 0);
+    if (fallback.x || fallback.y) return fallback;
 
-    if (z || x || c || v) this.ui.setMsg("Options updated.");
+    return { x: 1, y: 0 };
   }
 
-  _handleWaystoneInputs() {
-    const near = this._nearestWaystone();
-    if (near && near.d < 70 * 70) {
-      this.hint = near.w.activated ? "Waystone (attuned) — Press T for travel list" : "Press E to attune Waystone";
-      if (this.input.pressed("e") && !near.w.activated) {
-        near.w.activated = true;
-        this.ui.setMsg(`Attuned: ${near.w.name || "Waystone"}`);
-        this.onQuestAttuned();
-      }
-    }
-
-    if (this.ui.open.waypoints) {
-      const act = (this.world.waystones || []).filter((w) => w.activated);
-      for (let n = 1; n <= 9; n++) {
-        if (this.input.pressed(String(n))) {
-          const target = act[n - 1];
-          if (!target) {
-            this.ui.setMsg("No waystone in that slot.");
-            continue;
-          }
-          if (this.hero.state.sailing) {
-            this.ui.setMsg("You cannot waystone-travel while sailing.");
-            continue;
-          }
-          this.hero.x = target.x + 40;
-          this.hero.y = target.y + 40;
-          this.ui.setMsg(`Traveled to: ${target.name || "Waystone"}`);
-          this.ui.closeAll();
-        }
-      }
-    }
+  getSpellState() {
+    return {
+      q: { ...this.spells.q, cdLeft: this.spellCd.q || 0 },
+      w: { ...this.spells.w, cdLeft: this.spellCd.w || 0 },
+      e: { ...this.spells.e, cdLeft: this.spellCd.e || 0 },
+      r: { ...this.spells.r, cdLeft: this.spellCd.r || 0 },
+    };
   }
 
-  _handleDockSailing() {
-    const nearDock = this.world.nearestDock(this.hero.x, this.hero.y, 90);
+  _onEnemyDefeated(enemy) {
+    const baseXP = enemy.xpValue?.() || 6;
+    this.hero.giveXP?.(baseXP);
+    this._questAddProgress("q_kill_5", 1);
 
-    if (!this.hero.state.sailing) {
-      if (nearDock) {
-        if (!this.hint) this.hint = "Dock — Press E to board and sail";
-        if (this.input.pressed("e")) {
-          const p = this._pushFromDockToWater(nearDock);
-          if (p) {
-            this.hero.x = p.x;
-            this.hero.y = p.y;
-            this.hero.state.sailing = true;
-            this.ui.setMsg("Boarded boat. You are now sailing.");
-            this.onQuestBoarded();
-          } else this.ui.setMsg("No water found near dock.");
-        }
-      }
-      return;
+    if (enemy.elite) {
+      this.progress.eliteKills += 1;
+      const bonusXP = 6 + enemy.tier * 2;
+      const bonusGold = 8 + enemy.tier * 3;
+      this._grantXP(bonusXP);
+      this._grantGold(bonusGold);
+      this._msg(`Elite defeated! (+${baseXP + bonusXP} XP, +${bonusGold} Gold)`, 2.6);
+      this._shake(0.08, 3.2);
     }
 
-    if (nearDock) {
-      if (!this.hint) this.hint = "Dock — Press E to disembark";
-      if (this.input.pressed("e")) {
-        this.hero.x = nearDock.x;
-        this.hero.y = nearDock.y;
-        this.hero.state.sailing = false;
-        this.ui.setMsg("Disembarked.");
-      }
-    } else {
-      if (!this.hint) this.hint = "Sailing — find a dock to disembark";
+    this._dropLoot(enemy.x, enemy.y, enemy.tier || 1, enemy.kind, !!enemy.elite);
+  }
+
+  _makeQuests() {
+    return [
+      { id: "q_kill_5", name: "Thin the Camps", desc: "Defeat 5 enemies.", goal: 5, prog: 0, done: false, xp: 25, gold: 25 },
+      { id: "q_find_way", name: "Touch the Waystone", desc: "Find and touch a waystone.", goal: 1, prog: 0, done: false, xp: 40, gold: 40 },
+      { id: "q_sail", name: "Test the Waters", desc: "Use a dock and sail.", goal: 1, prog: 0, done: false, xp: 55, gold: 60 },
+    ];
+  }
+
+  _questAddProgress(id, amt = 1) {
+    const q = this.quests.find(v => v.id === id);
+    if (!q || q.done) return;
+
+    q.prog = Math.min(q.goal, (q.prog | 0) + (amt | 0));
+    if (q.prog >= q.goal) {
+      q.done = true;
+      this.hero.giveXP?.(q.xp || 0);
+      this.hero.gold += q.gold || 0;
+      this._msg(`Quest complete: ${q.name} (+${q.xp} XP, +${q.gold} Gold)`, 3.2);
     }
   }
 
-  /* ============================
-     POTIONS + COMBAT
-     ============================ */
-  usePotion(type) {
-    if (!this.hero.potions) this.hero.potions = { hp: 0, mana: 0 };
-
-    if (type === "hp") {
-      if (this.hero.potions.hp <= 0) {
-        this.ui.setMsg("No HP potions.");
-        return;
-      }
-      this.hero.potions.hp--;
-      this.hero.hp = clamp(this.hero.hp + 40, 0, this.hero.getStats().maxHp);
-      this.ui.setMsg("Used HP potion.");
-      return;
-    }
-
-    if (type === "mana") {
-      if (this.hero.potions.mana <= 0) {
-        this.ui.setMsg("No Mana potions.");
-        return;
-      }
-      this.hero.potions.mana--;
-      this.hero.mana = clamp(this.hero.mana + 35, 0, this.hero.getStats().maxMana);
-      this.ui.setMsg("Used Mana potion.");
-      return;
+  _primeCamps() {
+    const camps = this.world?.camps || [];
+    for (const c of camps) {
+      this._campState.set(c.id, {
+        nextAt: 0,
+        wasAliveLastCheck: false,
+        announcedNearby: false,
+        clearedOnce: this.progress.clearedCamps.has(c.id),
+      });
     }
   }
 
-  _canCast(key) {
-    if (this.cd[key] > 0) return false;
-    const sk = this.skills[key];
-    if (!sk) return false;
-    if (this.hero.mana < sk.mana) return false;
-    return true;
-  }
-
-  _spendManaFor(key) {
-    const sk = this.skills[key];
-    if (!sk) return;
-    this.hero.mana = Math.max(0, this.hero.mana - sk.mana);
-    this.cd[key] = sk.cd;
-    this.ui.skillName = sk.name;
-    this.ui.skillPulse = 0.45;
-  }
-
-  castShockBolt(mult = 1, pierce = false) {
-    const dir = this.hero.lastMove || { x: 1, y: 0 };
-    const n = norm(dir.x, dir.y);
-    const speed = 520;
-    const vx = n.x * speed;
-    const vy = n.y * speed;
-
-    const dmg = 6 * mult + (this.hero.level - 1) * 0.6;
-    this.projectiles.push(new Projectile(this.hero.x, this.hero.y, vx, vy, dmg, 0.95, this.hero.level, { kind: pierce ? "pierce" : "bolt", pierce: !!pierce }));
-  }
-
-  castShockNova() {
-    const radius = 140;
-    const base = 7 + (this.hero.level - 1) * 0.8;
-
-    let hit = 0;
+  _campAliveCount(campId) {
+    let alive = 0;
     for (const e of this.enemies) {
-      if (!e.alive) continue;
-      if (dist2(this.hero.x, this.hero.y, e.x, e.y) <= radius * radius) {
-        e.takeDamage?.(base);
-        hit++;
-      }
+      if (e.alive && e.home && e.home.id === campId) alive++;
     }
-    this.ui.setMsg(hit ? `Nova hit ${hit}!` : "Nova fizzled.");
+    return alive;
   }
 
-  castDash() {
-    if (this.hero.state.sailing) return;
-    const dir = this.hero.lastMove || { x: 1, y: 0 };
-    const n = norm(dir.x, dir.y);
+  _spawnFromCamps(dt) {
+    if (this.enemies.length >= this.perf.maxEnemies) return;
 
-    const dashDist = 140;
-    const nx = this.hero.x + n.x * dashDist;
-    const ny = this.hero.y + n.y * dashDist;
+    this._spawnTimer += dt;
+    if (this._spawnTimer < 0.18) return;
+    this._spawnTimer = 0;
 
-    if (this.world.canWalk(nx, ny)) {
-      this.hero.x = nx;
-      this.hero.y = ny;
-      this.hero.state.invulnerable = true;
-      this.hero.state.invulnT = 0.25;
-    }
-  }
+    const camps = this.world?.camps || [];
+    const t = this.time;
 
-  castArcPierce() {
-    const dir = this.hero.lastMove || { x: 1, y: 0 };
-    const n = norm(dir.x, dir.y);
-    const speed = 430;
-    const vx = n.x * speed;
-    const vy = n.y * speed;
+    for (const c of camps) {
+      if (this.enemies.length >= this.perf.maxEnemies) break;
+      if (!this._withinRadius(c.x, c.y, this.perf.spawnRadius)) continue;
 
-    const dmg = 9 + (this.hero.level - 1) * 0.9;
-    this.projectiles.push(new Projectile(this.hero.x, this.hero.y, vx, vy, dmg, 1.1, this.hero.level, { kind: "pierce", pierce: true }));
-  }
+      const st = this._campState.get(c.id) || {
+        nextAt: 0,
+        wasAliveLastCheck: false,
+        announcedNearby: false,
+        clearedOnce: this.progress.clearedCamps.has(c.id),
+      };
 
-  dropLoot(x, y, tier = 1) {
-    const rng = new RNG(((this.world.seed || 12345) ^ ((x | 0) * 31) ^ ((y | 0) * 97) ^ ((this._t * 10) | 0)) >>> 0);
+      const alive = this._campAliveCount(c.id);
 
-    const g = 3 + ((rng.float() * (5 + tier * 2)) | 0);
-    this.loot.push(new Loot(x + rng.float() * 10 - 5, y + rng.float() * 10 - 5, { kind: "gold", amt: g }));
-
-    if (rng.float() < 0.14) {
-      this.loot.push(new Loot(x + rng.float() * 18 - 9, y + rng.float() * 18 - 9, { kind: "potion", type: rng.float() < 0.6 ? "hp" : "mana" }));
-    }
-
-    if (rng.float() < 0.18) {
-      const slot = GearSlots[rng.int(0, GearSlots.length - 1)];
-      const rarityRoll = rng.float();
-      const rarity = rarityRoll > 0.985 ? "legendary" : rarityRoll > 0.93 ? "epic" : rarityRoll > 0.78 ? "rare" : "common";
-      const gear = makeGear(rng, slot, rarity, tier);
-      this.loot.push(new Loot(x + rng.float() * 22 - 11, y + rng.float() * 22 - 11, { kind: "gear", gear }));
-    }
-  }
-
-  _pickupLoot() {
-    const r2 = 55 * 55;
-    for (let i = this.loot.length - 1; i >= 0; i--) {
-      const L = this.loot[i];
-      if (dist2(this.hero.x, this.hero.y, L.x, L.y) > r2) continue;
-
-      const it = L.item;
-      if (it?.kind === "gold") {
-        const amt = it.amt || 1;
-        this.hero.gold += amt;
-        this.onQuestGold(amt);
-        this.loot.splice(i, 1);
-        continue;
-      }
-
-      if (it?.kind === "potion") {
-        const type = it.type === "mana" ? "mana" : "hp";
-        this.hero.potions[type] = (this.hero.potions[type] || 0) + 1;
-        this.ui.setMsg(`Picked up ${type.toUpperCase()} potion.`);
-        this.loot.splice(i, 1);
-        continue;
-      }
-
-      if (it?.kind === "gear" && it.gear) {
-        if (this.settings.autoPickupGear) {
-          this.hero.inventory.push(it.gear);
-          this.ui.setMsg(`Picked up: ${it.gear.name}`);
-          this.loot.splice(i, 1);
+      if (alive === 0 && st.wasAliveLastCheck) {
+        if (!st.clearedOnce) {
+          st.clearedOnce = true;
+          this.progress.clearedCamps.add(c.id);
+          const xp = 8 + c.tier * 4;
+          const gold = 12 + c.tier * 4;
+          this._grantGold(gold);
+          this._grantXP(xp);
+          this._msg(`Camp cleared! (+${xp} XP, +${gold} Gold)`, 3);
+        } else {
+          this._msg("Camp cleared again.", 2);
         }
       }
+
+      st.wasAliveLastCheck = alive > 0;
+
+      if (alive === 0 && t >= (st.nextAt || 0)) {
+        const pack = 3 + (c.tier || 1);
+        for (let i = 0; i < pack; i++) {
+          if (this.enemies.length >= this.perf.maxEnemies) break;
+
+          const ang = (i / pack) * Math.PI * 2;
+          const r = 40 + (i % 3) * 18;
+          const ex = c.x + Math.cos(ang) * r;
+          const ey = c.y + Math.sin(ang) * r;
+          const kind = ["blob", "stalker", "brute", "caster"][(c.id + i) % 4];
+
+          const e = new Enemy(ex, ey, c.tier || 1, kind, hash2(this.seed, c.id * 100 + i));
+          e.home = { x: c.x, y: c.y, id: c.id };
+          this.enemies.push(e);
+        }
+
+        st.nextAt = t + this._campRespawn;
+        st.wasAliveLastCheck = true;
+      }
+
+      this._campState.set(c.id, st);
     }
   }
 
-  /* ============================
-     UPDATE
-     ============================ */
-  update(dt) {
-    // Keep canvas sizing correct
-    this._syncCanvasSize(false);
+  _updateCampZoneHints() {
+    const camps = this.world?.camps || [];
+    let nearest = null;
+    let best = Infinity;
 
-    this._t += dt;
-
-    // cooldowns
-    this.cd.q = Math.max(0, this.cd.q - dt);
-    this.cd.w = Math.max(0, this.cd.w - dt);
-    this.cd.r = Math.max(0, this.cd.r - dt);
-    this.cd.f = Math.max(0, this.cd.f - dt);
-
-    // invuln timer
-    if (this.hero.state?.invulnerable) {
-      this.hero.state.invulnT = Math.max(0, (this.hero.state.invulnT || 0) - dt);
-      if (this.hero.state.invulnT <= 0) this.hero.state.invulnerable = false;
-    }
-
-    // UI toggles
-    if (this.input.pressed("escape")) this.ui.closeAll();
-    if (this.input.pressed("m")) this.ui.toggle("map");
-    if (this.input.pressed("i")) this.ui.toggle("stats");
-    if (this.input.pressed("k")) this.ui.toggle("skills");
-    if (this.input.pressed("j")) this.ui.toggle("quests");
-    if (this.input.pressed("o")) this.ui.toggle("options");
-    if (this.input.pressed("t")) this.ui.toggle("waypoints");
-
-    this._handleOptionsInputs();
-
-    // Potions (1/2 only)
-    if (this.input.pressed("1")) this.usePotion("hp");
-    if (this.input.pressed("2")) this.usePotion("mana");
-
-    // Skills (no casting while sailing)
-    // Spell keys are Q/W/R/F (QWERT keyboard; E is interact)
-    if (!this.hero.state.sailing) {
-      if (this.input.pressed("q") && this._canCast("q")) {
-        this._spendManaFor("q");
-        this.castShockBolt(1.0, false);
-      }
-      if (this.input.pressed("w") && this._canCast("w")) {
-        this._spendManaFor("w");
-        this.castShockNova();
-      }
-      if (this.input.pressed("r") && this._canCast("r")) {
-        this._spendManaFor("r");
-        this.castDash();
-      }
-      if (this.input.pressed("f") && this._canCast("f")) {
-        this._spendManaFor("f");
-        this.castArcPierce();
+    for (const c of camps) {
+      const d = dist2(this.hero.x, this.hero.y, c.x, c.y);
+      if (d < best) {
+        best = d;
+        nearest = c;
       }
     }
 
-    this.hint = "";
+    if (nearest && best < 180 * 180) {
+      const st = this._campState.get(nearest.id);
+      if (st && !st.announcedNearby) {
+        st.announcedNearby = true;
+        this._msg(`Enemy camp nearby (Tier ${nearest.tier}).`, 2.2);
+      }
+    }
+  }
 
-    // Waystones + sailing
-    this._handleWaystoneInputs();
-    this._handleDockSailing();
+  _handleMenus() {
+    if (this.input.wasPressed("i")) this.menu.open = this.menu.open === "inventory" ? null : "inventory";
+    if (this.input.wasPressed("j")) this.menu.open = this.menu.open === "quests" ? null : "quests";
+    if (this.input.wasPressed("m")) this.menu.open = this.menu.open === "map" ? null : "map";
+    if (this.input.wasPressed("o")) this.menu.open = this.menu.open === "options" ? null : "options";
+    if (this.input.wasPressed("Escape")) this.menu.open = null;
 
-    // Movement
-    let mx = 0,
-      my = 0;
-    // IMPORTANT: movement is ARROWS only (WASD reserved for QWERT spell keys)
-    if (this.input.down("arrowleft")) mx--;
-    if (this.input.down("arrowright")) mx++;
-    if (this.input.down("arrowup")) my--;
-    if (this.input.down("arrowdown")) my++;
+    if (this.menu.open) this.ui.open(this.menu.open);
+    else this.ui.closeAll();
+  }
 
-    const speed = this.hero.state.sailing ? 230 : 170;
+  _handleMovement(dt) {
+    const left = this.input.isDown("ArrowLeft");
+    const right = this.input.isDown("ArrowRight");
+    const up = this.input.isDown("ArrowUp");
+    const down = this.input.isDown("ArrowDown");
 
-    if (mx || my) {
-      const n = norm(mx, my);
-      const nx = this.hero.x + n.x * speed * dt;
-      const ny = this.hero.y + n.y * speed * dt;
+    let ax = 0;
+    let ay = 0;
+    if (left) ax -= 1;
+    if (right) ax += 1;
+    if (up) ay -= 1;
+    if (down) ay += 1;
 
+    if (ax || ay) {
+      const n = norm(ax, ay);
+
+      this.aim = { x: n.x, y: n.y };
       this.hero.lastMove = { x: n.x, y: n.y };
 
-      if (!this.hero.state.sailing) {
-        if (this.world.canWalk(nx, ny)) {
-          this.hero.x = nx;
-          this.hero.y = ny;
-        }
+      const speed = this.hero.state?.sailing ? 190 : 150;
+      this.hero.vx = n.x * speed;
+      this.hero.vy = n.y * speed;
+
+      const nx = this.hero.x + this.hero.vx * dt;
+      const ny = this.hero.y + this.hero.vy * dt;
+
+      if (this.hero.state?.sailing) {
+        this.hero.x = nx;
+        this.hero.y = ny;
       } else {
-        if (this.world.canSail(nx, ny)) {
-          this.hero.x = nx;
-          this.hero.y = ny;
+        if (this.world.canWalk(nx, this.hero.y)) this.hero.x = nx;
+        if (this.world.canWalk(this.hero.x, ny)) this.hero.y = ny;
+      }
+    } else {
+      this.hero.vx = 0;
+      this.hero.vy = 0;
+    }
+
+    if (this.input.wasPressed("1")) {
+      if (this.hero.usePotion?.("hp")) this._msg("Used HP potion");
+    }
+    if (this.input.wasPressed("2")) {
+      if (this.hero.usePotion?.("mana")) this._msg("Used Mana potion");
+    }
+  }
+
+  _handleInteract() {
+    if (!this.input.wasPressed("f")) return;
+
+    for (const d of this.world?.docks || []) {
+      if (dist2(this.hero.x, this.hero.y, d.x, d.y) < 70 * 70) {
+        const firstDock = !this.progress.discoveredDocks.has(d.id);
+        this.progress.discoveredDocks.add(d.id);
+
+        this.hero.state.sailing = !this.hero.state.sailing;
+
+        if (firstDock) {
+          this._grantGold(10);
+          this._msg(this.hero.state.sailing ? "New dock found. Sailing: ON (+10 Gold)" : "New dock found (+10 Gold)", 2.8);
+        } else {
+          this._msg(this.hero.state.sailing ? "Sailing: ON" : "Sailing: OFF");
         }
+
+        this._questAddProgress("q_sail", 1);
+        return;
       }
     }
 
-    // World + hero
-    this.world.update?.(dt);
-    this.hero.update(dt);
+    for (const w of this.world?.waystones || []) {
+      if (dist2(this.hero.x, this.hero.y, w.x, w.y) < 80 * 80) {
+        const first = !this.progress.discoveredWaystones.has(w.id);
+        this.progress.discoveredWaystones.add(w.id);
 
-    // Projectiles
-    for (const p of this.projectiles) p.update(dt, this.world);
-    for (let i = this.projectiles.length - 1; i >= 0; i--) {
-      const p = this.projectiles[i];
-      if (!p.alive) {
-        this.projectiles.splice(i, 1);
-        continue;
+        if (first) {
+          this._grantXP(20);
+          this._grantGold(15);
+          this._msg("Waystone awakened! (+20 XP, +15 Gold)", 3);
+        } else {
+          this._msg("Waystone hums quietly.", 2);
+        }
+
+        this._questAddProgress("q_find_way", 1);
+        return;
       }
+    }
 
-      const r2 = 26 * 26;
-      for (const e of this.enemies) {
-        if (!e.alive) continue;
-        if (dist2(p.x, p.y, e.x, e.y) < r2) {
-          e.takeDamage?.(p.dmg || 1);
-          if (!p.meta?.pierce) p.alive = false;
+    this._msg("Nothing to interact with here.");
+  }
+
+  _updateZoneMessages(dt) {
+    if (this.progress.zoneMsgCooldown > 0) {
+      this.progress.zoneMsgCooldown -= dt;
+    }
+
+    let zoneText = "";
+    let zoneId = "";
+
+    for (const w of this.world?.waystones || []) {
+      if (dist2(this.hero.x, this.hero.y, w.x, w.y) < 150 * 150) {
+        zoneText = "Ancient Waystone";
+        zoneId = `way-${w.id}`;
+        break;
+      }
+    }
+
+    if (!zoneText) {
+      for (const d of this.world?.docks || []) {
+        if (dist2(this.hero.x, this.hero.y, d.x, d.y) < 150 * 150) {
+          zoneText = "Old Dock";
+          zoneId = `dock-${d.id}`;
           break;
         }
       }
-
-      if (!p.alive) this.projectiles.splice(i, 1);
     }
 
-    // Enemies
-    for (const e of this.enemies) e.update(dt, this.hero, this.world, this);
-
-    // Deaths
-    for (let i = this.enemies.length - 1; i >= 0; i--) {
-      const e = this.enemies[i];
-      if (!e.alive) {
-        this.hero.giveXP(e.xpValue ? e.xpValue() : 8);
-        this.dropLoot(e.x, e.y, e.tier || 1);
-        this.onQuestKill();
-        this.enemies.splice(i, 1);
+    if (!zoneText) {
+      for (const c of this.world?.camps || []) {
+        if (dist2(this.hero.x, this.hero.y, c.x, c.y) < 170 * 170) {
+          zoneText = `Camp Tier ${c.tier}`;
+          zoneId = `camp-${c.id}`;
+          break;
+        }
       }
     }
 
-    // Loot
-    for (const L of this.loot) L.update(dt);
-    this._pickupLoot();
-
-    // Respawn timers
-    for (let i = 0; i < this.spawnCamps.length; i++) {
-      const v = (this._spawnTimers.get(i) || 0) - dt;
-      this._spawnTimers.set(i, v);
+    if (zoneId && zoneId !== this.progress.currentZoneId && this.progress.zoneMsgCooldown <= 0) {
+      this.progress.currentZoneId = zoneId;
+      this.progress.currentZoneText = zoneText;
+      this.progress.zoneMsgCooldown = 2.4;
+      this._msg(zoneText, 1.8);
+    } else if (!zoneId) {
+      this.progress.currentZoneId = "";
+      this.progress.currentZoneText = "";
     }
-    this._ensureCampsSpawned(false);
-
-    // Camera follow uses CSS pixel view size
-    this.cam.x = clamp(this.hero.x - this.viewW * 0.5, 0, this.world.width - this.viewW);
-    this.cam.y = clamp(this.hero.y - this.viewH * 0.5, 0, this.world.height - this.viewH);
-
-    // Save
-    this._saveT -= dt;
-    if (this._saveT <= 0) {
-      this._saveT = 2.0;
-      saveGame({
-        hero: this.hero,
-        world: {
-          waystonesActivated: (this.world.waystones || []).map((w, i) => (w.activated ? i : null)).filter((v) => v !== null),
-        },
-        settings: this.settings,
-        quests: this.quests,
-      });
-    }
-
-    this.input.endFrame();
   }
 
-  /* ============================
-     DRAW
-     ============================ */
-  draw(t) {
-    const ctx = this.ctx;
+  _handleSpells() {
+    const aim = this._currentAim();
 
-    // Map CSS pixels to the DPR backing buffer (crisp, correct scale)
-    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    if (this.input.wasPressed("q")) this._castBolt(aim.x, aim.y);
+    if (this.input.wasPressed("w")) this._castNova();
+    if (this.input.wasPressed("e")) this._castDash(aim.x, aim.y);
+    if (this.input.wasPressed("r")) this._castOrb(aim.x, aim.y);
+  }
 
-    // Clear in CSS pixel space
-    ctx.fillStyle = "#070a14";
-    ctx.fillRect(0, 0, this.viewW, this.viewH);
+  _castBolt(dx, dy) {
+    if (!this._canCastSpell("q")) return;
+    this._startSpell("q");
 
-    ctx.save();
-    ctx.translate(-this.cam.x, -this.cam.y);
+    const st = this.hero.getStats?.() || { dmg: 8, crit: 0.05, critMult: 1.7 };
+    const shots = [{ dx, dy }];
 
-    this.world.draw(ctx, t, {
-      x: this.cam.x,
-      y: this.cam.y,
-      w: this.viewW,
-      h: this.viewH,
+    if ((this.hero.level || 1) >= 5) {
+      const spread = 0.16;
+      shots.push({ dx: dx - dy * spread, dy: dy + dx * spread });
+      shots.push({ dx: dx + dy * spread, dy: dy - dx * spread });
+    }
+
+    for (const s of shots) {
+      const n = norm(s.dx, s.dy);
+      const p = new Projectile(
+        this.hero.x + n.x * 12,
+        this.hero.y + n.y * 12 - 6,
+        n.x * 520,
+        n.y * 520,
+        Math.round(st.dmg * 0.85),
+        1.15,
+        this.hero.level || 1,
+        { color: "rgba(145,215,255,0.95)", radius: 6, type: "bolt", hitRadius: 18 }
+      );
+      p.meta.crit = st.crit;
+      p.meta.critMult = st.critMult;
+      this.projectiles.push(p);
+    }
+
+    this._shake(0.05, 2);
+  }
+
+  _castNova() {
+    if (!this._canCastSpell("w")) return;
+    this._startSpell("w");
+
+    const st = this.hero.getStats?.() || { dmg: 8 };
+    const p = new Projectile(
+      this.hero.x,
+      this.hero.y - 6,
+      0,
+      0,
+      Math.round(st.dmg * 0.65),
+      0.55,
+      this.hero.level || 1,
+      { color: "rgba(200,240,255,0.95)", radius: 10, type: "nova", hitRadius: 120 }
+    );
+    p.meta.nova = true;
+    this.projectiles.push(p);
+
+    const radius = 92;
+    for (const e of this.enemies) {
+      if (!e.alive) continue;
+      if (!this._withinRadius(e.x, e.y, this.perf.enemyUpdateRadius)) continue;
+      if (dist2(this.hero.x, this.hero.y, e.x, e.y) <= radius * radius) {
+        const dmg = Math.round(st.dmg * 0.55);
+        e.takeDamage?.(dmg);
+
+        const n = norm(e.x - this.hero.x, e.y - this.hero.y);
+        e.x += n.x * 14;
+        e.y += n.y * 14;
+
+        if (!e.alive) this._onEnemyDefeated(e);
+      }
+    }
+
+    this._shake(0.10, 3.2);
+  }
+
+  _castDash(dx, dy) {
+    if (!this._canCastSpell("e")) return;
+    this._startSpell("e");
+
+    if (this.hero.state.dashT > 0) return;
+    this.hero.state.dashT = 0.35;
+
+    const dist = 138;
+    const nx = this.hero.x + dx * dist;
+    const ny = this.hero.y + dy * dist;
+
+    if (this.hero.state?.sailing) {
+      this.hero.x = nx;
+      this.hero.y = ny;
+    } else {
+      let x = this.hero.x;
+      let y = this.hero.y;
+      const steps = 12;
+      for (let i = 0; i < steps; i++) {
+        const t = (i + 1) / steps;
+        const px = lerp(this.hero.x, nx, t);
+        const py = lerp(this.hero.y, ny, t);
+        if (this.world.canWalk(px, py)) {
+          x = px;
+          y = py;
+        } else {
+          break;
+        }
+      }
+      this.hero.x = x;
+      this.hero.y = y;
+    }
+
+    const st = this.hero.getStats?.() || { dmg: 8 };
+    const burstR = 56;
+    for (const e of this.enemies) {
+      if (!e.alive) continue;
+      if (dist2(this.hero.x, this.hero.y, e.x, e.y) <= burstR * burstR) {
+        e.takeDamage?.(Math.round(st.dmg * 0.7));
+        if (!e.alive) this._onEnemyDefeated(e);
+      }
+    }
+
+    this._shake(0.08, 2.8);
+  }
+
+  _castOrb(dx, dy) {
+    if (!this._canCastSpell("r")) return;
+    this._startSpell("r");
+
+    const st = this.hero.getStats?.() || { dmg: 8 };
+    const shots = [{ dx, dy }];
+
+    if ((this.hero.level || 1) >= 7) {
+      const spread = 0.22;
+      shots.push({ dx: dx - dy * spread, dy: dy + dx * spread });
+      shots.push({ dx: dx + dy * spread, dy: dy - dx * spread });
+    }
+
+    for (const s of shots) {
+      const n = norm(s.dx, s.dy);
+      const p = new Projectile(
+        this.hero.x + n.x * 12,
+        this.hero.y + n.y * 12 - 6,
+        n.x * 320,
+        n.y * 320,
+        Math.round(st.dmg * 1.05),
+        1.55,
+        this.hero.level || 1,
+        { color: "rgba(190,160,255,0.95)", radius: 8, type: "orb", hitRadius: 22, pierce: true }
+      );
+      p.meta.pierce = true;
+      this.projectiles.push(p);
+    }
+
+    this._shake(0.06, 2.3);
+  }
+
+  _updateProjectiles(dt) {
+    const r = this.perf.projectileUpdateRadius;
+
+    for (const p of this.projectiles) {
+      if (!p.alive) continue;
+      if (!this._withinRadius(p.x, p.y, r)) continue;
+
+      p.update?.(dt, this.world);
+      if (!p.alive) continue;
+
+      if (p.meta?.onHitHero || p.friendly === false) {
+        if (dist2(p.x, p.y, this.hero.x, this.hero.y) < (p.hitRadius || 18) ** 2) {
+          const dealt = this.hero.takeDamage?.(p.dmg) || p.dmg;
+          this._msg(`-${dealt} HP`, 1.1);
+          p.alive = false;
+          this._shake(0.08, 3);
+        }
+        continue;
+      }
+
+      const hr2 = (p.hitRadius || 18) ** 2;
+      for (const e of this.enemies) {
+        if (!e.alive) continue;
+        if (!this._withinRadius(e.x, e.y, this.perf.enemyUpdateRadius)) continue;
+
+        const id = e._id || (e._id = `${Math.random()}`);
+        if (p._hitSet && p._hitSet.has(id)) continue;
+
+        if (dist2(p.x, p.y, e.x, e.y) < hr2) {
+          let dmg = p.dmg;
+          const crit = p.meta?.crit || 0;
+          const critMult = p.meta?.critMult || 1.7;
+          if (Math.random() < crit) dmg = Math.round(dmg * critMult);
+
+          e.takeDamage?.(dmg);
+          p._hitSet?.add?.(id);
+          this._shake(0.04, 1.8);
+
+          if (!p.meta?.pierce) p.alive = false;
+
+          if (!e.alive) {
+            this._onEnemyDefeated(e);
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  _dropLoot(x, y, tier = 1, kind = "", elite = false) {
+    if (this.loot.length >= this.perf.maxLoot) return;
+
+    if (elite) {
+      if (Math.random() < 0.5) {
+        this.loot.push(new Loot(x, y, "gold", { amount: 10 + ((tier * 4) | 0) }));
+      }
+      const slotRoll = Math.random();
+      const slot =
+        slotRoll < 0.30 ? "weapon" :
+        slotRoll < 0.52 ? "armor" :
+        slotRoll < 0.66 ? "helm" :
+        slotRoll < 0.78 ? "boots" :
+        slotRoll < 0.90 ? "ring" : "trinket";
+
+      const gearSeed = hash2(this.seed ^ 0x55aa, ((x | 0) * 31 + (y | 0) * 17));
+      const g = makeGear(gearSeed, (this.hero.level || 1) + 1, slot);
+      this.loot.push(new Loot(x, y, "gear", { gear: g }));
+      return;
+    }
+
+    const r = Math.random();
+
+    if (kind === "brute" && r < 0.75) {
+      this.loot.push(new Loot(x, y, "gold", { amount: 6 + ((tier * 3) | 0) }));
+      return;
+    }
+
+    if (kind === "caster" && r < 0.55) {
+      this.loot.push(new Loot(x, y, "potion", {
+        potionType: Math.random() < 0.35 ? "hp" : "mana",
+        amount: 1,
+      }));
+      return;
+    }
+
+    if (r < 0.55) {
+      this.loot.push(new Loot(x, y, "gold", { amount: 3 + ((tier * 2) | 0) }));
+      return;
+    }
+
+    if (r < 0.78) {
+      this.loot.push(new Loot(x, y, "potion", {
+        potionType: Math.random() < 0.55 ? "hp" : "mana",
+        amount: 1,
+      }));
+      return;
+    }
+
+    const slotRoll = Math.random();
+    const slot =
+      slotRoll < 0.38 ? "weapon" :
+      slotRoll < 0.58 ? "armor" :
+      slotRoll < 0.70 ? "helm" :
+      slotRoll < 0.80 ? "boots" :
+      slotRoll < 0.90 ? "ring" : "trinket";
+
+    const g = makeGear(
+      hash2(this.seed, ((x | 0) * 31 + (y | 0) * 17)),
+      this.hero.level || 1,
+      slot
+    );
+    this.loot.push(new Loot(x, y, "gear", { gear: g }));
+  }
+
+  _cleanupFarEntities() {
+    const enemyKeepR2 = (this.perf.enemyUpdateRadius + 900) ** 2;
+    const lootKeepR2 = (this.perf.lootUpdateRadius + 900) ** 2;
+    const projKeepR2 = (this.perf.projectileUpdateRadius + 900) ** 2;
+    const cx = this.camera.x;
+    const cy = this.camera.y;
+
+    this.enemies = this.enemies.filter(e => {
+      if (!e.alive) return false;
+      if (e.home) return true;
+      return dist2(e.x, e.y, cx, cy) <= enemyKeepR2;
     });
 
-    for (const L of this.loot) L.draw(ctx, t);
-    for (const p of this.projectiles) p.draw(ctx, t);
-    for (const e of this.enemies) e.draw(ctx, t);
-    this.hero.draw(ctx, t);
+    this.loot = this.loot.filter(l => {
+      if (!l.alive) return false;
+      return dist2(l.x, l.y, cx, cy) <= lootKeepR2;
+    });
+
+    this.projectiles = this.projectiles.filter(p => {
+      if (!p.alive) return false;
+      return dist2(p.x, p.y, cx, cy) <= projKeepR2;
+    });
+  }
+
+  update(dt) {
+    dt = clamp(dt, 0, this._dtClamp);
+    this.time += dt;
+
+    if (this._pickupMsgCooldown > 0) {
+      this._pickupMsgCooldown = Math.max(0, this._pickupMsgCooldown - dt);
+    }
+    if (this._spellMsgCooldown > 0) {
+      this._spellMsgCooldown = Math.max(0, this._spellMsgCooldown - dt);
+    }
+
+    this._tickSpellCooldowns(dt);
+    this._handleMenus();
+
+    this.world?.update?.(dt, this.hero);
+
+    const blockMove = this.menu.open === "inventory" || this.menu.open === "options";
+    if (!blockMove) this._handleMovement(dt);
+    else {
+      this.hero.vx = 0;
+      this.hero.vy = 0;
+    }
+
+    if (!blockMove) this._handleInteract();
+    if (!blockMove) this._handleSpells();
+
+    this.hero.update?.(dt);
+    this._regenMana(dt);
+
+    this._updateZoneMessages(dt);
+    this._updateCampZoneHints();
+
+    this._spawnFromCamps(dt);
+
+    const enemyR = this.perf.enemyUpdateRadius;
+    for (const e of this.enemies) {
+      if (!e.alive) continue;
+      if (!this._withinRadius(e.x, e.y, enemyR)) continue;
+      e.update?.(dt, this.hero, this.world, this);
+    }
+
+    this._updateProjectiles(dt);
+
+    const lootR = this.perf.lootUpdateRadius;
+    for (const l of this.loot) {
+      if (!l.alive) continue;
+      if (!this._withinRadius(l.x, l.y, lootR)) continue;
+      l.update?.(dt, this.hero);
+    }
+
+    this._pickupNearbyLootBonus();
+
+    if ((this.hero.level || 1) > this._levelMsgShown) {
+      this._levelMsgShown = this.hero.level || 1;
+      this._msg(`Level up! You are now level ${this.hero.level}.`, 2.8);
+    }
+
+    this._updateCamera(dt);
+    this.ui?.update?.(dt, this);
+
+    this.perf.cleanupTimer += dt;
+    if (this.perf.cleanupTimer >= this.perf.cleanupEvery) {
+      this.perf.cleanupTimer = 0;
+      this._cleanupFarEntities();
+    }
+
+    this.enemies = this.enemies.filter(e => e.alive);
+    this.projectiles = this.projectiles.filter(p => p.alive);
+    this.loot = this.loot.filter(l => l.alive);
+
+    this.input.endFrame();
+
+    this._autosaveT += dt;
+    if (this._autosaveT >= 5) {
+      this._autosaveT = 0;
+      this._save();
+    }
+  }
+
+  _updateCamera(dt) {
+    const cam = this.camera;
+
+    cam.x = lerp(cam.x, this.hero.x, 1 - Math.pow(0.0005, dt));
+    cam.y = lerp(cam.y, this.hero.y, 1 - Math.pow(0.0005, dt));
+
+    if (cam.shakeT > 0) {
+      cam.shakeT -= dt;
+      const k = clamp(cam.shakeT / 0.12, 0, 1);
+      const mag = cam.shakeMag * k;
+      cam.sx = (Math.random() - 0.5) * 2 * mag;
+      cam.sy = (Math.random() - 0.5) * 2 * mag;
+      if (cam.shakeT <= 0) {
+        cam.sx = 0;
+        cam.sy = 0;
+        cam.shakeMag = 0;
+      }
+    } else {
+      cam.sx = 0;
+      cam.sy = 0;
+    }
+
+    cam.zoom = lerp(cam.zoom, 1.0, 1 - Math.pow(0.001, dt));
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = "rgb(18,22,30)";
+    ctx.fillRect(0, 0, this.w, this.h);
+    ctx.restore();
+
+    const cam = this.camera;
+    const z = cam.zoom;
+    const sx = cam.sx || 0;
+    const sy = cam.sy || 0;
+
+    ctx.save();
+    ctx.setTransform(
+      z, 0,
+      0, z,
+      (this.w * 0.5) - cam.x * z + sx,
+      (this.h * 0.5) - cam.y * z + sy
+    );
+
+    const vb = this._viewBoundsWorld();
+
+    this.world?.draw?.(ctx, { x: cam.x, y: cam.y, w: this.w, h: this.h, zoom: z });
+
+    for (const l of this.loot) {
+      if (!l.alive) continue;
+      if (!this._inView(l.x, l.y, vb)) continue;
+      l.draw?.(ctx, this.time);
+    }
+
+    for (const e of this.enemies) {
+      if (!e.alive) continue;
+      if (!this._inView(e.x, e.y, vb)) continue;
+      e.draw?.(ctx, this.time);
+    }
+
+    this.hero?.draw?.(ctx, this.time);
+
+    for (const p of this.projectiles) {
+      if (!p.alive) continue;
+      if (!this._inView(p.x, p.y, vb)) continue;
+      p.draw?.(ctx, this.time);
+    }
 
     ctx.restore();
 
-    // UI in CSS pixels (so it won't become huge)
-    this.ui.draw(ctx, this);
+    this.ui?.draw?.(ctx, this);
   }
 }
