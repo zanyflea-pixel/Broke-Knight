@@ -1,10 +1,11 @@
 // src/game.js
-// v32 WAYSTONE FAST TRAVEL PASS (FULL FILE)
+// v35 SAFE RESET CONFIRM + FAST TRAVEL + INVENTORY HOTKEY EQUIP (FULL FILE)
 // Adds:
-// - real waystone fast travel from the map menu
-// - press M to open map, then 1-9 to teleport to unlocked waystones
-// - blocks fast travel while sailing
-// - keeps existing combat, save, loot, and progression systems intact
+// - map fast travel with awakened waystones
+// - inventory quick-equip on 1-9 / 0 while inventory is open
+// - safe swap: old equipped item returns to bag
+// - SAFE hard reset / new game from Options menu with Delete twice
+// - keeps aim, spells, camps, loot, save/load, and progression systems intact
 
 import World from "./world.js";
 import { clamp, lerp, dist2, norm, RNG, hash2 } from "./util.js";
@@ -27,7 +28,7 @@ export default class Game {
 
     this.input = new Input(window);
     this.ui = new UI(canvas);
-    this.save = new Save("broke-knight-save-v31");
+    this.save = new Save("broke-knight-save-v35");
 
     this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
     this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
@@ -84,6 +85,8 @@ export default class Game {
     this._pickupMsgCooldown = 0;
     this._levelMsgShown = this.hero.level || 1;
     this._spellMsgCooldown = 0;
+    this._resetQueued = false;
+    this._resetConfirmT = 0;
 
     this.aim = { x: 1, y: 0 };
 
@@ -283,6 +286,50 @@ export default class Game {
     return false;
   }
 
+  _equipInventoryIndex(index) {
+    const bag = this.hero.inventory || [];
+    const idx = index | 0;
+    if (idx < 0 || idx >= bag.length) return false;
+
+    const item = bag[idx];
+    if (!item || !item.slot) {
+      this._msg("That item cannot be equipped.", 1.6);
+      return false;
+    }
+
+    const slot = item.slot;
+    const oldEquipped = this.hero.equip?.[slot] || null;
+
+    bag.splice(idx, 1);
+
+    if (!this.hero.equip) this.hero.equip = {};
+    this.hero.equip[slot] = item;
+
+    if (oldEquipped) {
+      bag.push(oldEquipped);
+      this._msg(`Equipped ${item.name} (${slot})`, 1.8);
+    } else {
+      this._msg(`Equipped ${item.name}`, 1.8);
+    }
+
+    return true;
+  }
+
+  _handleInventoryHotkeys() {
+    if (this.menu.open !== "inventory") return;
+
+    if (this.input.wasPressed("1")) this._equipInventoryIndex(0);
+    else if (this.input.wasPressed("2")) this._equipInventoryIndex(1);
+    else if (this.input.wasPressed("3")) this._equipInventoryIndex(2);
+    else if (this.input.wasPressed("4")) this._equipInventoryIndex(3);
+    else if (this.input.wasPressed("5")) this._equipInventoryIndex(4);
+    else if (this.input.wasPressed("6")) this._equipInventoryIndex(5);
+    else if (this.input.wasPressed("7")) this._equipInventoryIndex(6);
+    else if (this.input.wasPressed("8")) this._equipInventoryIndex(7);
+    else if (this.input.wasPressed("9")) this._equipInventoryIndex(8);
+    else if (this.input.wasPressed("0")) this._equipInventoryIndex(9);
+  }
+
   _pickupNearbyLootBonus() {
     for (const l of this.loot) {
       if (!l.alive) continue;
@@ -321,6 +368,15 @@ export default class Game {
   _tickSpellCooldowns(dt) {
     for (const k of Object.keys(this.spellCd)) {
       this.spellCd[k] = Math.max(0, this.spellCd[k] - dt);
+    }
+  }
+
+  _tickResetConfirm(dt) {
+    if (this._resetConfirmT > 0) {
+      this._resetConfirmT = Math.max(0, this._resetConfirmT - dt);
+      if (this._resetConfirmT <= 0) {
+        this._resetConfirmT = 0;
+      }
     }
   }
 
@@ -582,6 +638,43 @@ export default class Game {
     else if (this.input.wasPressed("7")) this._teleportToWaystone(6);
     else if (this.input.wasPressed("8")) this._teleportToWaystone(7);
     else if (this.input.wasPressed("9")) this._teleportToWaystone(8);
+  }
+
+  _hardResetRun() {
+    if (this._resetQueued) return;
+    this._resetQueued = true;
+
+    this._msg("Save cleared. Restarting new game...", 1.2);
+
+    try {
+      this.save?.clear?.();
+    } catch (_) {
+      // ignore clear failures; still try reloading
+    }
+
+    setTimeout(() => {
+      if (typeof window !== "undefined" && window.location) {
+        window.location.reload();
+      }
+    }, 120);
+  }
+
+  _handleResetHotkey() {
+    if (this.menu.open !== "options") {
+      this._resetConfirmT = 0;
+      return;
+    }
+
+    if (!this.input.wasPressed("Delete")) return;
+
+    if (this._resetConfirmT > 0) {
+      this._resetConfirmT = 0;
+      this._hardResetRun();
+      return;
+    }
+
+    this._resetConfirmT = 1.5;
+    this._msg("Press Delete again to erase save.", 1.5);
   }
 
   _handleMenus() {
@@ -953,7 +1046,7 @@ export default class Game {
         slotRoll < 0.90 ? "ring" : "trinket";
 
       const gearSeed = hash2(this.seed ^ 0x55aa, ((x | 0) * 31 + (y | 0) * 17));
-      const g = makeGear(gearSeed, (this.hero.level || 1) + 1, slot);
+      const g = makeGear(slot, (this.hero.level || 1) + 1, null, gearSeed);
       this.loot.push(new Loot(x, y, "gear", { gear: g }));
       return;
     }
@@ -994,11 +1087,8 @@ export default class Game {
       slotRoll < 0.80 ? "boots" :
       slotRoll < 0.90 ? "ring" : "trinket";
 
-    const g = makeGear(
-      hash2(this.seed, ((x | 0) * 31 + (y | 0) * 17)),
-      this.hero.level || 1,
-      slot
-    );
+    const gearSeed = hash2(this.seed, ((x | 0) * 31 + (y | 0) * 17));
+    const g = makeGear(slot, this.hero.level || 1, null, gearSeed);
     this.loot.push(new Loot(x, y, "gear", { gear: g }));
   }
 
@@ -1038,12 +1128,20 @@ export default class Game {
     }
 
     this._tickSpellCooldowns(dt);
+    this._tickResetConfirm(dt);
+
     this._handleMenus();
     this._handleFastTravelInput();
+    this._handleInventoryHotkeys();
+    this._handleResetHotkey();
 
     this.world?.update?.(dt, this.hero);
 
-    const blockMove = this.menu.open === "inventory" || this.menu.open === "options" || this.menu.open === "map";
+    const blockMove =
+      this.menu.open === "inventory" ||
+      this.menu.open === "options" ||
+      this.menu.open === "map";
+
     if (!blockMove) this._handleMovement(dt);
     else {
       this.hero.vx = 0;

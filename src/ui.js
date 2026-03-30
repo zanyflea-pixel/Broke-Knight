@@ -1,16 +1,14 @@
 // src/ui.js
-// v44 SAFE FULL UI REPLACEMENT + MAP FAST TRAVEL HINT
-// Full replacement built to match the current game.js API.
-// Includes:
-// - HUD
-// - pinned quest
-// - progress strip
-// - spell bar
-// - minimap
-// - quick help
-// - interaction prompt
-// - inventory / quests / map / options panels
-// - map fast travel help for 1-9 waystones
+// v47 UI RESET HINT + CONTROL POLISH (FULL FILE)
+// Safe UI-only upgrade:
+// - clearer interaction prompt
+// - stronger pinned quest box
+// - better message styling
+// - cleaner spell bar emphasis
+// - map markers + fast travel legend
+// - inventory hotkey reminder
+// - options menu shows Delete reset / new game hint
+// - keeps the current panel/menu structure intact
 
 import { clamp } from "./util.js";
 
@@ -105,171 +103,218 @@ export default class UI {
 
     ctx.save();
 
-    this._fillRound(ctx, x, y, panelW, 104, 14, "rgba(8,12,18,0.72)");
-    this._strokeRound(ctx, x, y, panelW, 104, 14, "rgba(255,255,255,0.08)", 1);
+    ctx.globalAlpha = 0.92;
+    ctx.fillStyle = "rgba(10,12,18,0.66)";
+    roundRect(ctx, x, y, panelW, 176, 16);
+    ctx.fill();
+
+    ctx.globalAlpha = 0.22;
+    ctx.fillStyle = "rgba(255,255,255,1)";
+    roundRect(ctx, x, y, panelW, 26, 16);
+    ctx.fill();
+
+    ctx.globalAlpha = 0.10;
+    ctx.fillStyle = "rgba(255,255,255,1)";
+    roundRect(ctx, x + 1, y + 1, panelW - 2, 174, 16);
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.globalAlpha = 0.98;
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.font = "bold 13px system-ui, Arial";
+    ctx.fillText("BROKE KNIGHT", x + 14, y + 17);
+
+    const bx = x + 14;
+    const by = y + 36;
+
+    this._bar(ctx, bx, by, barW, barH, hpP, hpLow ? "rgba(255,92,112,0.98)" : "rgba(235,82,108,0.96)");
+    this._bar(ctx, bx, by + barH + gap, barW, barH, mpP, mpLow ? "rgba(112,172,255,0.98)" : "rgba(92,150,255,0.96)");
+    this._bar(ctx, bx, by + (barH + gap) * 2, barW, 10, xpP, "rgba(255,210,92,0.96)", 7);
 
     ctx.fillStyle = "rgba(255,255,255,0.96)";
-    ctx.font = "bold 15px system-ui, Arial";
-    ctx.fillText(`Lv ${hero.level || 1}  Broke Knight`, x + 14, y + 22);
-
     ctx.font = "12px system-ui, Arial";
-    ctx.fillStyle = "rgba(230,230,235,0.88)";
-    ctx.fillText(`Gold ${hero.gold || 0}   Potions ${hero.potions?.hp || 0}/${hero.potions?.mana || 0}   Elite ${eliteKills}`, x + 14, y + 40);
+    ctx.fillText(`HP ${Math.ceil(hero.hp || 0)} / ${Math.ceil(st.maxHp || 100)}`, bx + 8, by + 11);
+    ctx.fillText(`Mana ${Math.ceil(hero.mana || 0)} / ${Math.ceil(st.maxMana || 60)}`, bx + 8, by + barH + gap + 11);
+    ctx.fillText(`XP ${hero.xp || 0} / ${hero.nextXp || 1}`, bx + 8, by + (barH + gap) * 2 + 9);
 
-    this._drawLabeledBar(
-      ctx,
-      x + 14, y + 50,
-      barW, barH,
-      hpP,
-      hpLow ? "rgba(230,70,90,0.98)" : "rgba(205,56,76,0.98)",
-      "HP",
-      `${Math.ceil(hero.hp || 0)} / ${Math.ceil(st.maxHp || 100)}`
-    );
+    ctx.fillStyle = "rgba(255,255,255,0.88)";
+    ctx.fillText(`Level ${hero.level || 1}`, bx, by + 70);
+    ctx.fillText(`Gold ${hero.gold || 0}`, bx + 90, by + 70);
+    ctx.fillText(`Potions ${hero.potions?.hp || 0}/${hero.potions?.mana || 0}`, bx + 170, by + 70);
 
-    this._drawLabeledBar(
-      ctx,
-      x + 14, y + 72,
-      barW, barH,
-      mpP,
-      mpLow ? "rgba(88,160,255,0.98)" : "rgba(64,126,235,0.98)",
-      "MP",
-      `${Math.ceil(hero.mana || 0)} / ${Math.ceil(st.maxMana || 60)}`
-    );
+    ctx.fillStyle = "rgba(255,224,130,0.96)";
+    ctx.fillText(`Elite Kills ${eliteKills}`, bx, by + 92);
 
-    this._drawLabeledBar(
-      ctx,
-      x + 14 + barW + gap + 6, y + 50,
-      58, 36,
-      xpP,
-      "rgba(255,210,92,0.98)",
-      "XP",
-      `${Math.ceil(hero.xp || 0)}`
-    );
+    const critPct = Math.round((st.crit || 0) * 100);
+    ctx.fillStyle = "rgba(220,220,220,0.88)";
+    ctx.fillText(`DMG ${Math.round(st.dmg || 0)}`, bx + 120, by + 92);
+    ctx.fillText(`ARM ${Math.round(st.armor || 0)}`, bx + 190, by + 92);
+    ctx.fillText(`CRIT ${critPct}%`, bx + 255, by + 92);
 
     ctx.restore();
   }
 
-  _drawLabeledBar(ctx, x, y, w, h, p, color, label, value) {
+  _bar(ctx, x, y, w, h, p, color, r = 8) {
     const fill = clamp(p, 0, 1);
 
-    this._fillRound(ctx, x, y, w, h, 8, "rgba(0,0,0,0.45)");
-    this._fillRound(ctx, x + 1, y + 1, Math.max(0, (w - 2) * fill), h - 2, 7, color);
-    this._strokeRound(ctx, x, y, w, h, 8, "rgba(255,255,255,0.12)", 1);
+    ctx.save();
+    ctx.globalAlpha = 0.95;
+    ctx.fillStyle = "rgba(0,0,0,0.42)";
+    roundRect(ctx, x, y, w, h, r);
+    ctx.fill();
 
-    ctx.fillStyle = "rgba(255,255,255,0.94)";
-    ctx.font = "bold 11px system-ui, Arial";
-    ctx.fillText(label, x + 8, y + h - 4);
+    ctx.fillStyle = color;
+    roundRect(ctx, x + 1, y + 1, Math.max(0, (w - 2) * fill), h - 2, Math.max(2, r - 1));
+    ctx.fill();
 
-    ctx.textAlign = "right";
-    ctx.font = "11px system-ui, Arial";
-    ctx.fillText(value, x + w - 8, y + h - 4);
-    ctx.textAlign = "left";
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.lineWidth = 1;
+    roundRect(ctx, x, y, w, h, r);
+    ctx.stroke();
+    ctx.restore();
   }
 
   _drawPinnedQuest(ctx, game) {
-    const quests = Array.isArray(game.quests) ? game.quests : [];
-    const q = quests.find(v => v && !v.done) || quests[0];
-    if (!q) return;
+    const quests = game.quests || [];
+    const activeQuest = quests.find(q => !q.done) || null;
 
     const x = 14;
-    const y = 124;
-    const w = 292;
-    const h = 66;
+    const y = 196;
+    const w = 352;
+    const h = 74;
 
     ctx.save();
-    this._fillRound(ctx, x, y, w, h, 12, "rgba(20,24,32,0.68)");
-    this._strokeRound(ctx, x, y, w, h, 12, "rgba(255,214,120,0.22)", 1);
 
-    ctx.fillStyle = "rgba(255,220,140,0.98)";
+    ctx.globalAlpha = 0.88;
+    ctx.fillStyle = activeQuest ? "rgba(18,24,18,0.62)" : "rgba(16,16,18,0.54)";
+    roundRect(ctx, x, y, w, h, 14);
+    ctx.fill();
+
+    ctx.globalAlpha = 0.12;
+    ctx.fillStyle = activeQuest ? "rgba(150,235,160,1)" : "rgba(255,255,255,1)";
+    roundRect(ctx, x, y, w, 18, 14);
+    ctx.fill();
+
+    ctx.globalAlpha = 0.98;
+    ctx.fillStyle = activeQuest ? "rgba(188,245,188,0.96)" : "rgba(220,220,220,0.90)";
     ctx.font = "bold 12px system-ui, Arial";
-    ctx.fillText("Pinned Quest", x + 12, y + 18);
+    ctx.fillText(activeQuest ? "PINNED QUEST" : "QUEST STATUS", x + 14, y + 13);
 
-    ctx.fillStyle = "rgba(255,255,255,0.96)";
-    ctx.font = "bold 13px system-ui, Arial";
-    ctx.fillText(q.name || "Quest", x + 12, y + 38);
+    ctx.font = "13px system-ui, Arial";
+    if (activeQuest) {
+      ctx.fillStyle = "rgba(255,255,255,0.96)";
+      ctx.fillText(trimText(ctx, activeQuest.name || "", w - 28), x + 14, y + 38);
 
-    ctx.fillStyle = "rgba(220,224,232,0.84)";
-    ctx.font = "12px system-ui, Arial";
-    ctx.fillText(q.desc || "", x + 12, y + 54);
+      ctx.fillStyle = "rgba(210,235,210,0.92)";
+      ctx.fillText(
+        trimText(ctx, `${activeQuest.prog || 0}/${activeQuest.goal || 0} • ${activeQuest.desc || ""}`, w - 28),
+        x + 14,
+        y + 57
+      );
+    } else {
+      ctx.fillStyle = "rgba(235,235,235,0.92)";
+      ctx.fillText("All current quests complete.", x + 14, y + 42);
+    }
 
-    const prog = clamp((q.prog || 0) / Math.max(1, q.goal || 1), 0, 1);
-    this._fillRound(ctx, x + 196, y + 18, 82, 10, 5, "rgba(0,0,0,0.42)");
-    this._fillRound(ctx, x + 197, y + 19, (80 * prog), 8, 4, "rgba(255,214,92,0.98)");
-
-    ctx.textAlign = "right";
-    ctx.fillStyle = "rgba(255,255,255,0.94)";
-    ctx.font = "bold 11px system-ui, Arial";
-    ctx.fillText(`${q.prog || 0}/${q.goal || 0}`, x + 278, y + 54);
-    ctx.textAlign = "left";
     ctx.restore();
   }
 
   _drawProgressStrip(ctx, game) {
-    const text = game?.progress?.currentZoneText || "Wilderness";
-    const discoveredWays = game?.progress?.discoveredWaystones?.size || 0;
-    const discoveredDocks = game?.progress?.discoveredDocks?.size || 0;
-    const cleared = game?.progress?.clearedCamps?.size || 0;
+    const prog = game.progress || {};
+    const cleared = prog.clearedCamps?.size || 0;
+    const ways = prog.discoveredWaystones?.size || 0;
+    const docks = prog.discoveredDocks?.size || 0;
+    const eliteKills = prog.eliteKills || 0;
+    const doneCount = (game.quests || []).filter(q => q.done).length;
 
     const x = 14;
-    const y = this.h - 36;
-    const w = 420;
-    const h = 22;
+    const y = 340;
+    const w = 352;
+    const h = 60;
 
     ctx.save();
-    this._fillRound(ctx, x, y, w, h, 11, "rgba(8,12,18,0.58)");
-    this._strokeRound(ctx, x, y, w, h, 11, "rgba(255,255,255,0.08)", 1);
+    ctx.globalAlpha = 0.86;
+    ctx.fillStyle = "rgba(10,12,18,0.58)";
+    roundRect(ctx, x, y, w, h, 14);
+    ctx.fill();
 
-    ctx.fillStyle = "rgba(230,235,245,0.92)";
+    ctx.globalAlpha = 0.10;
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.lineWidth = 1;
+    roundRect(ctx, x + 1, y + 1, w - 2, h - 2, 14);
+    ctx.stroke();
+
+    ctx.globalAlpha = 0.98;
+    ctx.fillStyle = "rgba(255,255,255,0.94)";
     ctx.font = "12px system-ui, Arial";
-    ctx.fillText(
-      `${text}  •  Waystones ${discoveredWays}  •  Docks ${discoveredDocks}  •  Camps ${cleared}`,
-      x + 12,
-      y + 15
-    );
+    ctx.fillText(`Camps ${cleared}`, x + 14, y + 20);
+    ctx.fillText(`Waystones ${ways}`, x + 114, y + 20);
+    ctx.fillText(`Docks ${docks}`, x + 244, y + 20);
+
+    ctx.fillStyle = "rgba(255,224,130,0.96)";
+    ctx.fillText(`Elite ${eliteKills}`, x + 14, y + 42);
+
+    ctx.fillStyle = "rgba(200,235,200,0.92)";
+    ctx.fillText(`Quests Done ${doneCount}`, x + 114, y + 42);
+
+    const zone = prog.currentZoneText || "Wilderness";
+    ctx.fillStyle = "rgba(205,215,230,0.88)";
+    ctx.fillText(trimText(ctx, zone, 110), x + 244, y + 42);
+
     ctx.restore();
   }
 
   _drawSpellBar(ctx, game) {
-    const spells = game?.getSpellState?.();
+    const spells = game.getSpellState?.();
     if (!spells) return;
 
-    const entries = [
+    const keys = [
       ["Q", spells.q],
       ["W", spells.w],
       ["E", spells.e],
       ["R", spells.r],
     ];
 
-    const cardW = 90;
+    const cardW = 92;
     const cardH = 48;
     const gap = 10;
-    const total = entries.length * cardW + (entries.length - 1) * gap;
-    const x0 = ((this.w - total) * 0.5) | 0;
-    const y = this.h - 74;
+    const totalW = keys.length * cardW + (keys.length - 1) * gap;
+    const x0 = ((this.w - totalW) * 0.5) | 0;
+    const y = this.h - 66;
 
     ctx.save();
 
-    for (let i = 0; i < entries.length; i++) {
-      const [key, s] = entries[i];
+    for (let i = 0; i < keys.length; i++) {
+      const [key, s] = keys[i];
       const x = x0 + i * (cardW + gap);
-      const ready = (s?.cdLeft || 0) <= 0;
+      const cd = Math.max(0, s?.cdLeft || 0);
+      const ready = cd <= 0;
 
-      this._fillRound(ctx, x, y, cardW, cardH, 12, ready ? "rgba(18,24,34,0.78)" : "rgba(26,18,18,0.80)");
-      this._strokeRound(ctx, x, y, cardW, cardH, 12, ready ? "rgba(140,210,255,0.18)" : "rgba(255,140,140,0.16)", 1);
+      ctx.globalAlpha = 0.90;
+      ctx.fillStyle = ready ? "rgba(14,20,28,0.82)" : "rgba(28,18,18,0.82)";
+      roundRect(ctx, x, y, cardW, cardH, 12);
+      ctx.fill();
 
-      ctx.fillStyle = ready ? "rgba(255,255,255,0.96)" : "rgba(255,210,210,0.92)";
-      ctx.font = "bold 14px system-ui, Arial";
-      ctx.fillText(key, x + 10, y + 18);
+      ctx.globalAlpha = 0.14;
+      ctx.fillStyle = ready ? "rgba(110,210,255,1)" : "rgba(255,140,140,1)";
+      roundRect(ctx, x, y, cardW, 16, 12);
+      ctx.fill();
+
+      ctx.globalAlpha = 0.98;
+      ctx.fillStyle = "rgba(255,255,255,0.96)";
+      ctx.font = "bold 13px system-ui, Arial";
+      ctx.fillText(key, x + 10, y + 13);
 
       ctx.font = "12px system-ui, Arial";
-      ctx.fillText(`${s?.name || ""}`, x + 28, y + 18);
+      ctx.fillText(trimText(ctx, s?.name || "", 52), x + 28, y + 13);
 
-      ctx.fillStyle = "rgba(214,220,230,0.84)";
-      ctx.fillText(`${s?.mana || 0} MP`, x + 10, y + 36);
+      ctx.fillStyle = "rgba(215,215,220,0.82)";
+      ctx.fillText(`${s?.mana || 0} MP`, x + 10, y + 33);
 
       ctx.textAlign = "right";
-      ctx.fillStyle = ready ? "rgba(145,235,165,0.96)" : "rgba(255,190,150,0.96)";
-      ctx.fillText(ready ? "READY" : `${(s?.cdLeft || 0).toFixed(1)}s`, x + cardW - 10, y + 36);
+      ctx.fillStyle = ready ? "rgba(145,235,165,0.96)" : "rgba(255,208,160,0.96)";
+      ctx.fillText(ready ? "READY" : `${cd.toFixed(1)}s`, x + cardW - 10, y + 33);
       ctx.textAlign = "left";
     }
 
@@ -285,8 +330,11 @@ export default class UI {
     const y = 14;
 
     ctx.save();
-    this._fillRound(ctx, x - 8, y - 8, size + 16, size + 16, 14, "rgba(10,14,20,0.70)");
-    this._strokeRound(ctx, x - 8, y - 8, size + 16, size + 16, 14, "rgba(255,255,255,0.08)", 1);
+
+    ctx.globalAlpha = 0.90;
+    ctx.fillStyle = "rgba(10,12,18,0.70)";
+    roundRect(ctx, x - 8, y - 8, size + 16, size + 16, 16);
+    ctx.fill();
 
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(mini, x, y, size, size);
@@ -299,87 +347,110 @@ export default class UI {
     const hx = ((game.hero.x - (sx - half)) / span) * (size - 1);
     const hy = ((game.hero.y - (sy - half)) / span) * (size - 1);
 
-    ctx.fillStyle = "rgba(16,16,18,0.92)";
+    ctx.fillStyle = "rgba(20,20,20,0.92)";
     ctx.fillRect((x + hx - 3) | 0, (y + hy - 3) | 0, 6, 6);
+
     ctx.fillStyle = "rgba(255,255,255,1)";
     ctx.fillRect((x + hx - 1) | 0, (y + hy - 1) | 0, 2, 2);
 
-    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.globalAlpha = 0.98;
+    ctx.fillStyle = "rgba(255,255,255,0.94)";
     ctx.font = "bold 11px system-ui, Arial";
-    ctx.fillText("MAP", x + 6, y + 14);
+    ctx.fillText("MINIMAP", x + 8, y + 14);
+
     ctx.restore();
   }
 
   _drawQuickHelp(ctx) {
-    const text = "Arrows move • F interact • Q/W/E/R spells • I inventory • J quests • M map • O options";
-    const x = (this.w * 0.5) | 0;
-    const y = 18;
+    const text = "Arrows move • F interact • Q/W/E/R cast • I inventory • J quests • M map • O options";
+    const padX = 12;
 
     ctx.save();
-    ctx.textAlign = "center";
     ctx.font = "12px system-ui, Arial";
-    const padX = 10;
     const tw = ctx.measureText(text).width;
-    this._fillRound(ctx, x - tw / 2 - padX, y - 13, tw + padX * 2, 22, 11, "rgba(8,12,18,0.46)");
-    ctx.fillStyle = "rgba(230,234,240,0.78)";
-    ctx.fillText(text, x, y + 2);
-    ctx.textAlign = "left";
+    const x = ((this.w - tw) * 0.5) - padX;
+    const y = 12;
+
+    ctx.globalAlpha = 0.72;
+    ctx.fillStyle = "rgba(10,12,18,0.60)";
+    roundRect(ctx, x, y, tw + padX * 2, 22, 11);
+    ctx.fill();
+
+    ctx.globalAlpha = 0.96;
+    ctx.fillStyle = "rgba(230,230,235,0.86)";
+    ctx.fillText(text, x + padX, y + 15);
+
     ctx.restore();
   }
 
   _drawInteractPrompt(ctx, game) {
-    const hero = game?.hero;
-    if (!hero || !game?.world) return;
+    const hero = game.hero;
+    let text = "";
 
-    let near = "";
     for (const d of game.world?.docks || []) {
-      const dx = hero.x - d.x;
-      const dy = hero.y - d.y;
-      if (dx * dx + dy * dy < 80 * 80) {
-        near = hero.state?.sailing ? "Press F to dock / stop sailing" : "Press F to use dock / start sailing";
+      if (sq(hero.x - d.x, hero.y - d.y) < 72 * 72) {
+        text = hero.state?.sailing ? "Press F to dock / stop sailing" : "Press F to sail";
         break;
       }
     }
 
-    if (!near) {
+    if (!text) {
       for (const w of game.world?.waystones || []) {
-        const dx = hero.x - w.x;
-        const dy = hero.y - w.y;
-        if (dx * dx + dy * dy < 90 * 90) {
-          near = "Press F to awaken waystone";
+        if (sq(hero.x - w.x, hero.y - w.y) < 82 * 82) {
+          text = "Press F to awaken waystone";
           break;
         }
       }
     }
 
-    if (!near) return;
+    if (!text) return;
 
-    const y = this.h - 106;
     ctx.save();
-    ctx.textAlign = "center";
     ctx.font = "bold 13px system-ui, Arial";
-    const tw = ctx.measureText(near).width;
-    this._fillRound(ctx, this.w / 2 - tw / 2 - 14, y - 15, tw + 28, 28, 14, "rgba(20,24,32,0.78)");
-    this._strokeRound(ctx, this.w / 2 - tw / 2 - 14, y - 15, tw + 28, 28, 14, "rgba(255,214,120,0.22)", 1);
-    ctx.fillStyle = "rgba(255,244,188,0.98)";
-    ctx.fillText(near, this.w / 2, y + 4);
-    ctx.textAlign = "left";
+    const tw = ctx.measureText(text).width;
+    const x = ((this.w - tw) * 0.5) - 16;
+    const y = this.h - 104;
+
+    ctx.globalAlpha = 0.92;
+    ctx.fillStyle = "rgba(18,20,26,0.82)";
+    roundRect(ctx, x, y, tw + 32, 30, 14);
+    ctx.fill();
+
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = "rgba(255,224,130,1)";
+    roundRect(ctx, x, y, tw + 32, 30, 14);
+    ctx.strokeStyle = "rgba(255,224,130,0.25)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.globalAlpha = 0.98;
+    ctx.fillStyle = "rgba(255,245,188,0.98)";
+    ctx.fillText(text, x + 16, y + 19);
+
     ctx.restore();
   }
 
   _drawMessage(ctx, text) {
-    const x = this.w / 2;
-    const y = 56;
-
     ctx.save();
-    ctx.textAlign = "center";
     ctx.font = "bold 14px system-ui, Arial";
     const tw = ctx.measureText(text).width;
-    this._fillRound(ctx, x - tw / 2 - 16, y - 16, tw + 32, 32, 16, "rgba(12,16,24,0.82)");
-    this._strokeRound(ctx, x - tw / 2 - 16, y - 16, tw + 32, 32, 16, "rgba(255,255,255,0.10)", 1);
+    const x = ((this.w - tw) * 0.5) - 18;
+    const y = 52;
+
+    ctx.globalAlpha = 0.90;
+    ctx.fillStyle = "rgba(12,16,24,0.82)";
+    roundRect(ctx, x, y, tw + 36, 34, 16);
+    ctx.fill();
+
+    ctx.globalAlpha = 0.12;
+    ctx.fillStyle = "rgba(255,255,255,1)";
+    roundRect(ctx, x, y, tw + 36, 34, 16);
+    ctx.fill();
+
+    ctx.globalAlpha = 0.98;
     ctx.fillStyle = "rgba(255,255,255,0.98)";
-    ctx.fillText(text, x, y + 5);
-    ctx.textAlign = "left";
+    ctx.fillText(text, x + 18, y + 22);
+
     ctx.restore();
   }
 
@@ -398,287 +469,423 @@ export default class UI {
 
   _drawPanelShell(ctx, panel, title) {
     ctx.save();
-    this._fillRound(ctx, panel.x, panel.y, panel.w, panel.h, 18, "rgba(10,14,20,0.92)");
-    this._strokeRound(ctx, panel.x, panel.y, panel.w, panel.h, 18, "rgba(255,255,255,0.10)", 1);
 
-    ctx.fillStyle = "rgba(255,255,255,0.98)";
-    ctx.font = "bold 18px system-ui, Arial";
-    ctx.fillText(title, panel.x + 18, panel.y + 28);
+    ctx.globalAlpha = 0.95;
+    ctx.fillStyle = "rgba(12,16,22,0.94)";
+    roundRect(ctx, panel.x, panel.y, panel.w, panel.h, 18);
+    ctx.fill();
 
-    ctx.strokeStyle = "rgba(255,255,255,0.08)";
-    ctx.beginPath();
-    ctx.moveTo(panel.x + 18, panel.y + 40);
-    ctx.lineTo(panel.x + panel.w - 18, panel.y + 40);
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = "rgba(255,255,255,1)";
+    roundRect(ctx, panel.x, panel.y, panel.w, 30, 18);
+    ctx.fill();
+
+    ctx.globalAlpha = 0.10;
+    ctx.strokeStyle = "rgba(255,255,255,0.14)";
+    ctx.lineWidth = 1;
+    roundRect(ctx, panel.x + 1, panel.y + 1, panel.w - 2, panel.h - 2, 18);
     ctx.stroke();
+
+    ctx.globalAlpha = 0.98;
+    ctx.fillStyle = "rgba(255,255,255,0.98)";
+    ctx.font = "bold 16px system-ui, Arial";
+    ctx.fillText(title, panel.x + 16, panel.y + 20);
+
     ctx.restore();
   }
 
   _drawPanelFooter(ctx, panel, text) {
     ctx.save();
-    ctx.fillStyle = "rgba(210,214,222,0.76)";
+    ctx.fillStyle = "rgba(220,220,220,0.74)";
     ctx.font = "12px system-ui, Arial";
-    ctx.fillText(text, panel.x + 18, panel.y + panel.h - 16);
+    ctx.fillText(text, panel.x + 16, panel.y + panel.h - 14);
     ctx.restore();
   }
 
   _drawInventory(ctx, game) {
-    const panel = this._panelRect(700, 500);
+    const panel = this._panelRect(690, 540);
     this._drawPanelShell(ctx, panel, "INVENTORY");
 
     const hero = game.hero;
-    const bag = Array.isArray(hero.inventory) ? hero.inventory : [];
+    const items = hero.inventory || [];
     const equip = hero.equip || {};
-
-    const leftX = panel.x + 22;
-    const rightX = panel.x + 360;
-    let y = panel.y + 64;
+    const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
 
     ctx.save();
+    ctx.font = "13px system-ui, Arial";
 
-    ctx.fillStyle = "rgba(255,220,150,0.96)";
-    ctx.font = "bold 13px system-ui, Arial";
-    ctx.fillText("Equipped", leftX, y);
-    y += 18;
+    const lx = panel.x + 20;
+    let yy = panel.y + 62;
 
-    const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
-    for (const slot of slots) {
-      const it = equip[slot];
-      this._fillRound(ctx, leftX, y - 12, 300, 30, 10, "rgba(255,255,255,0.04)");
-      ctx.fillStyle = "rgba(255,255,255,0.95)";
-      ctx.font = "12px system-ui, Arial";
-      ctx.fillText(`${slot.toUpperCase()}: ${it ? it.name : "-"}`, leftX + 10, y + 6);
-      y += 36;
+    ctx.fillStyle = "rgba(255,255,255,0.94)";
+    ctx.fillText("Equipped", lx, yy);
+    yy += 24;
+
+    for (const s of slots) {
+      const it = equip[s] || null;
+
+      ctx.fillStyle = "rgba(255,255,255,0.08)";
+      roundRect(ctx, lx - 8, yy - 13, 306, 34, 10);
+      ctx.fill();
+
+      ctx.fillStyle = rarityColor(it?.rarity);
+      ctx.fillText(`${cap(s)}: ${it ? trimText(ctx, it.name, 255) : "-"}`, lx, yy);
+
+      if (it) {
+        ctx.fillStyle = "rgba(210,210,210,0.82)";
+        ctx.fillText(trimText(ctx, itemStatLine(it), 255), lx + 14, yy + 15);
+      }
+
+      yy += 42;
     }
 
-    let by = panel.y + 64;
-    ctx.fillStyle = "rgba(160,220,255,0.96)";
-    ctx.font = "bold 13px system-ui, Arial";
-    ctx.fillText("Bag", rightX, by);
-    by += 18;
+    yy += 6;
+    const st = hero.getStats?.() || {};
+    ctx.fillStyle = "rgba(255,255,255,0.94)";
+    ctx.fillText("Current Stats", lx, yy);
+    yy += 22;
+    ctx.fillStyle = "rgba(225,225,225,0.9)";
+    ctx.fillText(`Damage: ${Math.round(st.dmg || 0)}`, lx, yy); yy += 18;
+    ctx.fillText(`Armor: ${Math.round(st.armor || 0)}`, lx, yy); yy += 18;
+    ctx.fillText(`Crit: ${Math.round((st.crit || 0) * 100)}%`, lx, yy); yy += 18;
+    ctx.fillText(`HP Potions: ${hero.potions?.hp || 0}`, lx, yy); yy += 18;
+    ctx.fillText(`Mana Potions: ${hero.potions?.mana || 0}`, lx, yy);
 
-    const maxRows = 10;
-    for (let i = 0; i < Math.min(bag.length, maxRows); i++) {
-      const it = bag[i];
-      this._fillRound(ctx, rightX, by - 12, 318, 32, 10, "rgba(255,255,255,0.04)");
+    const rx = panel.x + 372;
+    let ry = panel.y + 62;
+    ctx.fillStyle = "rgba(255,255,255,0.94)";
+    ctx.fillText(`Bag (${items.length})`, rx, ry);
+    ry += 24;
 
-      const hot = i === 9 ? "0" : String(i + 1);
-      ctx.fillStyle = "rgba(255,214,120,0.96)";
-      ctx.font = "bold 12px system-ui, Arial";
-      ctx.fillText(`[${hot}]`, rightX + 8, by + 7);
+    if (!items.length) {
+      ctx.fillStyle = "rgba(220,220,220,0.88)";
+      ctx.fillText("No items yet.", rx, ry);
+    } else {
+      for (let i = 0; i < items.length && i < 15; i++) {
+        const it = items[i];
+        const hotkey = i === 9 ? "0" : String(i + 1);
 
-      ctx.fillStyle = this._rarityColor(it?.rarity);
-      ctx.fillText(it?.name || "Item", rightX + 44, by + 7);
+        ctx.fillStyle = "rgba(255,255,255,0.08)";
+        roundRect(ctx, rx - 8, ry - 13, 306, 34, 10);
+        ctx.fill();
 
-      ctx.textAlign = "right";
-      ctx.fillStyle = "rgba(220,224,232,0.86)";
-      const s = it?.stats || {};
-      const statText = `Lv ${it?.level || 1}  Dmg ${s.dmg || 0}  Arm ${s.armor || 0}  Crit ${Math.round((s.crit || 0) * 100)}%`;
-      ctx.fillText(statText, rightX + 304, by + 7);
-      ctx.textAlign = "left";
+        ctx.fillStyle = "rgba(255,230,160,0.96)";
+        ctx.fillText(`${hotkey}.`, rx, ry);
 
-      by += 36;
+        ctx.fillStyle = rarityColor(it.rarity);
+        ctx.fillText(trimText(ctx, `${it.name} [${it.slot}]`, 246), rx + 22, ry);
+        ctx.fillStyle = "rgba(210,210,210,0.82)";
+        ctx.fillText(trimText(ctx, itemStatLine(it), 270), rx + 12, ry + 15);
+        ry += 42;
+      }
     }
 
-    if (!bag.length) {
-      ctx.fillStyle = "rgba(220,224,232,0.74)";
-      ctx.font = "12px system-ui, Arial";
-      ctx.fillText("Your bag is empty.", rightX, by + 8);
-    }
-
-    this._drawPanelFooter(ctx, panel, "I / Esc close • On the game side, 1-0 can be used for bag hotkeys if enabled");
+    this._drawPanelFooter(ctx, panel, "Esc / I to close • 1-9 / 0 equip bag item");
     ctx.restore();
   }
 
   _drawQuests(ctx, game) {
-    const panel = this._panelRect(620, 480);
+    const panel = this._panelRect(690, 540);
     this._drawPanelShell(ctx, panel, "QUESTS");
 
-    const quests = Array.isArray(game.quests) ? game.quests : [];
-    let y = panel.y + 64;
+    const quests = game.quests || [];
+    let yy = panel.y + 62;
 
     ctx.save();
+    ctx.font = "13px system-ui, Arial";
 
     if (!quests.length) {
-      ctx.fillStyle = "rgba(220,224,232,0.82)";
-      ctx.font = "13px system-ui, Arial";
-      ctx.fillText("No quests yet.", panel.x + 20, y);
-      this._drawPanelFooter(ctx, panel, "J / Esc close");
-      ctx.restore();
-      return;
+      ctx.fillStyle = "rgba(255,255,255,0.94)";
+      ctx.fillText("No quests.", panel.x + 20, yy);
+    } else {
+      for (let i = 0; i < quests.length && i < 12; i++) {
+        const q = quests[i];
+
+        ctx.fillStyle = q.done ? "rgba(30,90,40,0.34)" : "rgba(255,255,255,0.08)";
+        roundRect(ctx, panel.x + 12, yy - 16, panel.w - 24, 54, 12);
+        ctx.fill();
+
+        ctx.fillStyle = q.done ? "rgba(155,235,165,0.95)" : "rgba(255,255,255,0.94)";
+        ctx.fillText(`${q.done ? "✓ " : ""}${q.name} — ${q.prog}/${q.goal}`, panel.x + 22, yy);
+        yy += 18;
+
+        ctx.fillStyle = "rgba(220,220,220,0.84)";
+        ctx.fillText(trimText(ctx, q.desc || "", panel.w - 52), panel.x + 36, yy);
+        yy += 16;
+
+        ctx.fillText(`Reward: ${q.xp || 0} XP, ${q.gold || 0} Gold`, panel.x + 36, yy);
+        yy += 28;
+      }
     }
 
-    for (const q of quests) {
-      const h = 64;
-      this._fillRound(ctx, panel.x + 18, y - 16, panel.w - 36, h, 12, q.done ? "rgba(30,52,34,0.64)" : "rgba(255,255,255,0.04)");
-      this._strokeRound(ctx, panel.x + 18, y - 16, panel.w - 36, h, 12, q.done ? "rgba(145,235,165,0.20)" : "rgba(255,255,255,0.06)", 1);
+    const prog = game.progress || {};
+    const px = panel.x + 20;
+    const py = panel.y + panel.h - 100;
 
-      ctx.fillStyle = q.done ? "rgba(145,235,165,0.98)" : "rgba(255,255,255,0.96)";
-      ctx.font = "bold 14px system-ui, Arial";
-      ctx.fillText(q.name || "Quest", panel.x + 30, y + 2);
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.fillText("Exploration Progress", px, py);
 
-      ctx.fillStyle = "rgba(220,224,232,0.82)";
-      ctx.font = "12px system-ui, Arial";
-      ctx.fillText(q.desc || "", panel.x + 30, y + 20);
+    ctx.fillStyle = "rgba(220,220,220,0.86)";
+    ctx.fillText(`Waystones: ${prog.discoveredWaystones?.size || 0}`, px, py + 20);
+    ctx.fillText(`Docks: ${prog.discoveredDocks?.size || 0}`, px + 150, py + 20);
+    ctx.fillText(`Cleared Camps: ${prog.clearedCamps?.size || 0}`, px + 260, py + 20);
 
-      const p = clamp((q.prog || 0) / Math.max(1, q.goal || 1), 0, 1);
-      this._fillRound(ctx, panel.x + 30, y + 28, 340, 10, 5, "rgba(0,0,0,0.42)");
-      this._fillRound(ctx, panel.x + 31, y + 29, 338 * p, 8, 4, q.done ? "rgba(145,235,165,0.98)" : "rgba(255,214,92,0.98)");
+    ctx.fillStyle = "rgba(255,224,130,0.96)";
+    ctx.fillText(`Elite Kills: ${prog.eliteKills || 0}`, px, py + 42);
 
-      ctx.textAlign = "right";
-      ctx.fillStyle = "rgba(255,255,255,0.90)";
-      ctx.fillText(`${q.prog || 0}/${q.goal || 0}   XP ${q.xp || 0}   Gold ${q.gold || 0}`, panel.x + panel.w - 30, y + 20);
-      ctx.textAlign = "left";
-
-      y += 76;
-      if (y > panel.y + panel.h - 50) break;
-    }
-
-    this._drawPanelFooter(ctx, panel, "J / Esc close");
+    this._drawPanelFooter(ctx, panel, "Esc / J to close");
     ctx.restore();
   }
 
   _drawMap(ctx, game) {
-    const panel = this._panelRect(620, 580);
+    const panel = this._panelRect(720, 600);
     this._drawPanelShell(ctx, panel, "WORLD MAP");
 
     const mini = this._mini || game?.world?.getMinimapCanvas?.();
-    if (!mini) return;
-
-    const innerPad = 18;
-    const size = Math.min(panel.w - innerPad * 2, panel.h - 190);
+    const innerPad = 20;
+    const mapSize = 420;
     const x = panel.x + innerPad;
-    const y = panel.y + 50;
+    const y = panel.y + 56;
 
     ctx.save();
-
-    ctx.globalAlpha = 0.98;
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(mini, x, y, size, size);
-    ctx.imageSmoothingEnabled = true;
-
-    const span = 2600;
-    const half = span / 2;
-    const sx = game.world?.spawn?.x || 0;
-    const sy = game.world?.spawn?.y || 0;
-
-    const hx = ((game.hero.x - (sx - half)) / span) * (size - 1);
-    const hy = ((game.hero.y - (sy - half)) / span) * (size - 1);
-
-    ctx.fillStyle = "rgba(20,20,20,0.92)";
-    ctx.fillRect((x + hx - 4) | 0, (y + hy - 4) | 0, 8, 8);
-
-    ctx.fillStyle = "rgba(255,255,255,1)";
-    ctx.fillRect((x + hx - 2) | 0, (y + hy - 2) | 0, 4, 4);
-
-    ctx.fillStyle = "rgba(255,255,255,0.90)";
     ctx.font = "12px system-ui, Arial";
-    ctx.fillText("White square = you", x, y + size + 20);
+
+    if (mini) {
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(mini, x, y, mapSize, mapSize);
+      ctx.imageSmoothingEnabled = true;
+
+      const span = 2600;
+      const half = span / 2;
+      const sx = game.world?.spawn?.x || 0;
+      const sy = game.world?.spawn?.y || 0;
+
+      const mapPoint = (wx, wy) => {
+        const px = x + ((wx - (sx - half)) / span) * (mapSize - 1);
+        const py = y + ((wy - (sy - half)) / span) * (mapSize - 1);
+        return { x: px, y: py };
+      };
+
+      for (const c of game.world?.camps || []) {
+        const p = mapPoint(c.x, c.y);
+        ctx.fillStyle = "rgba(255,90,90,0.95)";
+        ctx.fillRect((p.x - 2) | 0, (p.y - 2) | 0, 4, 4);
+      }
+
+      for (const d of game.world?.docks || []) {
+        if (!game.progress?.discoveredDocks?.has?.(d.id)) continue;
+        const p = mapPoint(d.x, d.y);
+        ctx.fillStyle = "rgba(90,210,255,0.96)";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      const ways = typeof game._getDiscoveredWaystones === "function"
+        ? game._getDiscoveredWaystones()
+        : [];
+
+      for (let i = 0; i < ways.length && i < 9; i++) {
+        const w = ways[i];
+        const p = mapPoint(w.x, w.y);
+
+        ctx.fillStyle = "rgba(255,218,92,0.98)";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "rgba(25,25,25,0.98)";
+        ctx.font = "bold 10px system-ui, Arial";
+        ctx.textAlign = "center";
+        ctx.fillText(String(i + 1), p.x, p.y + 3);
+        ctx.textAlign = "left";
+      }
+
+      const hp = mapPoint(game.hero.x, game.hero.y);
+      ctx.fillStyle = "rgba(20,20,20,0.92)";
+      ctx.fillRect((hp.x - 4) | 0, (hp.y - 4) | 0, 8, 8);
+      ctx.fillStyle = "rgba(255,255,255,1)";
+      ctx.fillRect((hp.x - 2) | 0, (hp.y - 2) | 0, 4, 4);
+
+      ctx.strokeStyle = "rgba(255,255,255,0.16)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x - 0.5, y - 0.5, mapSize + 1, mapSize + 1);
+    } else {
+      ctx.fillStyle = "rgba(220,220,220,0.82)";
+      ctx.fillText("Minimap not ready.", x, y + 14);
+    }
+
+    const rx = panel.x + 468;
+    let ry = panel.y + 64;
+
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.font = "bold 13px system-ui, Arial";
+    ctx.fillText("Legend", rx, ry);
+    ry += 24;
+
+    this._legendDot(ctx, rx, ry, "rgba(255,255,255,1)", "You");
+    ry += 22;
+    this._legendDot(ctx, rx, ry, "rgba(255,218,92,0.98)", "Awakened Waystone");
+    ry += 22;
+    this._legendDot(ctx, rx, ry, "rgba(90,210,255,0.96)", "Discovered Dock");
+    ry += 22;
+    this._legendDot(ctx, rx, ry, "rgba(255,90,90,0.95)", "Enemy Camp");
+    ry += 34;
 
     const ways = typeof game._getDiscoveredWaystones === "function"
       ? game._getDiscoveredWaystones()
       : [];
 
-    let listY = y + size + 48;
-
-    ctx.fillStyle = "rgba(180,235,180,0.96)";
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
     ctx.font = "bold 13px system-ui, Arial";
-    ctx.fillText("Fast Travel", x, listY);
-    listY += 20;
+    ctx.fillText("Fast Travel", rx, ry);
+    ry += 22;
 
     ctx.font = "12px system-ui, Arial";
-
     if (!ways.length) {
       ctx.fillStyle = "rgba(220,220,220,0.82)";
-      ctx.fillText("Awaken a waystone with F to unlock travel.", x, listY);
+      ctx.fillText("Awaken a waystone with F first.", rx, ry);
+      ry += 18;
     } else {
       for (let i = 0; i < ways.length && i < 9; i++) {
         const w = ways[i];
-        ctx.fillStyle = "rgba(255,255,255,0.92)";
-        ctx.fillText(`${i + 1}. Waystone ${i + 1}`, x, listY);
+        ctx.fillStyle = "rgba(255,240,170,0.98)";
+        ctx.fillText(`${i + 1}. Waystone ${i + 1}`, rx, ry);
 
-        ctx.fillStyle = "rgba(200,200,200,0.72)";
-        ctx.fillText(`(${Math.round(w.x)}, ${Math.round(w.y)})`, x + 120, listY);
-
-        listY += 18;
-      }
-
-      if (game.hero?.state?.sailing) {
-        listY += 8;
-        ctx.fillStyle = "rgba(255,140,140,0.95)";
-        ctx.fillText("Cannot fast travel while sailing.", x, listY);
+        ctx.fillStyle = "rgba(205,205,212,0.76)";
+        ctx.fillText(`(${Math.round(w.x)}, ${Math.round(w.y)})`, rx + 105, ry);
+        ry += 18;
       }
     }
 
-    this._drawPanelFooter(ctx, panel, "Esc / M to close • 1-9 fast travel");
+    if (game.hero?.state?.sailing) {
+      ry += 10;
+      ctx.fillStyle = "rgba(255,160,160,0.96)";
+      ctx.fillText("Cannot fast travel while sailing.", rx, ry);
+      ry += 18;
+    }
+
+    ry += 10;
+    ctx.fillStyle = "rgba(220,224,232,0.82)";
+    ctx.fillText("Map markers only show docks after you find them.", rx, ry);
+
+    this._drawPanelFooter(ctx, panel, "Esc / M to close • 1-9 fast travel • camps=danger • docks=travel");
     ctx.restore();
+  }
+
+  _legendDot(ctx, x, y, color, label) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x + 5, y - 4, 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(230,230,235,0.92)";
+    ctx.font = "12px system-ui, Arial";
+    ctx.fillText(label, x + 18, y);
   }
 
   _drawOptions(ctx, game) {
-    const panel = this._panelRect(520, 340);
+    const panel = this._panelRect(600, 390);
     this._drawPanelShell(ctx, panel, "OPTIONS");
 
     ctx.save();
-    ctx.fillStyle = "rgba(230,234,242,0.92)";
     ctx.font = "13px system-ui, Arial";
 
-    const lines = [
-      "Arrows: Move / Aim",
-      "F: Interact",
-      "Q / W / E / R: Cast spells",
-      "1 / 2: Use HP / Mana potions",
-      "I / J / M / O: Open menus",
-      "",
-      `Save slot: ${game?.save?.key || "local save"}`,
-      "Autosave is handled by the game.",
-    ];
+    const x = panel.x + 20;
+    let y = panel.y + 62;
 
-    let y = panel.y + 70;
-    for (const line of lines) {
-      ctx.fillText(line, panel.x + 22, y);
-      y += 22;
-    }
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.font = "bold 14px system-ui, Arial";
+    ctx.fillText("Controls", x, y);
+    y += 24;
 
-    this._drawPanelFooter(ctx, panel, "O / Esc close");
+    ctx.font = "13px system-ui, Arial";
+    ctx.fillStyle = "rgba(230,230,235,0.92)";
+    ctx.fillText("Arrow Keys   - Move / Aim", x, y); y += 22;
+    ctx.fillText("F            - Interact", x, y); y += 22;
+    ctx.fillText("Q / W / E / R - Cast spells", x, y); y += 22;
+    ctx.fillText("1 / 2        - Use potions", x, y); y += 22;
+    ctx.fillText("I / J / M / O - Open menus", x, y); y += 22;
+
+    y += 10;
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.font = "bold 14px system-ui, Arial";
+    ctx.fillText("Save", x, y);
+    y += 24;
+
+    ctx.font = "13px system-ui, Arial";
+    ctx.fillStyle = "rgba(230,230,235,0.92)";
+    ctx.fillText(`Save Key: ${game.save?.key || "local save"}`, x, y); y += 22;
+    ctx.fillText("Autosave runs during play.", x, y); y += 22;
+
+    y += 10;
+    ctx.fillStyle = "rgba(255,160,160,0.98)";
+    ctx.font = "bold 14px system-ui, Arial";
+    ctx.fillText("New Game / Hard Reset", x, y);
+    y += 24;
+
+    ctx.font = "13px system-ui, Arial";
+    ctx.fillStyle = "rgba(255,225,225,0.92)";
+    ctx.fillText("Open this menu, then press Delete.", x, y); y += 22;
+    ctx.fillText("This clears the save and reloads the game.", x, y);
+
+    this._drawPanelFooter(ctx, panel, "Esc / O to close • Delete = clear save + restart");
     ctx.restore();
   }
+}
 
-  /* ===========================
-     HELPERS
-  =========================== */
+/* ===========================
+   HELPERS
+=========================== */
 
-  _rarityColor(r) {
-    if (r === "epic") return "rgba(215,150,255,0.98)";
-    if (r === "rare") return "rgba(120,190,255,0.98)";
-    if (r === "uncommon") return "rgba(145,230,145,0.98)";
-    return "rgba(230,230,230,0.96)";
+function sq(x, y) {
+  return x * x + y * y;
+}
+
+function cap(s) {
+  const t = String(s || "");
+  return t ? t[0].toUpperCase() + t.slice(1) : "";
+}
+
+function rarityColor(r) {
+  if (r === "epic") return "rgba(215,150,255,0.98)";
+  if (r === "rare") return "rgba(120,190,255,0.98)";
+  if (r === "uncommon") return "rgba(145,230,145,0.98)";
+  return "rgba(235,235,235,0.96)";
+}
+
+function itemStatLine(it) {
+  if (!it) return "";
+  const s = it.stats || {};
+  const parts = [];
+  if (s.dmg) parts.push(`DMG ${s.dmg}`);
+  if (s.armor) parts.push(`ARM ${s.armor}`);
+  if (s.crit) parts.push(`CRIT ${Math.round(s.crit * 100)}%`);
+  parts.push(`LV ${it.level || 1}`);
+  return parts.join(" • ");
+}
+
+function trimText(ctx, text, maxW) {
+  const t = String(text || "");
+  if (ctx.measureText(t).width <= maxW) return t;
+  let out = t;
+  while (out.length > 0 && ctx.measureText(out + "…").width > maxW) {
+    out = out.slice(0, -1);
   }
+  return out + "…";
+}
 
-  _fillRound(ctx, x, y, w, h, r, color) {
-    ctx.fillStyle = color;
-    const p = new Path2D();
-    this._roundRectPath(p, x, y, w, h, r);
-    ctx.fill(p);
-  }
-
-  _strokeRound(ctx, x, y, w, h, r, color, lineWidth = 1) {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = lineWidth;
-    const p = new Path2D();
-    this._roundRectPath(p, x, y, w, h, r);
-    ctx.stroke(p);
-  }
-
-  _roundRectPath(path, x, y, w, h, r) {
-    const rr = Math.min(r, w / 2, h / 2);
-    path.moveTo(x + rr, y);
-    path.lineTo(x + w - rr, y);
-    path.quadraticCurveTo(x + w, y, x + w, y + rr);
-    path.lineTo(x + w, y + h - rr);
-    path.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
-    path.lineTo(x + rr, y + h);
-    path.quadraticCurveTo(x, y + h, x, y + h - rr);
-    path.lineTo(x, y + rr);
-    path.quadraticCurveTo(x, y, x + rr, y);
-    path.closePath();
-  }
+function roundRect(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
+  ctx.closePath();
 }

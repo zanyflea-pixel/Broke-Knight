@@ -1,16 +1,16 @@
 // src/save.js
-// v32 SAFE SAVE COMPAT + FORWARD-PROOFING PASS (FULL FILE)
+// v35 SAFE SAVE HARDENING PASS (FULL FILE)
 // Goals:
 // - keep existing save behavior working
-// - preserve elite/progression fields
-// - add safer defaults for newer hero fields
-// - sanitize data more defensively
-// - keep load/save simple and compatible
+// - preserve inventory / equip / progression fields
+// - safely sanitize newer hero fields
+// - make reset/export/import more reliable
+// - stay compatible with current game.js structure
 
 export default class Save {
   constructor(key = "broke-knight-save") {
     this.key = String(key || "broke-knight-save");
-    this.version = 2;
+    this.version = 3;
   }
 
   load() {
@@ -100,8 +100,6 @@ export default class Save {
         hpRegen: 1.5,
         manaRegen: 6.0,
 
-        speed: 180,
-
         gold: 0,
         level: 1,
         xp: 0,
@@ -150,55 +148,50 @@ export default class Save {
       if (Number.isFinite(h.vx)) out.hero.vx = +h.vx;
       if (Number.isFinite(h.vy)) out.hero.vy = +h.vy;
 
-      if (Number.isFinite(h.hp)) out.hero.hp = Math.max(0, +h.hp);
       if (Number.isFinite(h.maxHp)) out.hero.maxHp = Math.max(1, +h.maxHp);
+      if (Number.isFinite(h.hp)) out.hero.hp = Math.max(0, +h.hp);
 
-      if (Number.isFinite(h.mana)) out.hero.mana = Math.max(0, +h.mana);
       if (Number.isFinite(h.maxMana)) out.hero.maxMana = Math.max(1, +h.maxMana);
+      if (Number.isFinite(h.mana)) out.hero.mana = Math.max(0, +h.mana);
 
       if (Number.isFinite(h.hpRegen)) out.hero.hpRegen = Math.max(0, +h.hpRegen);
       if (Number.isFinite(h.manaRegen)) out.hero.manaRegen = Math.max(0, +h.manaRegen);
-
-      if (Number.isFinite(h.speed)) out.hero.speed = Math.max(0, +h.speed);
 
       if (Number.isFinite(h.gold)) out.hero.gold = Math.max(0, h.gold | 0);
       if (Number.isFinite(h.level)) out.hero.level = Math.max(1, h.level | 0);
       if (Number.isFinite(h.xp)) out.hero.xp = Math.max(0, h.xp | 0);
       if (Number.isFinite(h.nextXp)) out.hero.nextXp = Math.max(1, h.nextXp | 0);
 
-      // clamp current resources to max after both have been read
-      out.hero.hp = Math.min(out.hero.hp, out.hero.maxHp);
-      out.hero.mana = Math.min(out.hero.mana, out.hero.maxMana);
-
       if (h.potions && typeof h.potions === "object") {
-        out.hero.potions.hp = Math.max(0, h.potions.hp | 0);
-        out.hero.potions.mana = Math.max(0, h.potions.mana | 0);
+        if (Number.isFinite(h.potions.hp)) out.hero.potions.hp = Math.max(0, h.potions.hp | 0);
+        if (Number.isFinite(h.potions.mana)) out.hero.potions.mana = Math.max(0, h.potions.mana | 0);
       }
 
       if (Array.isArray(h.inventory)) {
         out.hero.inventory = h.inventory
-          .filter(v => v && typeof v === "object")
-          .map(v => this._sanitizeItem(v))
+          .map(it => this._sanitizeItem(it))
           .filter(Boolean);
       }
 
       if (h.equip && typeof h.equip === "object") {
         const eq = {};
-        for (const k of Object.keys(h.equip)) {
-          const item = this._sanitizeItem(h.equip[k]);
-          if (item) eq[k] = item;
+        for (const [slot, item] of Object.entries(h.equip)) {
+          const clean = this._sanitizeItem(item);
+          if (clean) eq[String(slot)] = clean;
         }
         out.hero.equip = eq;
       }
 
       if (h.state && typeof h.state === "object") {
-        out.hero.state.sailing = !!h.state.sailing;
-        out.hero.state.dashT = Number.isFinite(h.state.dashT) ? Math.max(0, +h.state.dashT) : 0;
-        out.hero.state.hurtT = Number.isFinite(h.state.hurtT) ? Math.max(0, +h.state.hurtT) : 0;
+        out.hero.state = {
+          sailing: !!h.state.sailing,
+          dashT: Number.isFinite(h.state.dashT) ? Math.max(0, +h.state.dashT) : 0,
+          hurtT: Number.isFinite(h.state.hurtT) ? Math.max(0, +h.state.hurtT) : 0,
+        };
       }
 
       if (h.lastMove && typeof h.lastMove === "object") {
-        let lx = Number.isFinite(h.lastMove.x) ? +h.lastMove.x : 1;
+        let lx = Number.isFinite(h.lastMove.x) ? +h.lastMove.x : 0;
         let ly = Number.isFinite(h.lastMove.y) ? +h.lastMove.y : 0;
 
         if (!Number.isFinite(lx)) lx = 1;
@@ -248,6 +241,13 @@ export default class Save {
         out.progress.currentZoneText = p.currentZoneText.trim();
       }
     }
+
+    // final clamps after parsing
+    out.hero.hp = Math.min(out.hero.hp, out.hero.maxHp);
+    out.hero.mana = Math.min(out.hero.mana, out.hero.maxMana);
+
+    if (out.hero.level < 1) out.hero.level = 1;
+    if (out.hero.nextXp < 1) out.hero.nextXp = 1;
 
     return out;
   }

@@ -1,13 +1,14 @@
 ===== src/entities.js =====
 // src/entities.js
 // FULL FILE
-// Next polish pass:
+// Gear visuals pass:
 // - preserve working hero vertical sword
 // - preserve working enemy variety
 // - stronger enemy role readability
 // - clearer elite visuals
 // - better projectile trail/glow
 // - clearer loot pickup visuals
+// - visible equipped gear on hero
 // - keep current game.js compatibility
 
 import { clamp, dist, norm, RNG, hash2 } from "./util.js";
@@ -260,11 +261,46 @@ export class Hero {
     const facingDown = vertical && fy > 0;
     const side = fx >= 0 ? 1 : -1;
 
+    const weapon = this.equip?.weapon || null;
+    const armor = this.equip?.armor || this.equip?.chest || null;
+    const helm = this.equip?.helm || null;
+    const boots = this.equip?.boots || null;
+    const ring = this.equip?.ring || null;
+    const trinket = this.equip?.trinket || null;
+
+    const tunicColor = armor
+      ? gearVisualColor(armor.rarity, "armor")
+      : "rgba(64,86,138,0.98)";
+
+    const bootColor = boots
+      ? gearVisualColor(boots.rarity, "boots")
+      : "rgba(58,62,72,0.98)";
+
+    const swordMetal = weapon
+      ? gearVisualColor(weapon.rarity, "weapon")
+      : "rgba(178,188,205,1)";
+
+    const swordShine = weapon
+      ? gearShineColor(weapon.rarity)
+      : "rgba(232,236,244,0.9)";
+
+    const helmColor = helm
+      ? gearVisualColor(helm.rarity, "helm")
+      : null;
+
+    const charmColor = trinket
+      ? gearVisualColor(trinket.rarity, "trinket")
+      : ring
+        ? gearVisualColor(ring.rarity, "ring")
+        : null;
+
+    // shadow
     ctx.fillStyle = "rgba(0,0,0,0.18)";
     ctx.beginPath();
     ctx.ellipse(this.x, this.y + 11, 9, 4.5, 0, 0, Math.PI * 2);
     ctx.fill();
 
+    // cape / back cloth
     ctx.fillStyle = hurt ? "rgba(185,44,44,0.96)" : "rgba(150,32,36,0.96)";
     ctx.beginPath();
     if (facingUp) {
@@ -286,7 +322,8 @@ export class Hero {
     ctx.closePath();
     ctx.fill();
 
-    ctx.strokeStyle = "rgba(58,62,72,0.98)";
+    // boots / legs
+    ctx.strokeStyle = bootColor;
     ctx.lineWidth = 2.4;
     ctx.beginPath();
     if (vertical) {
@@ -302,15 +339,19 @@ export class Hero {
     }
     ctx.stroke();
 
+    // torso
     ctx.fillStyle = hurt ? "rgba(228,228,235,1)" : "rgba(202,204,214,1)";
     roundedRectFill(ctx, this.x - 5.8, this.y - 2 + bob, 11.6, 12.8, 3);
 
-    ctx.fillStyle = "rgba(64,86,138,0.98)";
+    // chest / armor cloth
+    ctx.fillStyle = tunicColor;
     ctx.fillRect(this.x - 2.4, this.y - 1 + bob, 4.8, 10);
 
+    // belt
     ctx.fillStyle = "rgba(118,84,44,0.98)";
     ctx.fillRect(this.x - 5.2, this.y + 4.7 + bob, 10.4, 2.2);
 
+    // shoulders / sleeves
     ctx.strokeStyle = "rgba(214,214,224,0.98)";
     ctx.lineWidth = 2.2;
     ctx.beginPath();
@@ -332,11 +373,13 @@ export class Hero {
     }
     ctx.stroke();
 
+    // head
     ctx.fillStyle = hurt ? "rgba(255,214,214,1)" : "rgba(242,214,182,1)";
     ctx.beginPath();
     ctx.arc(this.x, this.y - 7 + bob, 5.3, 0, Math.PI * 2);
     ctx.fill();
 
+    // hair
     ctx.fillStyle = "rgba(78,56,38,0.98)";
     if (facingUp) {
       ctx.beginPath();
@@ -348,6 +391,22 @@ export class Hero {
       ctx.fill();
     }
 
+    // visible helm / hood
+    if (helmColor) {
+      ctx.fillStyle = helmColor;
+      if (facingUp) {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y - 8 + bob, 6.2, Math.PI * 1.05, Math.PI * 1.95);
+        ctx.fill();
+      } else {
+        roundedRectFill(ctx, this.x - 5.5, this.y - 11.4 + bob, 11, 4.8, 2.2);
+      }
+
+      ctx.fillStyle = gearTrimColor(helm.rarity);
+      ctx.fillRect(this.x - 3.5, this.y - 11 + bob, 7, 1.3);
+    }
+
+    // face
     ctx.fillStyle = "rgba(28,28,28,0.98)";
     if (facingUp) {
       ctx.fillRect(this.x - 2.4, this.y - 8.2 + bob, 1.2, 1.2);
@@ -361,13 +420,28 @@ export class Hero {
       ctx.fillRect(this.x + 1.2 + side * 0.5, this.y - 7.8 + bob, 1.2, 1.2);
     }
 
-    ctx.fillStyle = "rgba(108,122,148,0.96)";
+    // shield / arm plate
+    ctx.fillStyle = armor ? gearTrimColor(armor.rarity) : "rgba(108,122,148,0.96)";
     if (vertical) {
       roundedRectFill(ctx, this.x - 2.5, this.y + 1 + bob, 5, 6, 1.2);
     } else {
       roundedRectFill(ctx, this.x - 8.5, this.y + 1 + bob, 2.4, 5.4, 1.2);
     }
 
+    // ring / trinket charm
+    if (charmColor) {
+      ctx.fillStyle = charmColor;
+      ctx.beginPath();
+      ctx.arc(this.x + (side * 2.5), this.y + 2.8 + bob, 1.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(255,255,255,0.42)";
+      ctx.beginPath();
+      ctx.arc(this.x + (side * 2.3), this.y + 2.5 + bob, 0.45, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // sword
     ctx.save();
     if (facingUp) {
       ctx.translate(this.x, this.y - 11 + bob);
@@ -381,17 +455,27 @@ export class Hero {
       ctx.rotate(swordAng);
     }
 
-    ctx.fillStyle = "rgba(210,186,118,1)";
+    // pommel / grip
+    ctx.fillStyle = gearTrimColor(weapon?.rarity || "common");
     ctx.fillRect(-1.4, -3.4, 2.8, 6.8);
 
     ctx.fillStyle = "rgba(120,84,42,1)";
     ctx.fillRect(-2.8, -1.2, 5.6, 2.4);
 
-    ctx.fillStyle = "rgba(178,188,205,1)";
+    // blade
+    ctx.fillStyle = swordMetal;
     ctx.fillRect(2.8, -1, 11, 2);
 
-    ctx.fillStyle = "rgba(232,236,244,0.9)";
+    // blade shine
+    ctx.fillStyle = swordShine;
     ctx.fillRect(4.2, -0.35, 7.2, 0.7);
+
+    // rarity aura on weapon
+    if (weapon && weapon.rarity !== "common") {
+      ctx.strokeStyle = gearGlowColor(weapon.rarity);
+      ctx.lineWidth = 1;
+      ctx.strokeRect(2.1, -1.7, 12.3, 3.4);
+    }
 
     ctx.restore();
     ctx.restore();
@@ -454,6 +538,10 @@ export class Hero {
       this.hp = this.maxHp;
       this.mana = this.maxMana;
     }
+  }
+
+  giveXP(amount = 0) {
+    this.gainXp(amount);
   }
 }
 
@@ -520,6 +608,17 @@ export class Enemy {
     this.tail = (Math.abs(hash2((x * 17) | 0, (y * 17) | 0, 31 + this.seed)) % 2) === 0;
     this.floatSeed = (Math.abs(hash2((x * 19) | 0, (y * 19) | 0, this.seed + 51)) % 1000) / 1000;
     this.pulse = 0;
+  }
+
+  xpValue() {
+    const base =
+      this.kind === "brute" ? 9 :
+      this.kind === "caster" ? 8 :
+      this.kind === "stalker" ? 7 :
+      6;
+
+    const scaled = base + this.tier * 2;
+    return this.elite ? Math.round(scaled * 1.8) : scaled;
   }
 
   update(dt, hero, world, game) {
@@ -1105,6 +1204,66 @@ function enemyPalette(lookType, elite, shift, flash) {
   return palettes[shift % palettes.length];
 }
 
+function gearVisualColor(rarity, kind = "generic") {
+  if (kind === "armor") {
+    if (rarity === "epic") return "rgba(142,92,214,0.98)";
+    if (rarity === "rare") return "rgba(78,124,214,0.98)";
+    if (rarity === "uncommon") return "rgba(70,146,110,0.98)";
+    return "rgba(92,104,128,0.98)";
+  }
+
+  if (kind === "helm") {
+    if (rarity === "epic") return "rgba(124,82,194,0.98)";
+    if (rarity === "rare") return "rgba(96,118,172,0.98)";
+    if (rarity === "uncommon") return "rgba(84,126,98,0.98)";
+    return "rgba(96,98,110,0.98)";
+  }
+
+  if (kind === "boots") {
+    if (rarity === "epic") return "rgba(118,76,184,0.98)";
+    if (rarity === "rare") return "rgba(74,104,162,0.98)";
+    if (rarity === "uncommon") return "rgba(64,112,86,0.98)";
+    return "rgba(58,62,72,0.98)";
+  }
+
+  if (kind === "ring" || kind === "trinket") {
+    if (rarity === "epic") return "rgba(226,170,255,0.98)";
+    if (rarity === "rare") return "rgba(156,210,255,0.98)";
+    if (rarity === "uncommon") return "rgba(180,240,180,0.98)";
+    return "rgba(232,214,164,0.98)";
+  }
+
+  if (kind === "weapon") {
+    if (rarity === "epic") return "rgba(208,164,255,1)";
+    if (rarity === "rare") return "rgba(144,204,255,1)";
+    if (rarity === "uncommon") return "rgba(186,232,196,1)";
+    return "rgba(178,188,205,1)";
+  }
+
+  return "rgba(200,200,210,1)";
+}
+
+function gearTrimColor(rarity) {
+  if (rarity === "epic") return "rgba(255,220,150,1)";
+  if (rarity === "rare") return "rgba(230,236,255,1)";
+  if (rarity === "uncommon") return "rgba(220,240,220,1)";
+  return "rgba(210,186,118,1)";
+}
+
+function gearShineColor(rarity) {
+  if (rarity === "epic") return "rgba(255,236,255,0.95)";
+  if (rarity === "rare") return "rgba(236,246,255,0.95)";
+  if (rarity === "uncommon") return "rgba(240,255,244,0.94)";
+  return "rgba(232,236,244,0.9)";
+}
+
+function gearGlowColor(rarity) {
+  if (rarity === "epic") return "rgba(220,160,255,0.95)";
+  if (rarity === "rare") return "rgba(140,210,255,0.95)";
+  if (rarity === "uncommon") return "rgba(155,235,175,0.92)";
+  return "rgba(255,220,140,0.55)";
+}
+
 function roundedRectPath(path, x, y, w, h, r) {
   const rr = Math.min(r, w / 2, h / 2);
   path.moveTo(x + rr, y);
@@ -1126,13 +1285,13 @@ function roundedRectFill(ctx, x, y, w, h, r) {
 }
 ===== src/game.js =====
 // src/game.js
-// v31 HARD AIM FIX PASS (FULL FILE)
-// Fixes:
-// - spell aim now reads LIVE arrow-key direction first
-// - straight up/down casting works reliably
-// - arrows remain the only movement keys
-// - Q/W/E/R remain spells
-// - mana regen / cooldowns / progression kept intact
+// v35 SAFE RESET CONFIRM + FAST TRAVEL + INVENTORY HOTKEY EQUIP (FULL FILE)
+// Adds:
+// - map fast travel with awakened waystones
+// - inventory quick-equip on 1-9 / 0 while inventory is open
+// - safe swap: old equipped item returns to bag
+// - SAFE hard reset / new game from Options menu with Delete twice
+// - keeps aim, spells, camps, loot, save/load, and progression systems intact
 
 import World from "./world.js";
 import { clamp, lerp, dist2, norm, RNG, hash2 } from "./util.js";
@@ -1155,7 +1314,7 @@ export default class Game {
 
     this.input = new Input(window);
     this.ui = new UI(canvas);
-    this.save = new Save("broke-knight-save-v31");
+    this.save = new Save("broke-knight-save-v35");
 
     this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
     this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
@@ -1212,6 +1371,8 @@ export default class Game {
     this._pickupMsgCooldown = 0;
     this._levelMsgShown = this.hero.level || 1;
     this._spellMsgCooldown = 0;
+    this._resetQueued = false;
+    this._resetConfirmT = 0;
 
     this.aim = { x: 1, y: 0 };
 
@@ -1411,6 +1572,50 @@ export default class Game {
     return false;
   }
 
+  _equipInventoryIndex(index) {
+    const bag = this.hero.inventory || [];
+    const idx = index | 0;
+    if (idx < 0 || idx >= bag.length) return false;
+
+    const item = bag[idx];
+    if (!item || !item.slot) {
+      this._msg("That item cannot be equipped.", 1.6);
+      return false;
+    }
+
+    const slot = item.slot;
+    const oldEquipped = this.hero.equip?.[slot] || null;
+
+    bag.splice(idx, 1);
+
+    if (!this.hero.equip) this.hero.equip = {};
+    this.hero.equip[slot] = item;
+
+    if (oldEquipped) {
+      bag.push(oldEquipped);
+      this._msg(`Equipped ${item.name} (${slot})`, 1.8);
+    } else {
+      this._msg(`Equipped ${item.name}`, 1.8);
+    }
+
+    return true;
+  }
+
+  _handleInventoryHotkeys() {
+    if (this.menu.open !== "inventory") return;
+
+    if (this.input.wasPressed("1")) this._equipInventoryIndex(0);
+    else if (this.input.wasPressed("2")) this._equipInventoryIndex(1);
+    else if (this.input.wasPressed("3")) this._equipInventoryIndex(2);
+    else if (this.input.wasPressed("4")) this._equipInventoryIndex(3);
+    else if (this.input.wasPressed("5")) this._equipInventoryIndex(4);
+    else if (this.input.wasPressed("6")) this._equipInventoryIndex(5);
+    else if (this.input.wasPressed("7")) this._equipInventoryIndex(6);
+    else if (this.input.wasPressed("8")) this._equipInventoryIndex(7);
+    else if (this.input.wasPressed("9")) this._equipInventoryIndex(8);
+    else if (this.input.wasPressed("0")) this._equipInventoryIndex(9);
+  }
+
   _pickupNearbyLootBonus() {
     for (const l of this.loot) {
       if (!l.alive) continue;
@@ -1449,6 +1654,15 @@ export default class Game {
   _tickSpellCooldowns(dt) {
     for (const k of Object.keys(this.spellCd)) {
       this.spellCd[k] = Math.max(0, this.spellCd[k] - dt);
+    }
+  }
+
+  _tickResetConfirm(dt) {
+    if (this._resetConfirmT > 0) {
+      this._resetConfirmT = Math.max(0, this._resetConfirmT - dt);
+      if (this._resetConfirmT <= 0) {
+        this._resetConfirmT = 0;
+      }
     }
   }
 
@@ -1492,15 +1706,12 @@ export default class Game {
   }
 
   _currentAim() {
-    // 1) live arrows right now
     const live = this._liveArrowAim();
     if (live) return live;
 
-    // 2) saved explicit aim
     const saved = norm(this.aim.x || 0, this.aim.y || 0);
     if (saved.x || saved.y) return saved;
 
-    // 3) hero last move
     const lm = this.hero.lastMove || { x: 1, y: 0 };
     const fallback = norm(lm.x || 0, lm.y || 0);
     if (fallback.x || fallback.y) return fallback;
@@ -1659,6 +1870,97 @@ export default class Game {
         this._msg(`Enemy camp nearby (Tier ${nearest.tier}).`, 2.2);
       }
     }
+  }
+
+  _getDiscoveredWaystones() {
+    const all = Array.isArray(this.world?.waystones) ? this.world.waystones.slice() : [];
+    return all
+      .filter(w => this.progress?.discoveredWaystones?.has?.(w.id))
+      .sort((a, b) => {
+        const ai = Number.isFinite(a?.id) ? a.id : 0;
+        const bi = Number.isFinite(b?.id) ? b.id : 0;
+        return ai - bi;
+      });
+  }
+
+  _teleportToWaystone(index) {
+    const ways = this._getDiscoveredWaystones();
+
+    if (!ways.length) {
+      this._msg("No awakened waystones yet.", 2);
+      return;
+    }
+
+    if (this.hero.state?.sailing) {
+      this._msg("Cannot fast travel while sailing.", 2);
+      return;
+    }
+
+    const w = ways[index | 0];
+    if (!w) return;
+
+    this.hero.x = w.x;
+    this.hero.y = w.y + 42;
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+    this.hero.state.dashT = 0;
+
+    this.menu.open = null;
+    this.ui?.closeAll?.();
+
+    this._msg(`Fast traveled to Waystone ${index + 1}`, 2.2);
+    this._shake(0.12, 4);
+  }
+
+  _handleFastTravelInput() {
+    if (this.menu.open !== "map") return;
+
+    if (this.input.wasPressed("1")) this._teleportToWaystone(0);
+    else if (this.input.wasPressed("2")) this._teleportToWaystone(1);
+    else if (this.input.wasPressed("3")) this._teleportToWaystone(2);
+    else if (this.input.wasPressed("4")) this._teleportToWaystone(3);
+    else if (this.input.wasPressed("5")) this._teleportToWaystone(4);
+    else if (this.input.wasPressed("6")) this._teleportToWaystone(5);
+    else if (this.input.wasPressed("7")) this._teleportToWaystone(6);
+    else if (this.input.wasPressed("8")) this._teleportToWaystone(7);
+    else if (this.input.wasPressed("9")) this._teleportToWaystone(8);
+  }
+
+  _hardResetRun() {
+    if (this._resetQueued) return;
+    this._resetQueued = true;
+
+    this._msg("Save cleared. Restarting new game...", 1.2);
+
+    try {
+      this.save?.clear?.();
+    } catch (_) {
+      // ignore clear failures; still try reloading
+    }
+
+    setTimeout(() => {
+      if (typeof window !== "undefined" && window.location) {
+        window.location.reload();
+      }
+    }, 120);
+  }
+
+  _handleResetHotkey() {
+    if (this.menu.open !== "options") {
+      this._resetConfirmT = 0;
+      return;
+    }
+
+    if (!this.input.wasPressed("Delete")) return;
+
+    if (this._resetConfirmT > 0) {
+      this._resetConfirmT = 0;
+      this._hardResetRun();
+      return;
+    }
+
+    this._resetConfirmT = 1.5;
+    this._msg("Press Delete again to erase save.", 1.5);
   }
 
   _handleMenus() {
@@ -2030,7 +2332,7 @@ export default class Game {
         slotRoll < 0.90 ? "ring" : "trinket";
 
       const gearSeed = hash2(this.seed ^ 0x55aa, ((x | 0) * 31 + (y | 0) * 17));
-      const g = makeGear(gearSeed, (this.hero.level || 1) + 1, slot);
+      const g = makeGear(slot, (this.hero.level || 1) + 1, null, gearSeed);
       this.loot.push(new Loot(x, y, "gear", { gear: g }));
       return;
     }
@@ -2071,11 +2373,8 @@ export default class Game {
       slotRoll < 0.80 ? "boots" :
       slotRoll < 0.90 ? "ring" : "trinket";
 
-    const g = makeGear(
-      hash2(this.seed, ((x | 0) * 31 + (y | 0) * 17)),
-      this.hero.level || 1,
-      slot
-    );
+    const gearSeed = hash2(this.seed, ((x | 0) * 31 + (y | 0) * 17));
+    const g = makeGear(slot, this.hero.level || 1, null, gearSeed);
     this.loot.push(new Loot(x, y, "gear", { gear: g }));
   }
 
@@ -2115,11 +2414,20 @@ export default class Game {
     }
 
     this._tickSpellCooldowns(dt);
+    this._tickResetConfirm(dt);
+
     this._handleMenus();
+    this._handleFastTravelInput();
+    this._handleInventoryHotkeys();
+    this._handleResetHotkey();
 
     this.world?.update?.(dt, this.hero);
 
-    const blockMove = this.menu.open === "inventory" || this.menu.open === "options";
+    const blockMove =
+      this.menu.open === "inventory" ||
+      this.menu.open === "options" ||
+      this.menu.open === "map";
+
     if (!blockMove) this._handleMovement(dt);
     else {
       this.hero.vx = 0;
@@ -2261,19 +2569,19 @@ export default class Game {
 }
 ===== src/input.js =====
 // src/input.js
-// v31 STABLE INPUT REWRITE (FULL FILE)
+// v33 INPUT NORMALIZATION + DELETE/NUMPAD PASS (FULL FILE)
 // Goals:
 // ✅ Fast and simple
 // ✅ Consistent key handling for game.js
 // ✅ Supports both e.key and e.code lookups
 // ✅ Prevents stuck key states on window blur
+// ✅ Normalizes Delete / Backspace / Enter / Tab
+// ✅ Makes 0-9 hotkeys work from BOTH top row and numpad
 // ✅ Keeps API compatible with current game.js:
 //    - new Input(canvas)
 //    - isDown(key)
 //    - wasPressed(key)
 //    - endFrame()
-//
-// Replace ENTIRE file: src/input.js
 
 export default class Input {
   constructor(target = window) {
@@ -2304,14 +2612,15 @@ export default class Input {
 
       for (const v of variants) this.down.add(v);
 
-      // stop arrow keys / space from scrolling page
+      // stop arrow keys / space / tab from affecting the page
       if (
         e.key === "ArrowUp" ||
         e.key === "ArrowDown" ||
         e.key === "ArrowLeft" ||
         e.key === "ArrowRight" ||
         e.key === " " ||
-        e.code === "Space"
+        e.code === "Space" ||
+        e.key === "Tab"
       ) {
         e.preventDefault();
       }
@@ -2384,6 +2693,34 @@ export default class Input {
       out.add("esc");
     }
 
+    // normalize delete
+    if (key === "Delete" || code === "Delete" || code === "Del") {
+      out.add("Delete");
+      out.add("delete");
+      out.add("Del");
+      out.add("del");
+    }
+
+    // normalize backspace
+    if (key === "Backspace" || code === "Backspace") {
+      out.add("Backspace");
+      out.add("backspace");
+    }
+
+    // normalize enter
+    if (key === "Enter" || code === "Enter" || code === "NumpadEnter") {
+      out.add("Enter");
+      out.add("enter");
+      out.add("NumpadEnter");
+      out.add("numpadenter");
+    }
+
+    // normalize tab
+    if (key === "Tab" || code === "Tab") {
+      out.add("Tab");
+      out.add("tab");
+    }
+
     // normalize letters/digits into KeyX / DigitN forms too
     if (typeof key === "string" && key.length === 1) {
       const ch = key.toUpperCase();
@@ -2394,7 +2731,18 @@ export default class Input {
       if (ch >= "0" && ch <= "9") {
         out.add("Digit" + ch);
         out.add(("Digit" + ch).toLowerCase());
+        out.add(ch);
       }
+    }
+
+    // normalize numpad digits to regular digit checks
+    if (typeof code === "string" && /^Numpad[0-9]$/.test(code)) {
+      const n = code.slice("Numpad".length);
+      out.add(n);
+      out.add("Digit" + n);
+      out.add(("Digit" + n).toLowerCase());
+      out.add("Numpad" + n);
+      out.add(("Numpad" + n).toLowerCase());
     }
 
     // normalize space
@@ -2442,16 +2790,17 @@ export default class Input {
     this.pressed.clear();
   }
 }
-
 ===== src/main.js =====
 // src/main.js
-// v32 SAFE BOOT + RESIZE + FRAME PACING PASS (FULL FILE)
+// v33 BOOT + FOCUS + RESUME HARDENING PASS (FULL FILE)
 // Purpose:
 // - keep boot flow simple
 // - improve resize behavior
 // - improve canvas sharpness on high-DPI screens
 // - clamp frame spikes after tab switches / lag
 // - keep keyboard focus on canvas
+// - block browser interactions that interfere with gameplay
+// - avoid duplicate RAF loops on page restore / reload edge cases
 // - avoid touching core gameplay logic in game.js
 
 import Game from "./game.js";
@@ -2468,6 +2817,7 @@ if (!ctx) {
 
 let game = null;
 let rafId = 0;
+let booted = false;
 let lastTime = performance.now();
 let accumulator = 0;
 
@@ -2476,8 +2826,24 @@ const STEP = 1 / 60;
 const MAX_FRAME = 0.05; // clamp giant spikes after tab switches
 const MAX_STEPS = 4;    // prevent spiral of death on slow frames
 
+setupCanvasElement();
+
+function setupCanvasElement() {
+  // Make sure the canvas can actually receive keyboard focus.
+  if (!canvas.hasAttribute("tabindex")) {
+    canvas.tabIndex = 0;
+  }
+
+  canvas.setAttribute("role", "application");
+  canvas.setAttribute("aria-label", "Broke Knight game canvas");
+
+  canvas.style.outline = "none";
+  canvas.style.userSelect = "none";
+  canvas.style.webkitUserSelect = "none";
+  canvas.style.touchAction = "none";
+}
+
 function getDPR() {
-  // 2 is a good safe cap for sharpness without overworking the browser too much
   return Math.max(1, Math.min(2, window.devicePixelRatio || 1));
 }
 
@@ -2505,29 +2871,56 @@ function resizeCanvas() {
     game.resize(cssW, cssH);
   } else if (game?.setViewSize) {
     game.setViewSize(cssW, cssH);
-  } else {
-    if (game) {
-      game.viewW = cssW;
-      game.viewH = cssH;
-    }
+  } else if (game) {
+    game.viewW = cssW;
+    game.viewH = cssH;
   }
 }
 
 function ensureFocus() {
   if (document.activeElement !== canvas) {
-    canvas.focus({ preventScroll: true });
+    try {
+      canvas.focus({ preventScroll: true });
+    } catch (_) {
+      canvas.focus();
+    }
   }
 }
 
+function resetTiming() {
+  lastTime = performance.now();
+  accumulator = 0;
+}
+
+function stopLoop() {
+  if (rafId) {
+    cancelAnimationFrame(rafId);
+    rafId = 0;
+  }
+}
+
+function startLoop() {
+  if (rafId) return;
+  resetTiming();
+  rafId = requestAnimationFrame(loop);
+}
+
 function boot() {
+  if (booted) return;
+  booted = true;
+
   resizeCanvas();
+
   game = new Game(canvas, ctx);
+
   if (game?.resize) {
     game.resize(window.innerWidth | 0, window.innerHeight | 0);
+  } else if (game?.setViewSize) {
+    game.setViewSize(window.innerWidth | 0, window.innerHeight | 0);
   }
+
   ensureFocus();
-  lastTime = performance.now();
-  rafId = requestAnimationFrame(loop);
+  startLoop();
 }
 
 function update(dt) {
@@ -2561,7 +2954,6 @@ function loop(now) {
   let frame = (now - lastTime) / 1000;
   lastTime = now;
 
-  // Avoid giant catch-up jumps after tabbing away / browser hiccups.
   frame = Math.min(MAX_FRAME, Math.max(0, frame));
   accumulator += frame;
 
@@ -2582,17 +2974,46 @@ function onResize() {
 }
 
 function onVisibilityChange() {
-  // Reset timing when coming back so physics/cooldowns don't jump.
-  lastTime = performance.now();
-  accumulator = 0;
+  if (document.hidden) {
+    resetTiming();
+    return;
+  }
+
+  resetTiming();
+  ensureFocus();
+}
+
+function onPageShow() {
+  resetTiming();
+  ensureFocus();
+  startLoop();
 }
 
 function onPointerDown() {
   ensureFocus();
 }
 
+function onMouseDown(e) {
+  ensureFocus();
+
+  if (e.button === 1) {
+    e.preventDefault();
+  }
+}
+
+function onContextMenu(e) {
+  e.preventDefault();
+}
+
+function onDragStart(e) {
+  e.preventDefault();
+}
+
+function onSelectStart(e) {
+  e.preventDefault();
+}
+
 function onKeyDown(e) {
-  // Prevent page scroll on game keys.
   const block = [
     "ArrowUp",
     "ArrowDown",
@@ -2608,27 +3029,43 @@ function onKeyDown(e) {
   ensureFocus();
 }
 
+function onBlurWindow() {
+  resetTiming();
+}
+
+function onBeforeUnload() {
+  stopLoop();
+}
+
 window.addEventListener("resize", onResize, { passive: true });
 window.addEventListener("orientationchange", onResize, { passive: true });
 window.addEventListener("visibilitychange", onVisibilityChange);
+window.addEventListener("pageshow", onPageShow);
 window.addEventListener("pointerdown", onPointerDown);
+window.addEventListener("mousedown", onMouseDown);
 window.addEventListener("keydown", onKeyDown, { passive: false });
+window.addEventListener("blur", onBlurWindow);
+window.addEventListener("beforeunload", onBeforeUnload);
+
+canvas.addEventListener("contextmenu", onContextMenu);
+canvas.addEventListener("dragstart", onDragStart);
+canvas.addEventListener("selectstart", onSelectStart);
 
 boot();
 ===== src/save.js =====
 // src/save.js
-// v32 SAFE SAVE COMPAT + FORWARD-PROOFING PASS (FULL FILE)
+// v35 SAFE SAVE HARDENING PASS (FULL FILE)
 // Goals:
 // - keep existing save behavior working
-// - preserve elite/progression fields
-// - add safer defaults for newer hero fields
-// - sanitize data more defensively
-// - keep load/save simple and compatible
+// - preserve inventory / equip / progression fields
+// - safely sanitize newer hero fields
+// - make reset/export/import more reliable
+// - stay compatible with current game.js structure
 
 export default class Save {
   constructor(key = "broke-knight-save") {
     this.key = String(key || "broke-knight-save");
-    this.version = 2;
+    this.version = 3;
   }
 
   load() {
@@ -2718,8 +3155,6 @@ export default class Save {
         hpRegen: 1.5,
         manaRegen: 6.0,
 
-        speed: 180,
-
         gold: 0,
         level: 1,
         xp: 0,
@@ -2768,55 +3203,50 @@ export default class Save {
       if (Number.isFinite(h.vx)) out.hero.vx = +h.vx;
       if (Number.isFinite(h.vy)) out.hero.vy = +h.vy;
 
-      if (Number.isFinite(h.hp)) out.hero.hp = Math.max(0, +h.hp);
       if (Number.isFinite(h.maxHp)) out.hero.maxHp = Math.max(1, +h.maxHp);
+      if (Number.isFinite(h.hp)) out.hero.hp = Math.max(0, +h.hp);
 
-      if (Number.isFinite(h.mana)) out.hero.mana = Math.max(0, +h.mana);
       if (Number.isFinite(h.maxMana)) out.hero.maxMana = Math.max(1, +h.maxMana);
+      if (Number.isFinite(h.mana)) out.hero.mana = Math.max(0, +h.mana);
 
       if (Number.isFinite(h.hpRegen)) out.hero.hpRegen = Math.max(0, +h.hpRegen);
       if (Number.isFinite(h.manaRegen)) out.hero.manaRegen = Math.max(0, +h.manaRegen);
-
-      if (Number.isFinite(h.speed)) out.hero.speed = Math.max(0, +h.speed);
 
       if (Number.isFinite(h.gold)) out.hero.gold = Math.max(0, h.gold | 0);
       if (Number.isFinite(h.level)) out.hero.level = Math.max(1, h.level | 0);
       if (Number.isFinite(h.xp)) out.hero.xp = Math.max(0, h.xp | 0);
       if (Number.isFinite(h.nextXp)) out.hero.nextXp = Math.max(1, h.nextXp | 0);
 
-      // clamp current resources to max after both have been read
-      out.hero.hp = Math.min(out.hero.hp, out.hero.maxHp);
-      out.hero.mana = Math.min(out.hero.mana, out.hero.maxMana);
-
       if (h.potions && typeof h.potions === "object") {
-        out.hero.potions.hp = Math.max(0, h.potions.hp | 0);
-        out.hero.potions.mana = Math.max(0, h.potions.mana | 0);
+        if (Number.isFinite(h.potions.hp)) out.hero.potions.hp = Math.max(0, h.potions.hp | 0);
+        if (Number.isFinite(h.potions.mana)) out.hero.potions.mana = Math.max(0, h.potions.mana | 0);
       }
 
       if (Array.isArray(h.inventory)) {
         out.hero.inventory = h.inventory
-          .filter(v => v && typeof v === "object")
-          .map(v => this._sanitizeItem(v))
+          .map(it => this._sanitizeItem(it))
           .filter(Boolean);
       }
 
       if (h.equip && typeof h.equip === "object") {
         const eq = {};
-        for (const k of Object.keys(h.equip)) {
-          const item = this._sanitizeItem(h.equip[k]);
-          if (item) eq[k] = item;
+        for (const [slot, item] of Object.entries(h.equip)) {
+          const clean = this._sanitizeItem(item);
+          if (clean) eq[String(slot)] = clean;
         }
         out.hero.equip = eq;
       }
 
       if (h.state && typeof h.state === "object") {
-        out.hero.state.sailing = !!h.state.sailing;
-        out.hero.state.dashT = Number.isFinite(h.state.dashT) ? Math.max(0, +h.state.dashT) : 0;
-        out.hero.state.hurtT = Number.isFinite(h.state.hurtT) ? Math.max(0, +h.state.hurtT) : 0;
+        out.hero.state = {
+          sailing: !!h.state.sailing,
+          dashT: Number.isFinite(h.state.dashT) ? Math.max(0, +h.state.dashT) : 0,
+          hurtT: Number.isFinite(h.state.hurtT) ? Math.max(0, +h.state.hurtT) : 0,
+        };
       }
 
       if (h.lastMove && typeof h.lastMove === "object") {
-        let lx = Number.isFinite(h.lastMove.x) ? +h.lastMove.x : 1;
+        let lx = Number.isFinite(h.lastMove.x) ? +h.lastMove.x : 0;
         let ly = Number.isFinite(h.lastMove.y) ? +h.lastMove.y : 0;
 
         if (!Number.isFinite(lx)) lx = 1;
@@ -2867,6 +3297,13 @@ export default class Save {
       }
     }
 
+    // final clamps after parsing
+    out.hero.hp = Math.min(out.hero.hp, out.hero.maxHp);
+    out.hero.mana = Math.min(out.hero.mana, out.hero.maxMana);
+
+    if (out.hero.level < 1) out.hero.level = 1;
+    if (out.hero.nextXp < 1) out.hero.nextXp = 1;
+
     return out;
   }
 
@@ -2906,12 +3343,15 @@ function dedupeInts(arr) {
 }
 ===== src/ui.js =====
 // src/ui.js
-// v43 UI INTERACTION + QUEST PIN PASS (FULL FILE)
+// v47 UI RESET HINT + CONTROL POLISH (FULL FILE)
 // Safe UI-only upgrade:
 // - clearer interaction prompt
 // - stronger pinned quest box
 // - better message styling
-// - slightly cleaner spell bar emphasis
+// - cleaner spell bar emphasis
+// - map markers + fast travel legend
+// - inventory hotkey reminder
+// - options menu shows Delete reset / new game hint
 // - keeps the current panel/menu structure intact
 
 import { clamp } from "./util.js";
@@ -2985,6 +3425,7 @@ export default class UI {
   /* ===========================
      HUD
   =========================== */
+
   _drawHUD(ctx, game) {
     const hero = game.hero;
     const st = hero.getStats?.() || { maxHp: 100, maxMana: 60, dmg: 8, armor: 0, crit: 0.05 };
@@ -3035,44 +3476,57 @@ export default class UI {
     this._bar(ctx, bx, by + barH + gap, barW, barH, mpP, mpLow ? "rgba(112,172,255,0.98)" : "rgba(92,150,255,0.96)");
     this._bar(ctx, bx, by + (barH + gap) * 2, barW, 10, xpP, "rgba(255,210,92,0.96)", 7);
 
-    ctx.fillStyle = hpLow ? "rgba(255,220,220,0.98)" : "rgba(255,255,255,0.96)";
-    ctx.font = "12px system-ui, Arial";
-    ctx.fillText(`HP ${Math.round(hero.hp || 0)}/${Math.round(st.maxHp || 100)}`, bx + 8, by + 11);
-
-    ctx.fillStyle = mpLow ? "rgba(220,235,255,0.98)" : "rgba(255,255,255,0.96)";
-    ctx.fillText(`MP ${Math.round(hero.mana || 0)}/${Math.round(st.maxMana || 60)}`, bx + 8, by + barH + gap + 11);
-
     ctx.fillStyle = "rgba(255,255,255,0.96)";
-    ctx.fillText(`XP ${Math.round(hero.xp || 0)}/${Math.round(hero.nextXp || 1)}`, bx + 8, by + (barH + gap) * 2 + 9);
+    ctx.font = "12px system-ui, Arial";
+    ctx.fillText(`HP ${Math.ceil(hero.hp || 0)} / ${Math.ceil(st.maxHp || 100)}`, bx + 8, by + 11);
+    ctx.fillText(`Mana ${Math.ceil(hero.mana || 0)} / ${Math.ceil(st.maxMana || 60)}`, bx + 8, by + barH + gap + 11);
+    ctx.fillText(`XP ${hero.xp || 0} / ${hero.nextXp || 1}`, bx + 8, by + (barH + gap) * 2 + 9);
 
-    const infoY = by + 54;
-    ctx.fillStyle = "rgba(240,240,240,0.93)";
-    ctx.fillText(`Lv ${hero.level || 1}`, bx, infoY);
-    ctx.fillText(`Gold ${hero.gold || 0}`, bx + 52, infoY);
-    ctx.fillText(`Elite ${eliteKills}`, bx + 140, infoY);
-    ctx.fillText(`Pots H:${hero.potions?.hp || 0} M:${hero.potions?.mana || 0}`, bx, infoY + 18);
+    ctx.fillStyle = "rgba(255,255,255,0.88)";
+    ctx.fillText(`Level ${hero.level || 1}`, bx, by + 70);
+    ctx.fillText(`Gold ${hero.gold || 0}`, bx + 90, by + 70);
+    ctx.fillText(`Potions ${hero.potions?.hp || 0}/${hero.potions?.mana || 0}`, bx + 170, by + 70);
 
-    ctx.fillStyle = "rgba(214,214,214,0.9)";
-    ctx.fillText(
-      `DMG ${Math.round(st.dmg || 0)}   ARM ${Math.round(st.armor || 0)}   CRIT ${Math.round((st.crit || 0) * 100)}%`,
-      bx,
-      infoY + 38
-    );
+    ctx.fillStyle = "rgba(255,224,130,0.96)";
+    ctx.fillText(`Elite Kills ${eliteKills}`, bx, by + 92);
 
-    const zone = game?.progress?.currentZoneText || "Wilderness";
-    ctx.fillStyle = "rgba(255,235,180,0.95)";
-    ctx.fillText(`Zone: ${zone}`, bx, infoY + 58);
+    const critPct = Math.round((st.crit || 0) * 100);
+    ctx.fillStyle = "rgba(220,220,220,0.88)";
+    ctx.fillText(`DMG ${Math.round(st.dmg || 0)}`, bx + 120, by + 92);
+    ctx.fillText(`ARM ${Math.round(st.armor || 0)}`, bx + 190, by + 92);
+    ctx.fillText(`CRIT ${critPct}%`, bx + 255, by + 92);
 
     ctx.restore();
   }
 
+  _bar(ctx, x, y, w, h, p, color, r = 8) {
+    const fill = clamp(p, 0, 1);
+
+    ctx.save();
+    ctx.globalAlpha = 0.95;
+    ctx.fillStyle = "rgba(0,0,0,0.42)";
+    roundRect(ctx, x, y, w, h, r);
+    ctx.fill();
+
+    ctx.fillStyle = color;
+    roundRect(ctx, x + 1, y + 1, Math.max(0, (w - 2) * fill), h - 2, Math.max(2, r - 1));
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.lineWidth = 1;
+    roundRect(ctx, x, y, w, h, r);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   _drawPinnedQuest(ctx, game) {
-    const activeQuest = (game.quests || []).find(q => !q.done) || null;
+    const quests = game.quests || [];
+    const activeQuest = quests.find(q => !q.done) || null;
 
     const x = 14;
-    const y = 264;
+    const y = 196;
     const w = 352;
-    const h = 68;
+    const h = 74;
 
     ctx.save();
 
@@ -3143,100 +3597,69 @@ export default class UI {
     ctx.fillText(`Docks ${docks}`, x + 244, y + 20);
 
     ctx.fillStyle = "rgba(255,224,130,0.96)";
-    ctx.fillText(`Elite Kills ${eliteKills}`, x + 14, y + 42);
+    ctx.fillText(`Elite ${eliteKills}`, x + 14, y + 42);
 
-    ctx.fillStyle = "rgba(180,235,180,0.94)";
-    ctx.fillText(`Quests Done ${doneCount}/${(game.quests || []).length}`, x + 170, y + 42);
+    ctx.fillStyle = "rgba(200,235,200,0.92)";
+    ctx.fillText(`Quests Done ${doneCount}`, x + 114, y + 42);
+
+    const zone = prog.currentZoneText || "Wilderness";
+    ctx.fillStyle = "rgba(205,215,230,0.88)";
+    ctx.fillText(trimText(ctx, zone, 110), x + 244, y + 42);
 
     ctx.restore();
   }
 
   _drawSpellBar(ctx, game) {
-    const mana = game.hero?.mana || 0;
-    const spellState = game.getSpellState?.() || {
-      q: { name: "Bolt", mana: 6, cdLeft: 0 },
-      w: { name: "Nova", mana: 14, cdLeft: 0 },
-      e: { name: "Dash", mana: 8, cdLeft: 0 },
-      r: { name: "Orb", mana: 18, cdLeft: 0 },
-    };
+    const spells = game.getSpellState?.();
+    if (!spells) return;
 
-    const order = [
-      { key: "Q", id: "q" },
-      { key: "W", id: "w" },
-      { key: "E", id: "e" },
-      { key: "R", id: "r" },
+    const keys = [
+      ["Q", spells.q],
+      ["W", spells.w],
+      ["E", spells.e],
+      ["R", spells.r],
     ];
 
-    const boxW = 90;
-    const boxH = 60;
+    const cardW = 92;
+    const cardH = 48;
     const gap = 10;
-    const totalW = order.length * boxW + (order.length - 1) * gap;
+    const totalW = keys.length * cardW + (keys.length - 1) * gap;
     const x0 = ((this.w - totalW) * 0.5) | 0;
-    const y = this.h - 112;
+    const y = this.h - 66;
 
     ctx.save();
 
-    for (let i = 0; i < order.length; i++) {
-      const meta = order[i];
-      const s = spellState[meta.id];
-      const x = x0 + i * (boxW + gap);
+    for (let i = 0; i < keys.length; i++) {
+      const [key, s] = keys[i];
+      const x = x0 + i * (cardW + gap);
+      const cd = Math.max(0, s?.cdLeft || 0);
+      const ready = cd <= 0;
 
-      const cdLeft = Math.max(0, s?.cdLeft || 0);
-      const affordable = mana >= (s?.mana || 0);
-      const ready = cdLeft <= 0 && affordable;
-
-      ctx.globalAlpha = 0.94;
-      ctx.fillStyle = ready
-        ? "rgba(18,20,28,0.90)"
-        : cdLeft > 0
-          ? "rgba(18,20,28,0.74)"
-          : "rgba(18,20,28,0.60)";
-      roundRect(ctx, x, y, boxW, boxH, 14);
+      ctx.globalAlpha = 0.90;
+      ctx.fillStyle = ready ? "rgba(14,20,28,0.82)" : "rgba(28,18,18,0.82)";
+      roundRect(ctx, x, y, cardW, cardH, 12);
       ctx.fill();
 
-      ctx.globalAlpha = ready ? 0.26 : cdLeft > 0 ? 0.10 : 0.08;
-      ctx.fillStyle = ready ? "rgba(120,170,255,1)" : "rgba(255,255,255,1)";
-      roundRect(ctx, x, y, boxW, 18, 14);
+      ctx.globalAlpha = 0.14;
+      ctx.fillStyle = ready ? "rgba(110,210,255,1)" : "rgba(255,140,140,1)";
+      roundRect(ctx, x, y, cardW, 16, 12);
       ctx.fill();
 
-      if (ready) {
-        ctx.globalAlpha = 0.08;
-        ctx.fillStyle = "rgba(120,170,255,1)";
-        roundRect(ctx, x + 1, y + 1, boxW - 2, boxH - 2, 14);
-        ctx.fill();
-      }
-
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = ready ? "rgba(255,255,255,0.98)" : "rgba(205,205,205,0.84)";
+      ctx.globalAlpha = 0.98;
+      ctx.fillStyle = "rgba(255,255,255,0.96)";
       ctx.font = "bold 13px system-ui, Arial";
-      ctx.fillText(meta.key, x + 10, y + 13);
+      ctx.fillText(key, x + 10, y + 13);
 
       ctx.font = "12px system-ui, Arial";
-      ctx.fillText(s?.name || "", x + 28, y + 13);
+      ctx.fillText(trimText(ctx, s?.name || "", 52), x + 28, y + 13);
 
-      ctx.fillStyle = affordable ? "rgba(180,220,255,0.95)" : "rgba(255,150,150,0.90)";
-      ctx.fillText(`${s?.mana || 0} MP`, x + 10, y + 34);
+      ctx.fillStyle = "rgba(215,215,220,0.82)";
+      ctx.fillText(`${s?.mana || 0} MP`, x + 10, y + 33);
 
-      if (cdLeft > 0) {
-        ctx.fillStyle = "rgba(255,210,120,0.95)";
-        ctx.fillText(`${cdLeft.toFixed(1)}s`, x + 10, y + 50);
-
-        const p = 1 - clamp(cdLeft / Math.max(0.01, s?.cd || (cdLeft || 1)), 0, 1);
-        ctx.globalAlpha = 0.26;
-        ctx.fillStyle = "rgba(255,255,255,1)";
-        roundRect(ctx, x + 50, y + 41, 30, 8, 5);
-        ctx.fill();
-        ctx.globalAlpha = 0.95;
-        ctx.fillStyle = "rgba(255,210,120,1)";
-        roundRect(ctx, x + 50, y + 41, 30 * p, 8, 5);
-        ctx.fill();
-      } else if (!affordable) {
-        ctx.fillStyle = "rgba(255,120,120,0.90)";
-        ctx.fillText("LOW", x + 10, y + 50);
-      } else {
-        ctx.fillStyle = "rgba(180,235,180,0.94)";
-        ctx.fillText("READY", x + 10, y + 50);
-      }
+      ctx.textAlign = "right";
+      ctx.fillStyle = ready ? "rgba(145,235,165,0.96)" : "rgba(255,208,160,0.96)";
+      ctx.fillText(ready ? "READY" : `${cd.toFixed(1)}s`, x + cardW - 10, y + 33);
+      ctx.textAlign = "left";
     }
 
     ctx.restore();
@@ -3246,162 +3669,207 @@ export default class UI {
     const mini = this._mini || game?.world?.getMinimapCanvas?.();
     if (!mini) return;
 
-    const size = 166;
-    const pad = 14;
-    const x = this.w - size - pad;
+    const size = 154;
+    const x = this.w - size - 16;
     const y = 14;
 
     ctx.save();
 
-    ctx.globalAlpha = 0.92;
-    ctx.fillStyle = "rgba(10,12,18,0.72)";
-    roundRect(ctx, x - 12, y - 12, size + 24, size + 40, 16);
+    ctx.globalAlpha = 0.90;
+    ctx.fillStyle = "rgba(10,12,18,0.70)";
+    roundRect(ctx, x - 8, y - 8, size + 16, size + 16, 16);
     ctx.fill();
-
-    ctx.globalAlpha = 0.22;
-    ctx.fillStyle = "rgba(255,255,255,1)";
-    roundRect(ctx, x - 12, y - 12, size + 24, 24, 16);
-    ctx.fill();
-
-    ctx.globalAlpha = 0.98;
-    ctx.fillStyle = "rgba(255,255,255,0.95)";
-    ctx.font = "bold 12px system-ui, Arial";
-    ctx.fillText("MINIMAP", x, y + 2);
-
-    ctx.strokeStyle = "rgba(255,255,255,0.16)";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x - 1, y + 13, size + 2, size + 2);
 
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(mini, x, y + 14, size, size);
+    ctx.drawImage(mini, x, y, size, size);
     ctx.imageSmoothingEnabled = true;
 
     const span = 2600;
     const half = span / 2;
     const sx = game.world?.spawn?.x || 0;
     const sy = game.world?.spawn?.y || 0;
-
     const hx = ((game.hero.x - (sx - half)) / span) * (size - 1);
     const hy = ((game.hero.y - (sy - half)) / span) * (size - 1);
 
-    ctx.fillStyle = "rgba(20,20,20,0.90)";
-    ctx.fillRect((x + hx - 3) | 0, (y + 14 + hy - 3) | 0, 6, 6);
-    ctx.fillStyle = "rgba(255,255,255,1)";
-    ctx.fillRect((x + hx - 2) | 0, (y + 14 + hy - 2) | 0, 4, 4);
+    ctx.fillStyle = "rgba(20,20,20,0.92)";
+    ctx.fillRect((x + hx - 3) | 0, (y + hy - 3) | 0, 6, 6);
 
-    ctx.fillStyle = "rgba(255,255,255,0.92)";
-    ctx.font = "11px system-ui, Arial";
-    ctx.fillText("M Map", x + 6, y + size + 30);
+    ctx.fillStyle = "rgba(255,255,255,1)";
+    ctx.fillRect((x + hx - 1) | 0, (y + hy - 1) | 0, 2, 2);
+
+    ctx.globalAlpha = 0.98;
+    ctx.fillStyle = "rgba(255,255,255,0.94)";
+    ctx.font = "bold 11px system-ui, Arial";
+    ctx.fillText("MINIMAP", x + 8, y + 14);
 
     ctx.restore();
   }
 
   _drawQuickHelp(ctx) {
-    const text = "Arrows Move • Q/W/E/R Spells • F Interact • 1/2 Potions • I Inventory • J Quests • M Map • O Options";
-    const w = Math.min(this.w - 40, 860);
-    const x = ((this.w - w) * 0.5) | 0;
-    const y = this.h - 20;
+    const text = "Arrows move • F interact • Q/W/E/R cast • I inventory • J quests • M map • O options";
+    const padX = 12;
 
     ctx.save();
-    ctx.globalAlpha = 0.78;
-    ctx.fillStyle = "rgba(10,12,18,0.56)";
-    roundRect(ctx, x, y - 22, w, 26, 10);
+    ctx.font = "12px system-ui, Arial";
+    const tw = ctx.measureText(text).width;
+    const x = ((this.w - tw) * 0.5) - padX;
+    const y = 12;
+
+    ctx.globalAlpha = 0.72;
+    ctx.fillStyle = "rgba(10,12,18,0.60)";
+    roundRect(ctx, x, y, tw + padX * 2, 22, 11);
     ctx.fill();
 
     ctx.globalAlpha = 0.96;
-    ctx.fillStyle = "rgba(255,255,255,0.92)";
-    ctx.font = "12px system-ui, Arial";
-    ctx.fillText(trimText(ctx, text, w - 16), x + 8, y - 4);
+    ctx.fillStyle = "rgba(230,230,235,0.86)";
+    ctx.fillText(text, x + padX, y + 15);
+
     ctx.restore();
   }
 
   _drawInteractPrompt(ctx, game) {
-    const prompt =
-      game?.getInteractPrompt?.() ||
-      game?.interactPrompt ||
-      game?.hero?.interactPrompt ||
-      "";
+    const hero = game.hero;
+    let text = "";
 
-    if (!prompt) return;
+    for (const d of game.world?.docks || []) {
+      if (sq(hero.x - d.x, hero.y - d.y) < 72 * 72) {
+        text = hero.state?.sailing ? "Press F to dock / stop sailing" : "Press F to sail";
+        break;
+      }
+    }
 
-    const w = Math.min(this.w - 80, 420);
-    const h = 46;
-    const x = ((this.w - w) * 0.5) | 0;
-    const y = this.h - 170;
+    if (!text) {
+      for (const w of game.world?.waystones || []) {
+        if (sq(hero.x - w.x, hero.y - w.y) < 82 * 82) {
+          text = "Press F to awaken waystone";
+          break;
+        }
+      }
+    }
+
+    if (!text) return;
 
     ctx.save();
+    ctx.font = "bold 13px system-ui, Arial";
+    const tw = ctx.measureText(text).width;
+    const x = ((this.w - tw) * 0.5) - 16;
+    const y = this.h - 104;
 
-    ctx.globalAlpha = 0.96;
-    ctx.fillStyle = "rgba(12,16,20,0.78)";
-    roundRect(ctx, x, y, w, h, 14);
+    ctx.globalAlpha = 0.92;
+    ctx.fillStyle = "rgba(18,20,26,0.82)";
+    roundRect(ctx, x, y, tw + 32, 30, 14);
     ctx.fill();
 
     ctx.globalAlpha = 0.18;
-    ctx.fillStyle = "rgba(255,235,150,1)";
-    roundRect(ctx, x, y, w, 16, 14);
-    ctx.fill();
+    ctx.fillStyle = "rgba(255,224,130,1)";
+    roundRect(ctx, x, y, tw + 32, 30, 14);
+    ctx.strokeStyle = "rgba(255,224,130,0.25)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
 
     ctx.globalAlpha = 0.98;
-    ctx.fillStyle = "rgba(255,230,150,0.98)";
-    ctx.font = "bold 12px system-ui, Arial";
-    ctx.fillText("F INTERACT", x + 12, y + 12);
-
-    ctx.fillStyle = "rgba(255,255,255,0.96)";
-    ctx.font = "13px system-ui, Arial";
-    ctx.fillText(trimText(ctx, String(prompt), w - 24), x + 12, y + 31);
+    ctx.fillStyle = "rgba(255,245,188,0.98)";
+    ctx.fillText(text, x + 16, y + 19);
 
     ctx.restore();
   }
 
   _drawMessage(ctx, text) {
-    const w = Math.min(this.w - 40, 520);
-    const x = ((this.w - w) * 0.5) | 0;
-    const y = this.h - 222;
-
     ctx.save();
-    ctx.globalAlpha = 0.94;
-    ctx.fillStyle = "rgba(12,14,20,0.74)";
-    roundRect(ctx, x, y, w, 36, 12);
+    ctx.font = "bold 14px system-ui, Arial";
+    const tw = ctx.measureText(text).width;
+    const x = ((this.w - tw) * 0.5) - 18;
+    const y = 52;
+
+    ctx.globalAlpha = 0.90;
+    ctx.fillStyle = "rgba(12,16,24,0.82)";
+    roundRect(ctx, x, y, tw + 36, 34, 16);
     ctx.fill();
 
-    ctx.globalAlpha = 0.18;
-    ctx.fillStyle = "rgba(120,170,255,1)";
-    roundRect(ctx, x, y, w, 12, 12);
+    ctx.globalAlpha = 0.12;
+    ctx.fillStyle = "rgba(255,255,255,1)";
+    roundRect(ctx, x, y, tw + 36, 34, 16);
     ctx.fill();
 
     ctx.globalAlpha = 0.98;
-    ctx.fillStyle = "rgba(255,255,255,0.97)";
-    ctx.font = "13px system-ui, Arial";
-    ctx.fillText(trimText(ctx, text, w - 24), x + 12, y + 23);
+    ctx.fillStyle = "rgba(255,255,255,0.98)";
+    ctx.fillText(text, x + 18, y + 22);
+
     ctx.restore();
   }
 
   /* ===========================
-     Panels
+     PANELS
   =========================== */
+
+  _panelRect(w, h) {
+    return {
+      x: ((this.w - w) * 0.5) | 0,
+      y: ((this.h - h) * 0.5) | 0,
+      w,
+      h,
+    };
+  }
+
+  _drawPanelShell(ctx, panel, title) {
+    ctx.save();
+
+    ctx.globalAlpha = 0.95;
+    ctx.fillStyle = "rgba(12,16,22,0.94)";
+    roundRect(ctx, panel.x, panel.y, panel.w, panel.h, 18);
+    ctx.fill();
+
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = "rgba(255,255,255,1)";
+    roundRect(ctx, panel.x, panel.y, panel.w, 30, 18);
+    ctx.fill();
+
+    ctx.globalAlpha = 0.10;
+    ctx.strokeStyle = "rgba(255,255,255,0.14)";
+    ctx.lineWidth = 1;
+    roundRect(ctx, panel.x + 1, panel.y + 1, panel.w - 2, panel.h - 2, 18);
+    ctx.stroke();
+
+    ctx.globalAlpha = 0.98;
+    ctx.fillStyle = "rgba(255,255,255,0.98)";
+    ctx.font = "bold 16px system-ui, Arial";
+    ctx.fillText(title, panel.x + 16, panel.y + 20);
+
+    ctx.restore();
+  }
+
+  _drawPanelFooter(ctx, panel, text) {
+    ctx.save();
+    ctx.fillStyle = "rgba(220,220,220,0.74)";
+    ctx.font = "12px system-ui, Arial";
+    ctx.fillText(text, panel.x + 16, panel.y + panel.h - 14);
+    ctx.restore();
+  }
+
   _drawInventory(ctx, game) {
-    const panel = this._panelRect(720, 530);
+    const panel = this._panelRect(690, 540);
     this._drawPanelShell(ctx, panel, "INVENTORY");
 
     const hero = game.hero;
     const items = hero.inventory || [];
-    const eq = hero.equip || {};
+    const equip = hero.equip || {};
+    const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
 
     ctx.save();
     ctx.font = "13px system-ui, Arial";
 
-    let lx = panel.x + 20;
+    const lx = panel.x + 20;
     let yy = panel.y + 62;
 
     ctx.fillStyle = "rgba(255,255,255,0.94)";
     ctx.fillText("Equipped", lx, yy);
     yy += 24;
 
-    const slots = ["weapon", "armor", "helm", "chest", "boots", "ring", "trinket"];
     for (const s of slots) {
-      const it = eq[s];
+      const it = equip[s] || null;
+
       ctx.fillStyle = "rgba(255,255,255,0.08)";
-      roundRect(ctx, lx - 8, yy - 13, 300, 34, 10);
+      roundRect(ctx, lx - 8, yy - 13, 306, 34, 10);
       ctx.fill();
 
       ctx.fillStyle = rarityColor(it?.rarity);
@@ -3439,20 +3907,24 @@ export default class UI {
     } else {
       for (let i = 0; i < items.length && i < 15; i++) {
         const it = items[i];
+        const hotkey = i === 9 ? "0" : String(i + 1);
 
         ctx.fillStyle = "rgba(255,255,255,0.08)";
         roundRect(ctx, rx - 8, ry - 13, 306, 34, 10);
         ctx.fill();
 
+        ctx.fillStyle = "rgba(255,230,160,0.96)";
+        ctx.fillText(`${hotkey}.`, rx, ry);
+
         ctx.fillStyle = rarityColor(it.rarity);
-        ctx.fillText(`${i + 1}. ${trimText(ctx, `${it.name} [${it.slot}]`, 270)}`, rx, ry);
+        ctx.fillText(trimText(ctx, `${it.name} [${it.slot}]`, 246), rx + 22, ry);
         ctx.fillStyle = "rgba(210,210,210,0.82)";
         ctx.fillText(trimText(ctx, itemStatLine(it), 270), rx + 12, ry + 15);
         ry += 42;
       }
     }
 
-    this._drawPanelFooter(ctx, panel, "Esc / I to close");
+    this._drawPanelFooter(ctx, panel, "Esc / I to close • 1-9 / 0 equip bag item");
     ctx.restore();
   }
 
@@ -3505,147 +3977,246 @@ export default class UI {
     ctx.fillStyle = "rgba(255,224,130,0.96)";
     ctx.fillText(`Elite Kills: ${prog.eliteKills || 0}`, px, py + 42);
 
-    const nextQuest = quests.find(q => !q.done);
-    ctx.fillStyle = "rgba(180,235,180,0.94)";
-    ctx.fillText(
-      nextQuest
-        ? `Pinned: ${trimText(ctx, `${nextQuest.name} ${nextQuest.prog}/${nextQuest.goal}`, 470)}`
-        : "Pinned: All current quests complete",
-      px,
-      py + 64
-    );
-
     this._drawPanelFooter(ctx, panel, "Esc / J to close");
     ctx.restore();
   }
 
   _drawMap(ctx, game) {
-    const panel = this._panelRect(620, 580);
+    const panel = this._panelRect(720, 600);
     this._drawPanelShell(ctx, panel, "WORLD MAP");
 
     const mini = this._mini || game?.world?.getMinimapCanvas?.();
-    if (!mini) return;
-
-    const innerPad = 18;
-    const size = Math.min(panel.w - innerPad * 2, panel.h - 104);
+    const innerPad = 20;
+    const mapSize = 420;
     const x = panel.x + innerPad;
-    const y = panel.y + 50;
+    const y = panel.y + 56;
 
     ctx.save();
-    ctx.globalAlpha = 0.98;
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(mini, x, y, size, size);
-    ctx.imageSmoothingEnabled = true;
-
-    const span = 2600;
-    const half = span / 2;
-    const sx = game.world?.spawn?.x || 0;
-    const sy = game.world?.spawn?.y || 0;
-    const hx = ((game.hero.x - (sx - half)) / span) * (size - 1);
-    const hy = ((game.hero.y - (sy - half)) / span) * (size - 1);
-
-    ctx.fillStyle = "rgba(20,20,20,0.90)";
-    ctx.fillRect((x + hx - 4) | 0, (y + hy - 4) | 0, 8, 8);
-    ctx.fillStyle = "rgba(255,255,255,1)";
-    ctx.fillRect((x + hx - 2) | 0, (y + hy - 2) | 0, 4, 4);
-
-    ctx.fillStyle = "rgba(255,255,255,0.90)";
     ctx.font = "12px system-ui, Arial";
-    ctx.fillText("White square = you", x, y + size + 20);
 
-    this._drawPanelFooter(ctx, panel, "Esc / M to close");
+    if (mini) {
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(mini, x, y, mapSize, mapSize);
+      ctx.imageSmoothingEnabled = true;
+
+      const span = 2600;
+      const half = span / 2;
+      const sx = game.world?.spawn?.x || 0;
+      const sy = game.world?.spawn?.y || 0;
+
+      const mapPoint = (wx, wy) => {
+        const px = x + ((wx - (sx - half)) / span) * (mapSize - 1);
+        const py = y + ((wy - (sy - half)) / span) * (mapSize - 1);
+        return { x: px, y: py };
+      };
+
+      for (const c of game.world?.camps || []) {
+        const p = mapPoint(c.x, c.y);
+        ctx.fillStyle = "rgba(255,90,90,0.95)";
+        ctx.fillRect((p.x - 2) | 0, (p.y - 2) | 0, 4, 4);
+      }
+
+      for (const d of game.world?.docks || []) {
+        if (!game.progress?.discoveredDocks?.has?.(d.id)) continue;
+        const p = mapPoint(d.x, d.y);
+        ctx.fillStyle = "rgba(90,210,255,0.96)";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      const ways = typeof game._getDiscoveredWaystones === "function"
+        ? game._getDiscoveredWaystones()
+        : [];
+
+      for (let i = 0; i < ways.length && i < 9; i++) {
+        const w = ways[i];
+        const p = mapPoint(w.x, w.y);
+
+        ctx.fillStyle = "rgba(255,218,92,0.98)";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "rgba(25,25,25,0.98)";
+        ctx.font = "bold 10px system-ui, Arial";
+        ctx.textAlign = "center";
+        ctx.fillText(String(i + 1), p.x, p.y + 3);
+        ctx.textAlign = "left";
+      }
+
+      const hp = mapPoint(game.hero.x, game.hero.y);
+      ctx.fillStyle = "rgba(20,20,20,0.92)";
+      ctx.fillRect((hp.x - 4) | 0, (hp.y - 4) | 0, 8, 8);
+      ctx.fillStyle = "rgba(255,255,255,1)";
+      ctx.fillRect((hp.x - 2) | 0, (hp.y - 2) | 0, 4, 4);
+
+      ctx.strokeStyle = "rgba(255,255,255,0.16)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x - 0.5, y - 0.5, mapSize + 1, mapSize + 1);
+    } else {
+      ctx.fillStyle = "rgba(220,220,220,0.82)";
+      ctx.fillText("Minimap not ready.", x, y + 14);
+    }
+
+    const rx = panel.x + 468;
+    let ry = panel.y + 64;
+
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.font = "bold 13px system-ui, Arial";
+    ctx.fillText("Legend", rx, ry);
+    ry += 24;
+
+    this._legendDot(ctx, rx, ry, "rgba(255,255,255,1)", "You");
+    ry += 22;
+    this._legendDot(ctx, rx, ry, "rgba(255,218,92,0.98)", "Awakened Waystone");
+    ry += 22;
+    this._legendDot(ctx, rx, ry, "rgba(90,210,255,0.96)", "Discovered Dock");
+    ry += 22;
+    this._legendDot(ctx, rx, ry, "rgba(255,90,90,0.95)", "Enemy Camp");
+    ry += 34;
+
+    const ways = typeof game._getDiscoveredWaystones === "function"
+      ? game._getDiscoveredWaystones()
+      : [];
+
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.font = "bold 13px system-ui, Arial";
+    ctx.fillText("Fast Travel", rx, ry);
+    ry += 22;
+
+    ctx.font = "12px system-ui, Arial";
+    if (!ways.length) {
+      ctx.fillStyle = "rgba(220,220,220,0.82)";
+      ctx.fillText("Awaken a waystone with F first.", rx, ry);
+      ry += 18;
+    } else {
+      for (let i = 0; i < ways.length && i < 9; i++) {
+        const w = ways[i];
+        ctx.fillStyle = "rgba(255,240,170,0.98)";
+        ctx.fillText(`${i + 1}. Waystone ${i + 1}`, rx, ry);
+
+        ctx.fillStyle = "rgba(205,205,212,0.76)";
+        ctx.fillText(`(${Math.round(w.x)}, ${Math.round(w.y)})`, rx + 105, ry);
+        ry += 18;
+      }
+    }
+
+    if (game.hero?.state?.sailing) {
+      ry += 10;
+      ctx.fillStyle = "rgba(255,160,160,0.96)";
+      ctx.fillText("Cannot fast travel while sailing.", rx, ry);
+      ry += 18;
+    }
+
+    ry += 10;
+    ctx.fillStyle = "rgba(220,224,232,0.82)";
+    ctx.fillText("Map markers only show docks after you find them.", rx, ry);
+
+    this._drawPanelFooter(ctx, panel, "Esc / M to close • 1-9 fast travel • camps=danger • docks=travel");
     ctx.restore();
+  }
+
+  _legendDot(ctx, x, y, color, label) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x + 5, y - 4, 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(230,230,235,0.92)";
+    ctx.font = "12px system-ui, Arial";
+    ctx.fillText(label, x + 18, y);
   }
 
   _drawOptions(ctx, game) {
-    const panel = this._panelRect(540, 340);
-    this._drawPanelShell(ctx, panel, "OPTIONS / HELP");
+    const panel = this._panelRect(600, 390);
+    this._drawPanelShell(ctx, panel, "OPTIONS");
 
     ctx.save();
-    ctx.fillStyle = "rgba(255,255,255,0.94)";
     ctx.font = "13px system-ui, Arial";
 
-    let y = panel.y + 62;
     const x = panel.x + 20;
-    ctx.fillText("Move: Arrow Keys only", x, y); y += 24;
-    ctx.fillText("Spells: Q / W / E / R", x, y); y += 24;
-    ctx.fillText("Interact: F", x, y); y += 24;
-    ctx.fillText("Potions: 1 / 2", x, y); y += 24;
-    ctx.fillText("Menus: I / J / M / O / Esc", x, y); y += 24;
-    ctx.fillText("Mana regenerates over time.", x, y); y += 24;
-    ctx.fillText("Explore camps, awaken waystones, find docks, and collect gear.", x, y); y += 24;
+    let y = panel.y + 62;
 
-    const prog = game.progress || {};
-    ctx.fillStyle = "rgba(180,235,180,0.94)";
-    ctx.fillText(`Discovered: ${prog.discoveredWaystones?.size || 0} waystones, ${prog.discoveredDocks?.size || 0} docks`, x, y);
-    y += 22;
-    ctx.fillStyle = "rgba(255,224,130,0.96)";
-    ctx.fillText(`Elite Kills: ${prog.eliteKills || 0}`, x, y);
-
-    this._drawPanelFooter(ctx, panel, "Esc / O to close");
-    ctx.restore();
-  }
-
-  /* ===========================
-     Shared
-  =========================== */
-  _bar(ctx, x, y, w, h, p, fill, r = 8) {
-    ctx.fillStyle = "rgba(0,0,0,0.42)";
-    roundRect(ctx, x, y, w, h, r);
-    ctx.fill();
-
-    ctx.fillStyle = fill;
-    roundRect(ctx, x, y, Math.max(0, w * p), h, r);
-    ctx.fill();
-  }
-
-  _panelRect(w, h) {
-    return {
-      x: ((this.w - w) * 0.5) | 0,
-      y: ((this.h - h) * 0.5) | 0,
-      w,
-      h,
-    };
-  }
-
-  _drawPanelShell(ctx, panel, title) {
-    ctx.save();
-
-    ctx.globalAlpha = 0.95;
-    ctx.fillStyle = "rgba(10,12,18,0.82)";
-    roundRect(ctx, panel.x, panel.y, panel.w, panel.h, 18);
-    ctx.fill();
-
-    ctx.globalAlpha = 0.18;
-    ctx.fillStyle = "rgba(255,255,255,1)";
-    roundRect(ctx, panel.x, panel.y, panel.w, 28, 18);
-    ctx.fill();
-
-    ctx.globalAlpha = 0.10;
-    ctx.strokeStyle = "rgba(255,255,255,0.12)";
-    ctx.lineWidth = 1;
-    roundRect(ctx, panel.x + 1, panel.y + 1, panel.w - 2, panel.h - 2, 18);
-    ctx.stroke();
-
-    ctx.globalAlpha = 0.98;
     ctx.fillStyle = "rgba(255,255,255,0.96)";
-    ctx.font = "bold 16px system-ui, Arial";
-    ctx.fillText(title, panel.x + 16, panel.y + 19);
+    ctx.font = "bold 14px system-ui, Arial";
+    ctx.fillText("Controls", x, y);
+    y += 24;
 
-    ctx.globalAlpha = 0.10;
-    ctx.fillStyle = "rgba(255,255,255,1)";
-    ctx.fillRect(panel.x + 14, panel.y + 38, panel.w - 28, 1);
+    ctx.font = "13px system-ui, Arial";
+    ctx.fillStyle = "rgba(230,230,235,0.92)";
+    ctx.fillText("Arrow Keys   - Move / Aim", x, y); y += 22;
+    ctx.fillText("F            - Interact", x, y); y += 22;
+    ctx.fillText("Q / W / E / R - Cast spells", x, y); y += 22;
+    ctx.fillText("1 / 2        - Use potions", x, y); y += 22;
+    ctx.fillText("I / J / M / O - Open menus", x, y); y += 22;
 
+    y += 10;
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.font = "bold 14px system-ui, Arial";
+    ctx.fillText("Save", x, y);
+    y += 24;
+
+    ctx.font = "13px system-ui, Arial";
+    ctx.fillStyle = "rgba(230,230,235,0.92)";
+    ctx.fillText(`Save Key: ${game.save?.key || "local save"}`, x, y); y += 22;
+    ctx.fillText("Autosave runs during play.", x, y); y += 22;
+
+    y += 10;
+    ctx.fillStyle = "rgba(255,160,160,0.98)";
+    ctx.font = "bold 14px system-ui, Arial";
+    ctx.fillText("New Game / Hard Reset", x, y);
+    y += 24;
+
+    ctx.font = "13px system-ui, Arial";
+    ctx.fillStyle = "rgba(255,225,225,0.92)";
+    ctx.fillText("Open this menu, then press Delete.", x, y); y += 22;
+    ctx.fillText("This clears the save and reloads the game.", x, y);
+
+    this._drawPanelFooter(ctx, panel, "Esc / O to close • Delete = clear save + restart");
     ctx.restore();
   }
+}
 
-  _drawPanelFooter(ctx, panel, text) {
-    ctx.save();
-    ctx.fillStyle = "rgba(255,255,255,0.70)";
-    ctx.font = "12px system-ui, Arial";
-    ctx.fillText(text, panel.x + 16, panel.y + panel.h - 14);
-    ctx.restore();
+/* ===========================
+   HELPERS
+=========================== */
+
+function sq(x, y) {
+  return x * x + y * y;
+}
+
+function cap(s) {
+  const t = String(s || "");
+  return t ? t[0].toUpperCase() + t.slice(1) : "";
+}
+
+function rarityColor(r) {
+  if (r === "epic") return "rgba(215,150,255,0.98)";
+  if (r === "rare") return "rgba(120,190,255,0.98)";
+  if (r === "uncommon") return "rgba(145,230,145,0.98)";
+  return "rgba(235,235,235,0.96)";
+}
+
+function itemStatLine(it) {
+  if (!it) return "";
+  const s = it.stats || {};
+  const parts = [];
+  if (s.dmg) parts.push(`DMG ${s.dmg}`);
+  if (s.armor) parts.push(`ARM ${s.armor}`);
+  if (s.crit) parts.push(`CRIT ${Math.round(s.crit * 100)}%`);
+  parts.push(`LV ${it.level || 1}`);
+  return parts.join(" • ");
+}
+
+function trimText(ctx, text, maxW) {
+  const t = String(text || "");
+  if (ctx.measureText(t).width <= maxW) return t;
+  let out = t;
+  while (out.length > 0 && ctx.measureText(out + "…").width > maxW) {
+    out = out.slice(0, -1);
   }
+  return out + "…";
 }
 
 function roundRect(ctx, x, y, w, h, r) {
@@ -3661,37 +4232,6 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.lineTo(x, y + rr);
   ctx.quadraticCurveTo(x, y, x + rr, y);
   ctx.closePath();
-}
-
-function trimText(ctx, text, maxW) {
-  let s = String(text || "");
-  if (ctx.measureText(s).width <= maxW) return s;
-  while (s.length > 1 && ctx.measureText(s + "…").width > maxW) {
-    s = s.slice(0, -1);
-  }
-  return s + "…";
-}
-
-function cap(s) {
-  s = String(s || "");
-  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
-}
-
-function rarityColor(r) {
-  if (r === "epic") return "rgba(215,150,255,0.96)";
-  if (r === "rare") return "rgba(120,190,255,0.96)";
-  if (r === "uncommon") return "rgba(145,230,145,0.96)";
-  return "rgba(230,230,230,0.94)";
-}
-
-function itemStatLine(it) {
-  const s = it?.stats || {};
-  const parts = [];
-  if (s.dmg) parts.push(`DMG ${s.dmg}`);
-  if (s.armor) parts.push(`ARM ${s.armor}`);
-  if (s.crit) parts.push(`CRIT ${Math.round(s.crit * 100)}%`);
-  parts.push(`${it?.rarity || "common"}`);
-  return parts.join("  •  ");
 }
 ===== src/util.js =====
 // src/util.js

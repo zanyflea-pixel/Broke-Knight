@@ -1,17 +1,17 @@
 // src/input.js
-// v31 STABLE INPUT REWRITE (FULL FILE)
+// v33 INPUT NORMALIZATION + DELETE/NUMPAD PASS (FULL FILE)
 // Goals:
 // ✅ Fast and simple
 // ✅ Consistent key handling for game.js
 // ✅ Supports both e.key and e.code lookups
 // ✅ Prevents stuck key states on window blur
+// ✅ Normalizes Delete / Backspace / Enter / Tab
+// ✅ Makes 0-9 hotkeys work from BOTH top row and numpad
 // ✅ Keeps API compatible with current game.js:
 //    - new Input(canvas)
 //    - isDown(key)
 //    - wasPressed(key)
 //    - endFrame()
-//
-// Replace ENTIRE file: src/input.js
 
 export default class Input {
   constructor(target = window) {
@@ -42,14 +42,15 @@ export default class Input {
 
       for (const v of variants) this.down.add(v);
 
-      // stop arrow keys / space from scrolling page
+      // stop arrow keys / space / tab from affecting the page
       if (
         e.key === "ArrowUp" ||
         e.key === "ArrowDown" ||
         e.key === "ArrowLeft" ||
         e.key === "ArrowRight" ||
         e.key === " " ||
-        e.code === "Space"
+        e.code === "Space" ||
+        e.key === "Tab"
       ) {
         e.preventDefault();
       }
@@ -122,6 +123,34 @@ export default class Input {
       out.add("esc");
     }
 
+    // normalize delete
+    if (key === "Delete" || code === "Delete" || code === "Del") {
+      out.add("Delete");
+      out.add("delete");
+      out.add("Del");
+      out.add("del");
+    }
+
+    // normalize backspace
+    if (key === "Backspace" || code === "Backspace") {
+      out.add("Backspace");
+      out.add("backspace");
+    }
+
+    // normalize enter
+    if (key === "Enter" || code === "Enter" || code === "NumpadEnter") {
+      out.add("Enter");
+      out.add("enter");
+      out.add("NumpadEnter");
+      out.add("numpadenter");
+    }
+
+    // normalize tab
+    if (key === "Tab" || code === "Tab") {
+      out.add("Tab");
+      out.add("tab");
+    }
+
     // normalize letters/digits into KeyX / DigitN forms too
     if (typeof key === "string" && key.length === 1) {
       const ch = key.toUpperCase();
@@ -132,7 +161,18 @@ export default class Input {
       if (ch >= "0" && ch <= "9") {
         out.add("Digit" + ch);
         out.add(("Digit" + ch).toLowerCase());
+        out.add(ch);
       }
+    }
+
+    // normalize numpad digits to regular digit checks
+    if (typeof code === "string" && /^Numpad[0-9]$/.test(code)) {
+      const n = code.slice("Numpad".length);
+      out.add(n);
+      out.add("Digit" + n);
+      out.add(("Digit" + n).toLowerCase());
+      out.add("Numpad" + n);
+      out.add(("Numpad" + n).toLowerCase());
     }
 
     // normalize space

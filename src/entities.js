@@ -1,12 +1,13 @@
 // src/entities.js
 // FULL FILE
-// Next polish pass:
+// Gear visuals pass:
 // - preserve working hero vertical sword
 // - preserve working enemy variety
 // - stronger enemy role readability
 // - clearer elite visuals
 // - better projectile trail/glow
 // - clearer loot pickup visuals
+// - visible equipped gear on hero
 // - keep current game.js compatibility
 
 import { clamp, dist, norm, RNG, hash2 } from "./util.js";
@@ -259,11 +260,46 @@ export class Hero {
     const facingDown = vertical && fy > 0;
     const side = fx >= 0 ? 1 : -1;
 
+    const weapon = this.equip?.weapon || null;
+    const armor = this.equip?.armor || this.equip?.chest || null;
+    const helm = this.equip?.helm || null;
+    const boots = this.equip?.boots || null;
+    const ring = this.equip?.ring || null;
+    const trinket = this.equip?.trinket || null;
+
+    const tunicColor = armor
+      ? gearVisualColor(armor.rarity, "armor")
+      : "rgba(64,86,138,0.98)";
+
+    const bootColor = boots
+      ? gearVisualColor(boots.rarity, "boots")
+      : "rgba(58,62,72,0.98)";
+
+    const swordMetal = weapon
+      ? gearVisualColor(weapon.rarity, "weapon")
+      : "rgba(178,188,205,1)";
+
+    const swordShine = weapon
+      ? gearShineColor(weapon.rarity)
+      : "rgba(232,236,244,0.9)";
+
+    const helmColor = helm
+      ? gearVisualColor(helm.rarity, "helm")
+      : null;
+
+    const charmColor = trinket
+      ? gearVisualColor(trinket.rarity, "trinket")
+      : ring
+        ? gearVisualColor(ring.rarity, "ring")
+        : null;
+
+    // shadow
     ctx.fillStyle = "rgba(0,0,0,0.18)";
     ctx.beginPath();
     ctx.ellipse(this.x, this.y + 11, 9, 4.5, 0, 0, Math.PI * 2);
     ctx.fill();
 
+    // cape / back cloth
     ctx.fillStyle = hurt ? "rgba(185,44,44,0.96)" : "rgba(150,32,36,0.96)";
     ctx.beginPath();
     if (facingUp) {
@@ -285,7 +321,8 @@ export class Hero {
     ctx.closePath();
     ctx.fill();
 
-    ctx.strokeStyle = "rgba(58,62,72,0.98)";
+    // boots / legs
+    ctx.strokeStyle = bootColor;
     ctx.lineWidth = 2.4;
     ctx.beginPath();
     if (vertical) {
@@ -301,15 +338,19 @@ export class Hero {
     }
     ctx.stroke();
 
+    // torso
     ctx.fillStyle = hurt ? "rgba(228,228,235,1)" : "rgba(202,204,214,1)";
     roundedRectFill(ctx, this.x - 5.8, this.y - 2 + bob, 11.6, 12.8, 3);
 
-    ctx.fillStyle = "rgba(64,86,138,0.98)";
+    // chest / armor cloth
+    ctx.fillStyle = tunicColor;
     ctx.fillRect(this.x - 2.4, this.y - 1 + bob, 4.8, 10);
 
+    // belt
     ctx.fillStyle = "rgba(118,84,44,0.98)";
     ctx.fillRect(this.x - 5.2, this.y + 4.7 + bob, 10.4, 2.2);
 
+    // shoulders / sleeves
     ctx.strokeStyle = "rgba(214,214,224,0.98)";
     ctx.lineWidth = 2.2;
     ctx.beginPath();
@@ -331,11 +372,13 @@ export class Hero {
     }
     ctx.stroke();
 
+    // head
     ctx.fillStyle = hurt ? "rgba(255,214,214,1)" : "rgba(242,214,182,1)";
     ctx.beginPath();
     ctx.arc(this.x, this.y - 7 + bob, 5.3, 0, Math.PI * 2);
     ctx.fill();
 
+    // hair
     ctx.fillStyle = "rgba(78,56,38,0.98)";
     if (facingUp) {
       ctx.beginPath();
@@ -347,6 +390,22 @@ export class Hero {
       ctx.fill();
     }
 
+    // visible helm / hood
+    if (helmColor) {
+      ctx.fillStyle = helmColor;
+      if (facingUp) {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y - 8 + bob, 6.2, Math.PI * 1.05, Math.PI * 1.95);
+        ctx.fill();
+      } else {
+        roundedRectFill(ctx, this.x - 5.5, this.y - 11.4 + bob, 11, 4.8, 2.2);
+      }
+
+      ctx.fillStyle = gearTrimColor(helm.rarity);
+      ctx.fillRect(this.x - 3.5, this.y - 11 + bob, 7, 1.3);
+    }
+
+    // face
     ctx.fillStyle = "rgba(28,28,28,0.98)";
     if (facingUp) {
       ctx.fillRect(this.x - 2.4, this.y - 8.2 + bob, 1.2, 1.2);
@@ -360,13 +419,28 @@ export class Hero {
       ctx.fillRect(this.x + 1.2 + side * 0.5, this.y - 7.8 + bob, 1.2, 1.2);
     }
 
-    ctx.fillStyle = "rgba(108,122,148,0.96)";
+    // shield / arm plate
+    ctx.fillStyle = armor ? gearTrimColor(armor.rarity) : "rgba(108,122,148,0.96)";
     if (vertical) {
       roundedRectFill(ctx, this.x - 2.5, this.y + 1 + bob, 5, 6, 1.2);
     } else {
       roundedRectFill(ctx, this.x - 8.5, this.y + 1 + bob, 2.4, 5.4, 1.2);
     }
 
+    // ring / trinket charm
+    if (charmColor) {
+      ctx.fillStyle = charmColor;
+      ctx.beginPath();
+      ctx.arc(this.x + (side * 2.5), this.y + 2.8 + bob, 1.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(255,255,255,0.42)";
+      ctx.beginPath();
+      ctx.arc(this.x + (side * 2.3), this.y + 2.5 + bob, 0.45, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // sword
     ctx.save();
     if (facingUp) {
       ctx.translate(this.x, this.y - 11 + bob);
@@ -380,17 +454,27 @@ export class Hero {
       ctx.rotate(swordAng);
     }
 
-    ctx.fillStyle = "rgba(210,186,118,1)";
+    // pommel / grip
+    ctx.fillStyle = gearTrimColor(weapon?.rarity || "common");
     ctx.fillRect(-1.4, -3.4, 2.8, 6.8);
 
     ctx.fillStyle = "rgba(120,84,42,1)";
     ctx.fillRect(-2.8, -1.2, 5.6, 2.4);
 
-    ctx.fillStyle = "rgba(178,188,205,1)";
+    // blade
+    ctx.fillStyle = swordMetal;
     ctx.fillRect(2.8, -1, 11, 2);
 
-    ctx.fillStyle = "rgba(232,236,244,0.9)";
+    // blade shine
+    ctx.fillStyle = swordShine;
     ctx.fillRect(4.2, -0.35, 7.2, 0.7);
+
+    // rarity aura on weapon
+    if (weapon && weapon.rarity !== "common") {
+      ctx.strokeStyle = gearGlowColor(weapon.rarity);
+      ctx.lineWidth = 1;
+      ctx.strokeRect(2.1, -1.7, 12.3, 3.4);
+    }
 
     ctx.restore();
     ctx.restore();
@@ -453,6 +537,10 @@ export class Hero {
       this.hp = this.maxHp;
       this.mana = this.maxMana;
     }
+  }
+
+  giveXP(amount = 0) {
+    this.gainXp(amount);
   }
 }
 
@@ -519,6 +607,17 @@ export class Enemy {
     this.tail = (Math.abs(hash2((x * 17) | 0, (y * 17) | 0, 31 + this.seed)) % 2) === 0;
     this.floatSeed = (Math.abs(hash2((x * 19) | 0, (y * 19) | 0, this.seed + 51)) % 1000) / 1000;
     this.pulse = 0;
+  }
+
+  xpValue() {
+    const base =
+      this.kind === "brute" ? 9 :
+      this.kind === "caster" ? 8 :
+      this.kind === "stalker" ? 7 :
+      6;
+
+    const scaled = base + this.tier * 2;
+    return this.elite ? Math.round(scaled * 1.8) : scaled;
   }
 
   update(dt, hero, world, game) {
@@ -1102,6 +1201,66 @@ function enemyPalette(lookType, elite, shift, flash) {
   }
 
   return palettes[shift % palettes.length];
+}
+
+function gearVisualColor(rarity, kind = "generic") {
+  if (kind === "armor") {
+    if (rarity === "epic") return "rgba(142,92,214,0.98)";
+    if (rarity === "rare") return "rgba(78,124,214,0.98)";
+    if (rarity === "uncommon") return "rgba(70,146,110,0.98)";
+    return "rgba(92,104,128,0.98)";
+  }
+
+  if (kind === "helm") {
+    if (rarity === "epic") return "rgba(124,82,194,0.98)";
+    if (rarity === "rare") return "rgba(96,118,172,0.98)";
+    if (rarity === "uncommon") return "rgba(84,126,98,0.98)";
+    return "rgba(96,98,110,0.98)";
+  }
+
+  if (kind === "boots") {
+    if (rarity === "epic") return "rgba(118,76,184,0.98)";
+    if (rarity === "rare") return "rgba(74,104,162,0.98)";
+    if (rarity === "uncommon") return "rgba(64,112,86,0.98)";
+    return "rgba(58,62,72,0.98)";
+  }
+
+  if (kind === "ring" || kind === "trinket") {
+    if (rarity === "epic") return "rgba(226,170,255,0.98)";
+    if (rarity === "rare") return "rgba(156,210,255,0.98)";
+    if (rarity === "uncommon") return "rgba(180,240,180,0.98)";
+    return "rgba(232,214,164,0.98)";
+  }
+
+  if (kind === "weapon") {
+    if (rarity === "epic") return "rgba(208,164,255,1)";
+    if (rarity === "rare") return "rgba(144,204,255,1)";
+    if (rarity === "uncommon") return "rgba(186,232,196,1)";
+    return "rgba(178,188,205,1)";
+  }
+
+  return "rgba(200,200,210,1)";
+}
+
+function gearTrimColor(rarity) {
+  if (rarity === "epic") return "rgba(255,220,150,1)";
+  if (rarity === "rare") return "rgba(230,236,255,1)";
+  if (rarity === "uncommon") return "rgba(220,240,220,1)";
+  return "rgba(210,186,118,1)";
+}
+
+function gearShineColor(rarity) {
+  if (rarity === "epic") return "rgba(255,236,255,0.95)";
+  if (rarity === "rare") return "rgba(236,246,255,0.95)";
+  if (rarity === "uncommon") return "rgba(240,255,244,0.94)";
+  return "rgba(232,236,244,0.9)";
+}
+
+function gearGlowColor(rarity) {
+  if (rarity === "epic") return "rgba(220,160,255,0.95)";
+  if (rarity === "rare") return "rgba(140,210,255,0.95)";
+  if (rarity === "uncommon") return "rgba(155,235,175,0.92)";
+  return "rgba(255,220,140,0.55)";
 }
 
 function roundedRectPath(path, x, y, w, h, r) {
