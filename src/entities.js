@@ -1,7 +1,10 @@
 // src/entities.js
 // FULL FILE
-// Polished enemy variety + preserved working hero vertical sword
-// Keeps current game.js compatibility
+// Next polish pass:
+// - preserve working hero vertical sword
+// - improve enemy readability and elite visuals
+// - improve loot visuals
+// - keep current game.js compatibility
 
 import { clamp, dist, norm, RNG, hash2 } from "./util.js";
 
@@ -511,12 +514,13 @@ export class Enemy {
     this.skinShift = Math.abs(hash2((x * 7) | 0, (y * 7) | 0, this.tier)) % 4;
     this.oneEye = (Math.abs(hash2((x * 13) | 0, (y * 13) | 0, 17 + this.seed)) % 5) === 0;
     this.tail = (Math.abs(hash2((x * 17) | 0, (y * 17) | 0, 31 + this.seed)) % 2) === 0;
+    this.floatSeed = (Math.abs(hash2((x * 19) | 0, (y * 19) | 0, this.seed + 51)) % 1000) / 1000;
   }
 
   update(dt, hero, world, game) {
     if (!this.alive || !hero) return;
 
-    this.animT += dt * 6.5;
+    this.animT += dt * (5.7 + this.floatSeed * 2.2);
     this.hitFlash = Math.max(0, this.hitFlash - dt * 6);
     this.attackCd = Math.max(0, this.attackCd - dt);
 
@@ -622,6 +626,7 @@ export class Enemy {
 
     const flash = this.hitFlash > 0;
     const bob = Math.sin(this.animT) * 1.15;
+    const squash = 1 + Math.sin(this.animT * 0.85) * 0.04;
     const colors = enemyPalette(this.lookType, this.elite, this.skinShift, flash);
     const eye = this.lookType === 3 ? "rgba(160,230,255,1)" : "rgba(255,232,120,1)";
 
@@ -639,11 +644,10 @@ export class Enemy {
       ctx.stroke();
     }
 
-    // extra accent to make differences clearer
     if (this.lookType === 0) {
       ctx.fillStyle = colors.body;
       ctx.beginPath();
-      ctx.ellipse(this.x, this.y + 2 + bob, 13, 9, 0, 0, Math.PI * 2);
+      ctx.ellipse(this.x, this.y + 2 + bob, 13 * squash, 9 / squash, 0, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.fillStyle = colors.accent;
@@ -670,6 +674,12 @@ export class Enemy {
       ctx.fillRect(this.x + 9, this.y - 1 + bob, 3, 6);
       ctx.fillRect(this.x - 8.5, this.y + 11 + bob, 3, 4);
       ctx.fillRect(this.x + 5.5, this.y + 11 + bob, 3, 4);
+
+      if (this.elite) {
+        ctx.fillStyle = "rgba(255,220,130,0.95)";
+        ctx.fillRect(this.x - 4, this.y - 14 + bob, 8, 2);
+        ctx.fillRect(this.x - 2, this.y - 16 + bob, 4, 2);
+      }
     } else if (this.lookType === 2) {
       ctx.fillStyle = colors.body;
       ctx.beginPath();
@@ -722,6 +732,19 @@ export class Enemy {
       ctx.beginPath();
       ctx.arc(this.x, this.y + 2 + bob, 9, 0, Math.PI * 2);
       ctx.stroke();
+
+      // staff
+      ctx.strokeStyle = colors.detail;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(this.x + 8, this.y - 7 + bob);
+      ctx.lineTo(this.x + 8, this.y + 10 + bob);
+      ctx.stroke();
+
+      ctx.fillStyle = "rgba(170,235,255,0.95)";
+      ctx.beginPath();
+      ctx.arc(this.x + 8, this.y - 9 + bob, 2.4, 0, Math.PI * 2);
+      ctx.fill();
     }
 
     ctx.fillStyle = eye;
@@ -732,6 +755,14 @@ export class Enemy {
     } else {
       ctx.fillRect(this.x - 4, this.y - 7 + bob, 2, 2);
       ctx.fillRect(this.x + 2, this.y - 7 + bob, 2, 2);
+    }
+
+    if (this.elite) {
+      ctx.strokeStyle = "rgba(255,224,120,0.55)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y + 1 + bob, this.r + 2.5, 0, Math.PI * 2);
+      ctx.stroke();
     }
 
     const w = 22;
@@ -934,6 +965,7 @@ export class Loot {
     if (!this.alive) return;
 
     const bob = Math.sin(this.age * 5) * 2;
+    const pulse = 1 + Math.sin(this.age * 8) * 0.06;
     const x = this.x;
     const y = this.y + bob;
 
@@ -944,14 +976,18 @@ export class Loot {
     ctx.beginPath();
     ctx.ellipse(x, y + 10, 8, 4, 0, 0, Math.PI * 2);
     ctx.fill();
+    ctx.globalAlpha = 1;
 
     if (this.kind === "gold") {
       ctx.fillStyle = "rgba(255,214,84,0.98)";
       ctx.beginPath();
-      ctx.arc(x, y, 6, 0, Math.PI * 2);
+      ctx.arc(x, y, 6 * pulse, 0, Math.PI * 2);
       ctx.fill();
+
       ctx.strokeStyle = "rgba(255,244,180,0.8)";
       ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(x, y, 4.1 * pulse, 0, Math.PI * 2);
       ctx.stroke();
     } else if (this.kind === "potion") {
       const potionType = this.data?.potionType || "hp";
@@ -961,14 +997,21 @@ export class Loot {
       ctx.beginPath();
       ctx.arc(x, y, 6, 0, Math.PI * 2);
       ctx.fill();
+
       ctx.fillStyle = "rgba(255,255,255,0.65)";
       ctx.fillRect(x - 2, y - 7, 4, 2);
+      ctx.fillRect(x - 1.2, y - 9, 2.4, 2);
     } else {
-      ctx.fillStyle = rarityColor(this.data?.gear?.rarity || "common");
-      ctx.fillRect(x - 5, y - 5, 10, 10);
+      const col = rarityColor(this.data?.gear?.rarity || "common");
+      ctx.fillStyle = col;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(this.age * 0.8);
+      ctx.fillRect(-5, -5, 10, 10);
       ctx.strokeStyle = "rgba(255,255,255,0.70)";
       ctx.lineWidth = 1;
-      ctx.strokeRect(x - 5, y - 5, 10, 10);
+      ctx.strokeRect(-5, -5, 10, 10);
+      ctx.restore();
     }
 
     ctx.restore();
@@ -1001,7 +1044,13 @@ function enemyPalette(lookType, elite, shift, flash) {
   ];
 
   if (elite) {
-    return { back: "rgba(112,72,18,0.98)", body: "rgba(222,154,46,1)", head: "rgba(214,164,78,1)", detail: "rgba(120,72,18,1)", accent: "rgba(255,212,120,0.95)" };
+    return {
+      back: "rgba(112,72,18,0.98)",
+      body: "rgba(222,154,46,1)",
+      head: "rgba(214,164,78,1)",
+      detail: "rgba(120,72,18,1)",
+      accent: "rgba(255,212,120,0.95)"
+    };
   }
 
   return palettes[shift % palettes.length];
