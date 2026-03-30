@@ -1,4 +1,4 @@
-# Broke Knight (v24)
+# Broke Knight (main)
 
 Run locally:
 - Start a simple web server in this folder (recommended; ES modules need it):
