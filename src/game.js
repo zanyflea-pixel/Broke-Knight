@@ -1,13 +1,15 @@
 // src/game.js
-// v36 DEATH + RESPAWN PASS (FULL FILE)
+// v37 REWARDING EXPLORATION + CAMP REWARD PASS (FULL FILE)
 // Adds:
 // - map fast travel with awakened waystones
 // - inventory quick-equip on 1-9 / 0 while inventory is open
 // - safe swap: old equipped item returns to bag
 // - SAFE hard reset / new game from Options menu with Delete twice
-// - real death / respawn flow with Enter to respawn
-// - respawn at latest awakened waystone or world spawn
-// - death overlay + small gold penalty
+// - immediate save on important progression changes
+// - waystones fully heal + refill mana
+// - new docks grant potion restocks
+// - first-time camp clears grant a reward burst at camp center
+// - occasional potion bonus on level up
 // - keeps aim, spells, camps, loot, save/load, and progression systems intact
 
 import World from "./world.js";
@@ -31,7 +33,7 @@ export default class Game {
 
     this.input = new Input(window);
     this.ui = new UI(canvas);
-    this.save = new Save("broke-knight-save-v36");
+    this.save = new Save("broke-knight-save-v37");
 
     this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
     this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
@@ -90,9 +92,6 @@ export default class Game {
     this._spellMsgCooldown = 0;
     this._resetQueued = false;
     this._resetConfirmT = 0;
-
-    this._deathHandled = false;
-    this._respawnFlashT = 0;
 
     this.aim = { x: 1, y: 0 };
 
@@ -163,7 +162,6 @@ export default class Game {
       if (n.x || n.y) this.aim = { x: n.x, y: n.y };
     }
 
-    this.hero.alive = !this.hero.dead;
     this._levelMsgShown = this.hero.level || 1;
   }
 
@@ -193,6 +191,11 @@ export default class Game {
         eliteKills: this.progress.eliteKills | 0,
       },
     });
+  }
+
+  _saveSoon() {
+    this._autosaveT = 0;
+    this._save();
   }
 
   _msg(text, t = 2.2) {
@@ -251,6 +254,67 @@ export default class Game {
 
   _grantXP(n) {
     this.hero.giveXP?.(Math.max(0, n | 0));
+  }
+
+  _fullRestoreHero() {
+    const st = this.hero.getStats?.() || { maxHp: this.hero.maxHp || 100, maxMana: this.hero.maxMana || 60 };
+    this.hero.hp = st.maxHp;
+    this.hero.mana = st.maxMana;
+  }
+
+  _grantDockRestock(firstDock = false) {
+    const hpGain = firstDock ? 2 : 1;
+    const manaGain = 1;
+    this.hero.potions.hp = (this.hero.potions.hp | 0) + hpGain;
+    this.hero.potions.mana = (this.hero.potions.mana | 0) + manaGain;
+  }
+
+  _spawnCampRewardBurst(camp) {
+    if (!camp) return;
+    if (this.loot.length >= this.perf.maxLoot - 4) return;
+
+    const cx = camp.x;
+    const cy = camp.y;
+    const tier = Math.max(1, camp.tier | 0);
+
+    this.loot.push(new Loot(cx - 14, cy - 8, "gold", { amount: 10 + tier * 4 }));
+    this.loot.push(new Loot(cx + 14, cy - 4, "gold", { amount: 8 + tier * 3 }));
+
+    if (Math.random() < 0.85) {
+      this.loot.push(new Loot(cx - 8, cy + 10, "potion", {
+        potionType: Math.random() < 0.5 ? "hp" : "mana",
+        amount: 1,
+      }));
+    }
+
+    const slotRoll = Math.random();
+    const slot =
+      slotRoll < 0.28 ? "weapon" :
+      slotRoll < 0.50 ? "armor" :
+      slotRoll < 0.66 ? "helm" :
+      slotRoll < 0.80 ? "boots" :
+      slotRoll < 0.90 ? "ring" : "trinket";
+
+    const rarity =
+      tier >= 3
+        ? (Math.random() < 0.30 ? "epic" : "rare")
+        : (Math.random() < 0.55 ? "rare" : "uncommon");
+
+    const gearSeed = hash2(this.seed ^ 0x7788, (camp.id | 0) * 97 + tier * 11);
+    const gear = makeGear(slot, Math.max(1, this.hero.level || 1), rarity, gearSeed);
+    this.loot.push(new Loot(cx + 2, cy + 16, "gear", { gear }));
+
+    this._shake(0.10, 4.5);
+  }
+
+  _maybeGrantLevelPotionBonus() {
+    const lvl = this.hero.level | 0;
+    if (lvl > 0 && lvl % 2 === 0) {
+      this.hero.potions.hp = (this.hero.potions.hp | 0) + 1;
+      this._msg(`Level ${lvl}! Bonus HP potion gained.`, 2.4);
+      return true;
+    }
+    return false;
   }
 
   _coolMsg(text, t = 1.6) {
@@ -319,6 +383,7 @@ export default class Game {
       this._msg(`Equipped ${item.name}`, 1.8);
     }
 
+    this._saveSoon();
     return true;
   }
 
@@ -384,12 +449,6 @@ export default class Game {
       if (this._resetConfirmT <= 0) {
         this._resetConfirmT = 0;
       }
-    }
-  }
-
-  _tickRespawnFlash(dt) {
-    if (this._respawnFlashT > 0) {
-      this._respawnFlashT = Math.max(0, this._respawnFlashT - dt);
     }
   }
 
@@ -468,6 +527,7 @@ export default class Game {
       this._grantGold(bonusGold);
       this._msg(`Elite defeated! (+${baseXP + bonusXP} XP, +${bonusGold} Gold)`, 2.6);
       this._shake(0.08, 3.2);
+      this._saveSoon();
     }
 
     this._dropLoot(enemy.x, enemy.y, enemy.tier || 1, enemy.kind, !!enemy.elite);
@@ -491,6 +551,7 @@ export default class Game {
       this.hero.giveXP?.(q.xp || 0);
       this.hero.gold += q.gold || 0;
       this._msg(`Quest complete: ${q.name} (+${q.xp} XP, +${q.gold} Gold)`, 3.2);
+      this._saveSoon();
     }
   }
 
@@ -541,11 +602,16 @@ export default class Game {
         if (!st.clearedOnce) {
           st.clearedOnce = true;
           this.progress.clearedCamps.add(c.id);
+
           const xp = 8 + c.tier * 4;
           const gold = 12 + c.tier * 4;
           this._grantGold(gold);
           this._grantXP(xp);
-          this._msg(`Camp cleared! (+${xp} XP, +${gold} Gold)`, 3);
+
+          this._spawnCampRewardBurst(c);
+
+          this._msg(`Camp cleared! Reward cache found. (+${xp} XP, +${gold} Gold)`, 3.2);
+          this._saveSoon();
         } else {
           this._msg("Camp cleared again.", 2);
         }
@@ -610,85 +676,6 @@ export default class Game {
       });
   }
 
-  _getRespawnPoint() {
-    const ways = this._getDiscoveredWaystones();
-    if (ways.length) {
-      const w = ways[ways.length - 1];
-      return { x: w.x, y: w.y + 42, label: "waystone" };
-    }
-
-    return {
-      x: this.world?.spawn?.x ?? 0,
-      y: this.world?.spawn?.y ?? 0,
-      label: "spawn",
-    };
-  }
-
-  _handleHeroDeath() {
-    if (!this.hero.dead) {
-      this._deathHandled = false;
-      return;
-    }
-
-    if (this._deathHandled) return;
-    this._deathHandled = true;
-
-    this.menu.open = null;
-    this.ui?.closeAll?.();
-
-    this.hero.vx = 0;
-    this.hero.vy = 0;
-    this.hero.state.sailing = false;
-    this.hero.state.dashT = 0;
-
-    const lostGold = Math.min(this.hero.gold | 0, Math.max(5, Math.floor((this.hero.gold || 0) * 0.2)));
-    this.hero.gold = Math.max(0, (this.hero.gold || 0) - lostGold);
-
-    this._msg(
-      lostGold > 0
-        ? `You were defeated. Lost ${lostGold} gold. Press Enter to respawn.`
-        : "You were defeated. Press Enter to respawn.",
-      3.2
-    );
-
-    this._shake(0.18, 6);
-  }
-
-  _respawnHero() {
-    const p = this._getRespawnPoint();
-    const st = this.hero.getStats?.() || { maxHp: 100, maxMana: 60 };
-
-    this.hero.x = p.x;
-    this.hero.y = p.y;
-    this.hero.vx = 0;
-    this.hero.vy = 0;
-    this.hero.hp = Math.max(1, Math.round(st.maxHp * 0.7));
-    this.hero.mana = Math.round(st.maxMana * 0.7);
-    this.hero.alive = true;
-    this.hero.dead = false;
-    this.hero.state.sailing = false;
-    this.hero.state.dashT = 0;
-    this.hero.state.hurtT = 0;
-    this.hero.lastMove = { x: 1, y: 0 };
-
-    this.projectiles = [];
-    this._respawnFlashT = 0.45;
-    this._deathHandled = false;
-
-    this._msg(
-      p.label === "waystone" ? "Respawned at awakened waystone." : "Respawned at world spawn.",
-      2.4
-    );
-    this._shake(0.10, 4);
-  }
-
-  _handleDeathInput() {
-    if (!this.hero.dead) return;
-    if (this.input.wasPressed("Enter")) {
-      this._respawnHero();
-    }
-  }
-
   _teleportToWaystone(index) {
     const ways = this._getDiscoveredWaystones();
 
@@ -716,6 +703,7 @@ export default class Game {
 
     this._msg(`Fast traveled to Waystone ${index + 1}`, 2.2);
     this._shake(0.12, 4);
+    this._saveSoon();
   }
 
   _handleFastTravelInput() {
@@ -819,10 +807,16 @@ export default class Game {
     }
 
     if (this.input.wasPressed("1")) {
-      if (this.hero.usePotion?.("hp")) this._msg("Used HP potion");
+      if (this.hero.usePotion?.("hp")) {
+        this._msg("Used HP potion");
+        this._saveSoon();
+      }
     }
     if (this.input.wasPressed("2")) {
-      if (this.hero.usePotion?.("mana")) this._msg("Used Mana potion");
+      if (this.hero.usePotion?.("mana")) {
+        this._msg("Used Mana potion");
+        this._saveSoon();
+      }
     }
   }
 
@@ -838,12 +832,20 @@ export default class Game {
 
         if (firstDock) {
           this._grantGold(10);
-          this._msg(this.hero.state.sailing ? "New dock found. Sailing: ON (+10 Gold)" : "New dock found (+10 Gold)", 2.8);
+          this._grantDockRestock(true);
+          this._msg(
+            this.hero.state.sailing
+              ? "New dock found. Sailing: ON (+10 Gold, dock supplies gained)"
+              : "New dock found (+10 Gold, dock supplies gained)",
+            3
+          );
         } else {
-          this._msg(this.hero.state.sailing ? "Sailing: ON" : "Sailing: OFF");
+          this._grantDockRestock(false);
+          this._msg(this.hero.state.sailing ? "Sailing: ON (+dock supplies)" : "Sailing: OFF (+dock supplies)");
         }
 
         this._questAddProgress("q_sail", 1);
+        this._saveSoon();
         return;
       }
     }
@@ -853,15 +855,18 @@ export default class Game {
         const first = !this.progress.discoveredWaystones.has(w.id);
         this.progress.discoveredWaystones.add(w.id);
 
+        this._fullRestoreHero();
+
         if (first) {
           this._grantXP(20);
           this._grantGold(15);
-          this._msg("Waystone awakened! (+20 XP, +15 Gold)", 3);
+          this._msg("Waystone awakened! Full restore. (+20 XP, +15 Gold)", 3);
         } else {
-          this._msg("Waystone hums quietly.", 2);
+          this._msg("Waystone restored your strength.", 2.2);
         }
 
         this._questAddProgress("q_find_way", 1);
+        this._saveSoon();
         return;
       }
     }
@@ -1221,24 +1226,13 @@ export default class Game {
 
     this._tickSpellCooldowns(dt);
     this._tickResetConfirm(dt);
-    this._tickRespawnFlash(dt);
-
-    this._handleHeroDeath();
 
     this._handleMenus();
     this._handleFastTravelInput();
     this._handleInventoryHotkeys();
     this._handleResetHotkey();
-    this._handleDeathInput();
 
     this.world?.update?.(dt, this.hero);
-
-    if (this.hero.dead) {
-      this._updateCamera(dt);
-      this.ui?.update?.(dt, this);
-      this.input.endFrame();
-      return;
-    }
 
     const blockMove =
       this.menu.open === "inventory" ||
@@ -1282,7 +1276,11 @@ export default class Game {
 
     if ((this.hero.level || 1) > this._levelMsgShown) {
       this._levelMsgShown = this.hero.level || 1;
-      this._msg(`Level up! You are now level ${this.hero.level}.`, 2.8);
+      const gotPotion = this._maybeGrantLevelPotionBonus();
+      if (!gotPotion) {
+        this._msg(`Level up! You are now level ${this.hero.level}.`, 2.8);
+      }
+      this._saveSoon();
     }
 
     this._updateCamera(dt);
@@ -1330,29 +1328,6 @@ export default class Game {
     }
 
     cam.zoom = lerp(cam.zoom, 1.0, 1 - Math.pow(0.001, dt));
-  }
-
-  _drawDeathOverlay(ctx) {
-    ctx.save();
-
-    ctx.fillStyle = "rgba(0,0,0,0.52)";
-    ctx.fillRect(0, 0, this.w, this.h);
-
-    ctx.fillStyle = "rgba(255,255,255,0.96)";
-    ctx.font = "bold 34px system-ui, Arial";
-    ctx.textAlign = "center";
-    ctx.fillText("YOU WERE DEFEATED", this.w * 0.5, this.h * 0.5 - 24);
-
-    ctx.font = "16px system-ui, Arial";
-    ctx.fillStyle = "rgba(235,235,240,0.92)";
-    ctx.fillText("Press Enter to respawn", this.w * 0.5, this.h * 0.5 + 10);
-
-    ctx.font = "13px system-ui, Arial";
-    ctx.fillStyle = "rgba(255,220,180,0.86)";
-    ctx.fillText("You respawn at your latest awakened waystone.", this.w * 0.5, this.h * 0.5 + 34);
-
-    ctx.textAlign = "left";
-    ctx.restore();
   }
 
   draw() {
@@ -1405,17 +1380,5 @@ export default class Game {
     ctx.restore();
 
     this.ui?.draw?.(ctx, this);
-
-    if (this._respawnFlashT > 0) {
-      ctx.save();
-      const a = this._respawnFlashT / 0.45;
-      ctx.fillStyle = `rgba(255,255,255,${0.20 * a})`;
-      ctx.fillRect(0, 0, this.w, this.h);
-      ctx.restore();
-    }
-
-    if (this.hero.dead) {
-      this._drawDeathOverlay(ctx);
-    }
   }
 }

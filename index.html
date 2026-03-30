@@ -1,5 +1,5 @@
 <!-- index.html -->
-<!-- v32 SAFE PAGE SHELL + CANVAS POLISH (FULL FILE)
+<!-- v33 SAFE PAGE SHELL + CANVAS POLISH (FULL FILE)
 Purpose:
 - keep the current simple boot flow
 - preserve loading src/main.js
@@ -14,9 +14,10 @@ Purpose:
   <meta charset="utf-8" />
   <meta
     name="viewport"
-    content="width=device-width, initial-scale=1, viewport-fit=cover"
+    content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"
   />
   <meta name="theme-color" content="#0b0f16" />
+  <meta name="color-scheme" content="dark" />
   <title>Broke Knight</title>
 
   <style>
@@ -25,6 +26,8 @@ Purpose:
       --bg1: #0d1420;
       --bg2: #111a28;
       --edge: rgba(255,255,255,0.06);
+      --edge2: rgba(255,255,255,0.03);
+      --text: #e8eefc;
     }
 
     * {
@@ -45,18 +48,21 @@ Purpose:
 
     body {
       font-family: Arial, sans-serif;
-      color: #e8eefc;
+      color: var(--text);
       user-select: none;
       -webkit-user-select: none;
       -webkit-tap-highlight-color: transparent;
       overscroll-behavior: none;
+      touch-action: none;
     }
 
     #game-shell {
       position: fixed;
       inset: 0;
       width: 100vw;
+      width: 100dvw;
       height: 100vh;
+      height: 100dvh;
       overflow: hidden;
       background:
         radial-gradient(circle at center, rgba(255,255,255,0.02), transparent 55%);
@@ -65,13 +71,15 @@ Purpose:
     canvas {
       display: block;
       width: 100vw;
+      width: 100dvw;
       height: 100vh;
+      height: 100dvh;
       outline: none;
       background: transparent;
       image-rendering: auto;
+      touch-action: none;
     }
 
-    /* subtle outer frame glow for a more finished look */
     #game-shell::before {
       content: "";
       position: absolute;
@@ -83,7 +91,18 @@ Purpose:
         inset 0 -30px 80px rgba(0,0,0,0.18);
     }
 
-    /* tiny fallback label if JS fails */
+    #game-shell::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.015), transparent 22%, transparent 78%, rgba(0,0,0,0.12)),
+        radial-gradient(circle at 50% 0%, rgba(150,190,255,0.045), transparent 28%);
+      border: 1px solid var(--edge2);
+      mix-blend-mode: screen;
+    }
+
     #noscript-msg {
       position: fixed;
       left: 50%;
@@ -96,6 +115,10 @@ Purpose:
       font-size: 14px;
       border: 1px solid rgba(255,255,255,0.08);
       backdrop-filter: blur(6px);
+      text-align: center;
+      max-width: min(90vw, 420px);
+      line-height: 1.45;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.32);
     }
 
     .js-ready #noscript-msg {

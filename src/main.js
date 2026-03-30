@@ -1,5 +1,5 @@
 // src/main.js
-// v33 BOOT + FOCUS + RESUME HARDENING PASS (FULL FILE)
+// v38 BOOT + FOCUS + RESUME HARDENING PASS (FULL FILE)
 // Purpose:
 // - keep boot flow simple
 // - improve resize behavior
@@ -28,15 +28,13 @@ let booted = false;
 let lastTime = performance.now();
 let accumulator = 0;
 
-// Fixed-step update keeps the game feeling steadier when frame times wobble.
 const STEP = 1 / 60;
-const MAX_FRAME = 0.05; // clamp giant spikes after tab switches
-const MAX_STEPS = 4;    // prevent spiral of death on slow frames
+const MAX_FRAME = 0.05;
+const MAX_STEPS = 4;
 
 setupCanvasElement();
 
 function setupCanvasElement() {
-  // Make sure the canvas can actually receive keyboard focus.
   if (!canvas.hasAttribute("tabindex")) {
     canvas.tabIndex = 0;
   }
@@ -70,7 +68,6 @@ function resizeCanvas() {
     canvas.height = pixelH;
   }
 
-  // Draw in CSS pixels; the backing canvas handles sharpness.
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.imageSmoothingEnabled = true;
 
@@ -133,11 +130,11 @@ function boot() {
 function update(dt) {
   if (!game) return;
 
-  if (game.update) {
+  if (typeof game.update === "function") {
     game.update(dt);
-  } else if (game.tick) {
+  } else if (typeof game.tick === "function") {
     game.tick(dt);
-  } else if (game.step) {
+  } else if (typeof game.step === "function") {
     game.step(dt);
   }
 }
@@ -150,9 +147,9 @@ function render() {
 
   ctx.clearRect(0, 0, w, h);
 
-  if (game.draw) {
+  if (typeof game.draw === "function") {
     game.draw();
-  } else if (game.render) {
+  } else if (typeof game.render === "function") {
     game.render();
   }
 }
