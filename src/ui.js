@@ -78,10 +78,6 @@ export default class UI {
     if (this._open === "options") this._drawOptions(ctx, game);
   }
 
-  /* ===========================
-     HUD
-  =========================== */
-
   _drawHUD(ctx, game) {
     const hero = game.hero;
     const st = hero.getStats?.() || { maxHp: 100, maxMana: 60, dmg: 8, armor: 0, crit: 0.05 };
@@ -453,10 +449,6 @@ export default class UI {
 
     ctx.restore();
   }
-
-  /* ===========================
-     PANELS
-  =========================== */
 
   _panelRect(w, h) {
     return {
@@ -833,10 +825,6 @@ export default class UI {
     ctx.restore();
   }
 }
-
-/* ===========================
-   HELPERS
-=========================== */
 
 function sq(x, y) {
   return x * x + y * y;

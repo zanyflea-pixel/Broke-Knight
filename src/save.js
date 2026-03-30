@@ -1,5 +1,5 @@
 // src/save.js
-// v35 SAFE SAVE HARDENING PASS (FULL FILE)
+// v37 SAFE SAVE HARDENING PASS (FULL FILE)
 // Goals:
 // - keep existing save behavior working
 // - preserve inventory / equip / progression fields
@@ -51,6 +51,14 @@ export default class Save {
     }
   }
 
+  hasSave() {
+    try {
+      return !!localStorage.getItem(this.key);
+    } catch (_) {
+      return false;
+    }
+  }
+
   exportString(data) {
     try {
       const clean = this._sanitize(data);
@@ -71,14 +79,6 @@ export default class Save {
       return this._sanitize(parsed);
     } catch (_) {
       return null;
-    }
-  }
-
-  hasSave() {
-    try {
-      return !!localStorage.getItem(this.key);
-    } catch (_) {
-      return false;
     }
   }
 
@@ -135,12 +135,10 @@ export default class Save {
 
     if (!data || typeof data !== "object") return out;
 
-    // seed
     if (Number.isFinite(data.seed)) {
       out.seed = data.seed | 0;
     }
 
-    // hero
     const h = data.hero;
     if (h && typeof h === "object") {
       if (Number.isFinite(h.x)) out.hero.x = +h.x;
@@ -202,7 +200,6 @@ export default class Save {
       }
     }
 
-    // quests
     if (Array.isArray(data.quests)) {
       out.quests = data.quests
         .filter(q => q && typeof q === "object")
@@ -218,7 +215,6 @@ export default class Save {
         }));
     }
 
-    // progress
     const p = data.progress;
     if (p && typeof p === "object") {
       if (Array.isArray(p.discoveredWaystones)) {
@@ -242,7 +238,6 @@ export default class Save {
       }
     }
 
-    // final clamps after parsing
     out.hero.hp = Math.min(out.hero.hp, out.hero.maxHp);
     out.hero.mana = Math.min(out.hero.mana, out.hero.maxMana);
 
