@@ -1,10 +1,11 @@
 // src/entities.js
 // FULL FILE
-// Next logical polish pass:
+// Next polish pass:
 // - preserve working hero vertical sword
 // - preserve working enemy variety
-// - stronger enemy readability and polish
-// - improved projectile glow and loot visuals
+// - better enemy idle polish and elite readability
+// - stronger projectile glow/trail feel
+// - clearer loot visuals
 // - keep current game.js compatibility
 
 import { clamp, dist, norm, RNG, hash2 } from "./util.js";
@@ -766,6 +767,12 @@ export class Enemy {
       ctx.beginPath();
       ctx.arc(this.x, this.y + 1 + bob, this.r + 2.5, 0, Math.PI * 2);
       ctx.stroke();
+
+      ctx.strokeStyle = "rgba(255,238,170,0.28)";
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y + 1 + bob, this.r + 5.2 + Math.sin(this.animT * 1.3) * 0.8, 0, Math.PI * 2);
+      ctx.stroke();
     }
 
     const w = 22;
@@ -891,7 +898,12 @@ export class Projectile {
     ctx.translate(this.x, this.y);
     ctx.rotate(ang);
 
-    ctx.fillStyle = "rgba(255,255,255,0.10)";
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.beginPath();
+    ctx.ellipse(-r * 1.9, 0, r * 2.8, r * 1.15, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(255,255,255,0.12)";
     ctx.beginPath();
     ctx.ellipse(0, 0, r * 3.2, r * 1.8, 0, 0, Math.PI * 2);
     ctx.fill();
