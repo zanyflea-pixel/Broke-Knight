@@ -1,12 +1,11 @@
 // src/entities.js
-// SAFE COMPAT EXPORT RESTORE + PROJECTILE CONTRACT FIX
-// Exports:
-// - Hero
-// - Enemy
-// - Loot
-// - Projectile
-// - EntityManager
-// - makeGear
+// COMPAT + BEHAVIOR FIX PASS
+// Fixes:
+// - dash cooldown now ticks correctly
+// - enemies update with the signature game.js actually uses
+// - projectiles keep the contract game.js expects
+// - preserves improved hero/enemy visuals
+// - restores hero potion use support
 
 import { clamp, dist, norm, RNG, hash2 } from "./util.js";
 
@@ -176,7 +175,9 @@ export class Hero {
 
     this.vx = 0;
     this.vy = 0;
-    this.speed = 180;
+
+    this.r = 14;
+    this.radius = 10;
 
     this.level = 1;
     this.xp = 0;
@@ -185,6 +186,7 @@ export class Hero {
 
     this.maxHp = 100;
     this.hp = 100;
+
     this.maxMana = 60;
     this.mana = 60;
 
@@ -202,57 +204,14 @@ export class Hero {
     };
 
     this.lastMove = { x: 1, y: 0 };
-    this.radius = 10;
+
     this.alive = true;
     this.dead = false;
+
     this.animT = 0;
   }
 
-  update(dt, game) {
-    const input = game?.input;
-    if (!input) return;
-
-    const axis =
-      input.moveVector?.() ||
-      input.axis?.() || {
-        x: (input.right?.() ? 1 : 0) - (input.left?.() ? 1 : 0),
-        y: (input.downArrow?.() ? 1 : 0) - (input.up?.() ? 1 : 0),
-      };
-
-    let mx = axis.x || 0;
-    let my = axis.y || 0;
-
-    const n = norm(mx, my);
-    mx = n.x;
-    my = n.y;
-
-    if (mx !== 0 || my !== 0) {
-      this.lastMove.x = mx;
-      this.lastMove.y = my;
-    }
-
-    const targetVX = mx * this.speed;
-    const targetVY = my * this.speed;
-    const accel = 12;
-
-    this.vx += (targetVX - this.vx) * accel * dt;
-    this.vy += (targetVY - this.vy) * accel * dt;
-
-    const nx = this.x + this.vx * dt;
-    const ny = this.y + this.vy * dt;
-
-    if (!game?.world?.canWalk || game.world.canWalk(nx, this.y)) {
-      this.x = nx;
-    } else {
-      this.vx = 0;
-    }
-
-    if (!game?.world?.canWalk || game.world.canWalk(this.x, ny)) {
-      this.y = ny;
-    } else {
-      this.vy = 0;
-    }
-
+  update(dt) {
     this.hp = clamp(this.hp + this.hpRegen * dt, 0, this.maxHp);
     this.mana = clamp(this.mana + this.manaRegen * dt, 0, this.maxMana);
 
@@ -267,6 +226,28 @@ export class Hero {
       this.alive = false;
       this.dead = true;
     }
+  }
+
+  usePotion(kind = "hp") {
+    const st = this.getStats();
+
+    if (kind === "hp") {
+      if ((this.potions.hp || 0) <= 0) return false;
+      if (this.hp >= st.maxHp) return false;
+      this.hp = Math.min(st.maxHp, this.hp + 45);
+      this.potions.hp -= 1;
+      return true;
+    }
+
+    if (kind === "mana") {
+      if ((this.potions.mana || 0) <= 0) return false;
+      if (this.mana >= st.maxMana) return false;
+      this.mana = Math.min(st.maxMana, this.mana + 35);
+      this.potions.mana -= 1;
+      return true;
+    }
+
+    return false;
   }
 
   draw(ctx) {
@@ -403,11 +384,13 @@ export class Hero {
     const reduced = Math.max(1, amount - (stats.armor || 0) * 0.35);
     this.hp = Math.max(0, this.hp - reduced);
     this.state.hurtT = 0.18;
+
     if (this.hp <= 0) {
       this.alive = false;
       this.dead = true;
     }
-    return reduced;
+
+    return Math.round(reduced);
   }
 
   spendMana(cost = 0) {
@@ -445,42 +428,96 @@ export class Hero {
 =========================== */
 
 export class Enemy {
-  constructor(x = 0, y = 0, opts = {}) {
+  constructor(x = 0, y = 0, tier = 1, kind = "blob", seed = 1) {
     this.x = x;
     this.y = y;
 
-    this.radius = opts.radius ?? 10;
-    this.speed = opts.speed ?? 78;
+    this.vx = 0;
+    this.vy = 0;
 
-    this.maxHp = opts.maxHp ?? 30;
+    this.tier = Math.max(1, tier | 0);
+    this.kind = kind || "blob";
+    this.seed = seed | 0;
+
+    this.r = this.kind === "brute" ? 16 : this.kind === "stalker" ? 11 : this.kind === "caster" ? 12 : 13;
+    this.radius = this.r;
+
+    this.speed =
+      this.kind === "stalker" ? 92 + this.tier * 2 :
+      this.kind === "brute" ? 52 + this.tier * 1.4 :
+      this.kind === "caster" ? 58 + this.tier * 1.5 :
+      68 + this.tier * 1.8;
+
+    this.maxHp =
+      this.kind === "brute" ? 34 + this.tier * 16 :
+      this.kind === "caster" ? 20 + this.tier * 9 :
+      this.kind === "stalker" ? 22 + this.tier * 10 :
+      26 + this.tier * 12;
+
     this.hp = this.maxHp;
 
-    this.touchDps = opts.touchDps ?? 10;
-    this.xpReward = opts.xpReward ?? 8;
-    this.goldReward = opts.goldReward ?? 4;
+    this.touchDps =
+      this.kind === "brute" ? 18 + this.tier * 1.6 :
+      this.kind === "stalker" ? 14 + this.tier * 1.2 :
+      this.kind === "caster" ? 10 + this.tier :
+      12 + this.tier * 1.1;
 
     this.alive = true;
     this.dead = false;
     this.hitFlash = 0;
+    this.animT = Math.random() * Math.PI * 2;
+
+    this.home = null;
+    this.elite = (hash2(this.seed, this.tier, this.r) >>> 0) % 9 === 0;
+
+    if (this.elite) {
+      this.maxHp = Math.round(this.maxHp * 1.75);
+      this.hp = this.maxHp;
+      this.touchDps *= 1.25;
+      this.speed *= 1.08;
+    }
+
+    this.attackCd = 0;
     this.wanderT = 0;
     this.wanderDir = { x: 0, y: 0 };
-    this.animT = Math.random() * Math.PI * 2;
   }
 
-  update(dt, game) {
-    const hero = game?.hero;
-    if (!hero) return;
+  update(dt, hero, world, game) {
+    if (!this.alive || !hero) return;
+
+    this.animT += dt * 6.5;
+    this.hitFlash = Math.max(0, this.hitFlash - dt * 6);
+    this.attackCd = Math.max(0, this.attackCd - dt);
 
     const dx = hero.x - this.x;
     const dy = hero.y - this.y;
-    const d = Math.hypot(dx, dy);
+    const d = Math.hypot(dx, dy) || 0.0001;
 
-    this.animT += dt * 6.8;
+    const leashHome = this.home || { x: this.x, y: this.y };
+    const homeDx = leashHome.x - this.x;
+    const homeDy = leashHome.y - this.y;
+    const homeDist = Math.hypot(homeDx, homeDy);
+
+    let tx = 0;
+    let ty = 0;
+    let moveSpeed = this.speed;
 
     if (d < 260) {
-      const n = norm(dx, dy);
-      this.x += n.x * this.speed * dt;
-      this.y += n.y * this.speed * dt;
+      if (this.kind === "caster" && d < 120) {
+        const n = norm(-dx, -dy);
+        tx = n.x;
+        ty = n.y;
+        moveSpeed *= 0.9;
+      } else {
+        const n = norm(dx, dy);
+        tx = n.x;
+        ty = n.y;
+      }
+    } else if (homeDist > 90) {
+      const n = norm(homeDx, homeDy);
+      tx = n.x;
+      ty = n.y;
+      moveSpeed *= 0.7;
     } else {
       this.wanderT -= dt;
       if (this.wanderT <= 0) {
@@ -489,25 +526,58 @@ export class Enemy {
         this.wanderDir.x = Math.cos(a);
         this.wanderDir.y = Math.sin(a);
       }
-
-      this.x += this.wanderDir.x * this.speed * 0.18 * dt;
-      this.y += this.wanderDir.y * this.speed * 0.18 * dt;
+      tx = this.wanderDir.x;
+      ty = this.wanderDir.y;
+      moveSpeed *= 0.22;
     }
 
-    if (game?.world?.canWalk && !game.world.canWalk(this.x, this.y)) {
-      this.x -= (dx / (d || 1)) * this.speed * dt;
-      this.y -= (dy / (d || 1)) * this.speed * dt;
-    }
+    this.vx = tx * moveSpeed;
+    this.vy = ty * moveSpeed;
 
-    if (d < this.radius + hero.radius + 2) {
+    const nx = this.x + this.vx * dt;
+    const ny = this.y + this.vy * dt;
+
+    if (!world?.canWalk || world.canWalk(nx, this.y)) this.x = nx;
+    else this.vx = 0;
+
+    if (!world?.canWalk || world.canWalk(this.x, ny)) this.y = ny;
+    else this.vy = 0;
+
+    const touchR = this.r + 12;
+    if (d < touchR && this.kind !== "caster") {
       hero.takeDamage?.(this.touchDps * dt);
     }
 
-    this.hitFlash = Math.max(0, this.hitFlash - dt * 6);
+    if (this.kind === "caster" && d < 240 && this.attackCd <= 0) {
+      this.attackCd = this.elite ? 1.25 : 1.65;
+
+      const n = norm(dx, dy);
+      const p = new Projectile(
+        this.x + n.x * 12,
+        this.y + n.y * 12 - 4,
+        n.x * 220,
+        n.y * 220,
+        Math.round(6 + this.tier * 2.2),
+        1.2,
+        this.tier,
+        {
+          color: this.elite ? "rgba(255,170,90,0.95)" : "rgba(255,120,120,0.92)",
+          radius: this.elite ? 6 : 5,
+          type: "enemy_bolt",
+          hitRadius: 16,
+          onHitHero: true,
+          friendly: false,
+        }
+      );
+
+      if (game?.projectiles?.push) {
+        game.projectiles.push(p);
+      }
+    }
   }
 
   takeDamage(amount = 0) {
-    this.hp -= Math.max(1, amount);
+    this.hp -= Math.max(1, amount | 0);
     this.hitFlash = 1;
 
     if (this.hp <= 0) {
@@ -524,10 +594,14 @@ export class Enemy {
 
     ctx.fillStyle = "rgba(0,0,0,0.18)";
     ctx.beginPath();
-    ctx.ellipse(this.x, this.y + 10, 8.8, 4, 0, 0, Math.PI * 2);
+    ctx.ellipse(this.x, this.y + 10, this.r * 0.85, 4.2, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = flash ? "rgba(255,255,255,1)" : "rgba(112,20,20,0.98)";
+    ctx.fillStyle = flash
+      ? "rgba(255,255,255,1)"
+      : this.elite
+        ? "rgba(185,120,26,0.98)"
+        : "rgba(112,20,20,0.98)";
     ctx.beginPath();
     ctx.moveTo(this.x - 6, this.y - 2 + bob);
     ctx.lineTo(this.x - 8, this.y + 8 + bob);
@@ -538,13 +612,21 @@ export class Enemy {
 
     const bodyPath = new Path2D();
     roundedRectPath(bodyPath, this.x - 5.6, this.y - 1 + bob, 11.2, 12, 3);
-    ctx.fillStyle = flash ? "rgba(255,255,255,1)" : "rgba(178,42,42,1)";
+    ctx.fillStyle = flash
+      ? "rgba(255,255,255,1)"
+      : this.elite
+        ? "rgba(222,154,46,1)"
+        : "rgba(178,42,42,1)";
     ctx.fill(bodyPath);
 
     ctx.fillStyle = flash ? "rgba(245,245,245,1)" : "rgba(212,76,70,0.95)";
     ctx.fillRect(this.x - 2.2, this.y + 1 + bob, 4.4, 7.5);
 
-    ctx.fillStyle = flash ? "rgba(255,255,255,1)" : "rgba(150,36,36,1)";
+    ctx.fillStyle = flash
+      ? "rgba(255,255,255,1)"
+      : this.elite
+        ? "rgba(214,164,78,1)"
+        : "rgba(150,36,36,1)";
     ctx.beginPath();
     ctx.arc(this.x, this.y - 6 + bob, 5.2, 0, Math.PI * 2);
     ctx.fill();
@@ -564,7 +646,7 @@ export class Enemy {
     ctx.closePath();
     ctx.fill();
 
-    ctx.fillStyle = "rgba(255,232,120,1)";
+    ctx.fillStyle = this.kind === "caster" ? "rgba(150,220,255,1)" : "rgba(255,232,120,1)";
     ctx.fillRect(this.x - 4, this.y - 7 + bob, 2, 2);
     ctx.fillRect(this.x + 2, this.y - 7 + bob, 2, 2);
 
@@ -581,122 +663,11 @@ export class Enemy {
     const h = 4;
     const p = clamp(this.hp / Math.max(1, this.maxHp), 0, 1);
 
-    ctx.fillStyle = "rgba(0,0,0,0.65)";
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = "rgba(0,0,0,0.6)";
     ctx.fillRect(this.x - w / 2, this.y - 17, w, h);
-
-    ctx.fillStyle = "rgba(120,255,120,0.95)";
+    ctx.fillStyle = this.elite ? "rgba(255,208,92,0.98)" : "rgba(235,82,108,0.98)";
     ctx.fillRect(this.x - w / 2, this.y - 17, w * p, h);
-
-    ctx.restore();
-  }
-}
-
-/* ===========================
-   LOOT
-=========================== */
-
-export class Loot {
-  constructor(x = 0, y = 0, kind = "gold", opts = {}) {
-    this.x = x;
-    this.y = y;
-
-    this.kind = kind;
-    this.amount = opts.amount ?? 0;
-    this.item = opts.item ?? null;
-
-    this.radius = 8;
-    this.alive = true;
-    this.dead = false;
-    this.bobT = Math.random() * Math.PI * 2;
-    this.age = 0;
-  }
-
-  update(dt, game) {
-    this.age += dt;
-    this.bobT += dt * 2.6;
-
-    const hero = game?.hero;
-    if (!hero) return;
-
-    const d = dist(this.x, this.y, hero.x, hero.y);
-
-    if (d < 96 && d > 0.001) {
-      const n = norm(hero.x - this.x, hero.y - this.y);
-      this.x += n.x * 120 * dt;
-      this.y += n.y * 120 * dt;
-    }
-
-    if (d < this.radius + hero.radius + 4) {
-      this.collect(game);
-    }
-  }
-
-  collect(game) {
-    const hero = game?.hero;
-    if (!hero) return;
-
-    if (this.kind === "gold") {
-      hero.gold = (hero.gold || 0) + Math.max(1, this.amount | 0);
-      game?.ui?.setMsg?.(`Picked up ${Math.max(1, this.amount | 0)} gold`, 1.6);
-    } else if (this.kind === "gear" && this.item) {
-      if (!Array.isArray(hero.inventory)) hero.inventory = [];
-      hero.inventory.push(this.item);
-      game?.ui?.setMsg?.(`Picked up ${this.item.name}`, 1.8);
-    } else if (this.kind === "hp_potion") {
-      hero.potions.hp = (hero.potions.hp || 0) + 1;
-      game?.ui?.setMsg?.("Picked up a health potion", 1.6);
-    } else if (this.kind === "mana_potion") {
-      hero.potions.mana = (hero.potions.mana || 0) + 1;
-      game?.ui?.setMsg?.("Picked up a mana potion", 1.6);
-    }
-
-    this.alive = false;
-    this.dead = true;
-  }
-
-  draw(ctx) {
-    ctx.save();
-
-    const bob = Math.sin(this.bobT) * 2;
-    const px = this.x;
-    const py = this.y + bob;
-
-    ctx.fillStyle = "rgba(0,0,0,0.18)";
-    ctx.beginPath();
-    ctx.ellipse(px, py + 9, 8, 4, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    if (this.kind === "gold") {
-      ctx.fillStyle = "rgba(255,214,84,1)";
-      ctx.beginPath();
-      ctx.arc(px, py, 6, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.strokeStyle = "rgba(255,244,180,0.75)";
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.arc(px, py, 4, 0, Math.PI * 2);
-      ctx.stroke();
-    } else if (this.kind === "gear") {
-      ctx.fillStyle = "rgba(170,220,255,1)";
-      ctx.beginPath();
-      ctx.rect(px - 5, py - 5, 10, 10);
-      ctx.fill();
-
-      ctx.strokeStyle = "rgba(255,255,255,0.7)";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(px - 5, py - 5, 10, 10);
-    } else if (this.kind === "hp_potion") {
-      ctx.fillStyle = "rgba(235,80,110,1)";
-      ctx.beginPath();
-      ctx.arc(px, py, 6, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (this.kind === "mana_potion") {
-      ctx.fillStyle = "rgba(90,150,255,1)";
-      ctx.beginPath();
-      ctx.arc(px, py, 6, 0, Math.PI * 2);
-      ctx.fill();
-    }
 
     ctx.restore();
   }
@@ -707,39 +678,40 @@ export class Loot {
 =========================== */
 
 export class Projectile {
-  // IMPORTANT:
-  // Matches current game.js call pattern:
-  // new Projectile(x, y, vx, vy, dmg, life, level, meta)
-  constructor(x = 0, y = 0, vx = 0, vy = 0, dmg = 10, life = 1, level = 1, meta = {}) {
+  constructor(x, y, vx, vy, dmg, life = 1, level = 1, style = {}) {
     this.x = x;
     this.y = y;
     this.vx = vx;
     this.vy = vy;
 
-    this.dmg = Number.isFinite(dmg) ? dmg : 10;
-    this.life = Number.isFinite(life) ? life : 1;
-    this.level = Number.isFinite(level) ? level : 1;
+    this.dmg = Math.max(1, dmg | 0);
+    this.life = Math.max(0.05, +life || 1);
+    this.level = Math.max(1, level | 0);
 
     this.meta = {
-      crit: 0,
-      critMult: 1.7,
       color: "rgba(145,215,255,0.95)",
       radius: 6,
       type: "bolt",
       hitRadius: 18,
+      crit: 0,
+      critMult: 1.7,
       pierce: false,
-      ...((meta && typeof meta === "object") ? meta : {}),
+      friendly: true,
+      ...((style && typeof style === "object") ? style : {}),
     };
 
-    this.radius = Number.isFinite(this.meta.radius) ? this.meta.radius : 6;
-    this.hitRadius = Number.isFinite(this.meta.hitRadius) ? this.meta.hitRadius : 18;
+    this.radius = Math.max(2, this.meta.radius || 6);
+    this.hitRadius = Math.max(6, this.meta.hitRadius || 18);
     this.friendly = this.meta.friendly !== false;
+
     this.alive = true;
     this.dead = false;
     this.t = 0;
   }
 
   update(dt, world) {
+    if (!this.alive) return;
+
     this.t += dt;
     this.life -= dt;
 
@@ -749,13 +721,11 @@ export class Projectile {
       return;
     }
 
+    if (this.meta?.nova) return;
+
     this.x += this.vx * dt;
     this.y += this.vy * dt;
 
-    // Nova is a stationary effect
-    if (this.meta?.nova) return;
-
-    // Keep spell visuals alive over water and land; only kill if far into rock/blocked land
     if (world?.isSolid?.(this.x, this.y)) {
       this.alive = false;
       this.dead = true;
@@ -809,7 +779,6 @@ export class Projectile {
       return;
     }
 
-    // bolt default
     const ang = Math.atan2(this.vy, this.vx || 0.0001);
     ctx.translate(this.x, this.y);
     ctx.rotate(ang);
@@ -847,6 +816,98 @@ export class Projectile {
 
     ctx.restore();
   }
+}
+
+/* ===========================
+   LOOT
+=========================== */
+
+export class Loot {
+  constructor(x, y, kind = "gold", data = {}) {
+    this.x = x;
+    this.y = y;
+    this.kind = kind;
+    this.data = data || {};
+
+    this.alive = true;
+    this.dead = false;
+    this.age = 0;
+    this.r = 11;
+  }
+
+  update(dt, hero) {
+    if (!this.alive) return;
+
+    this.age += dt;
+
+    const dx = hero.x - this.x;
+    const dy = hero.y - this.y;
+    const d2 = dx * dx + dy * dy;
+
+    if (d2 < 100 * 100 && d2 > 1e-6) {
+      const n = norm(dx, dy);
+      this.x += n.x * 130 * dt;
+      this.y += n.y * 130 * dt;
+    }
+
+    if (d2 < 18 * 18) {
+      this.alive = false;
+      this.dead = true;
+    }
+  }
+
+  draw(ctx) {
+    if (!this.alive) return;
+
+    const bob = Math.sin(this.age * 5) * 2;
+    const x = this.x;
+    const y = this.y + bob;
+    const w = this.r * 2;
+    const h = this.r * 2;
+
+    ctx.save();
+
+    ctx.globalAlpha = 0.20;
+    ctx.fillStyle = "rgba(0,0,0,1)";
+    ctx.beginPath();
+    ctx.ellipse(x, y + 10, 8, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (this.kind === "gold") {
+      ctx.fillStyle = "rgba(255,214,84,0.98)";
+      ctx.beginPath();
+      ctx.arc(x, y, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,244,180,0.8)";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+    } else if (this.kind === "potion") {
+      const potionType = this.data?.potionType || "hp";
+      ctx.fillStyle = potionType === "mana"
+        ? "rgba(90,150,255,0.98)"
+        : "rgba(235,82,108,0.98)";
+      ctx.beginPath();
+      ctx.arc(x, y, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.65)";
+      ctx.fillRect(x - 2, y - 7, 4, 2);
+    } else {
+      ctx.fillStyle = rarityColor(this.data?.gear?.rarity || "common");
+      ctx.fillRect(x - 5, y - 5, 10, 10);
+      ctx.strokeStyle = "rgba(255,255,255,0.70)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x - 5, y - 5, 10, 10);
+    }
+
+    ctx.restore();
+  }
+}
+
+function rarityColor(r) {
+  if (r === "epic") return "rgba(215,150,255,0.98)";
+  if (r === "rare") return "rgba(120,190,255,0.98)";
+  if (r === "uncommon") return "rgba(145,230,145,0.98)";
+  return "rgba(220,220,220,0.96)";
 }
 
 function roundedRectPath(path, x, y, w, h, r) {
