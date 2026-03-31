@@ -1,18 +1,14 @@
 // src/game.js
-// v38 WAYSTONE BLESSING + KILL STREAK BONUS (FULL FILE)
+// v40 DEATH / RESPAWN + LAST CHANCE (FULL FILE)
 // Adds:
-// - map fast travel with awakened waystones
-// - inventory quick-equip on 1-9 / 0 while inventory is open
-// - safe swap: old equipped item returns to bag
-// - SAFE hard reset / new game from Options menu with Delete twice
-// - immediate save on important progression changes
-// - waystones fully heal + refill mana
-// - waystones grant temporary blessing buff
-// - docks grant potion restocks
-// - first-time camp clears grant a reward burst at camp center
-// - even-numbered level ups grant +1 HP potion
-// - kill streak bonus rewards quick chained kills
-// - keeps aim, spells, camps, loot, save/load, and progression systems intact
+// - everything from v39
+// - death / respawn restored
+// - Last Chance passive blocks one lethal hit
+// - respawn at nearest awakened waystone, otherwise spawn
+// - small gold penalty on death
+// - short respawn invulnerability
+// - waystones restore Last Chance
+// - keeps current world / entities / ui compatibility intact
 
 import World from "./world.js";
 import { clamp, lerp, dist2, norm, RNG, hash2 } from "./util.js";
@@ -35,7 +31,7 @@ export default class Game {
 
     this.input = new Input(window);
     this.ui = new UI(canvas);
-    this.save = new Save("broke-knight-save-v38");
+    this.save = new Save("broke-knight-save-v40");
 
     this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
     this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
@@ -87,6 +83,7 @@ export default class Game {
       currentZoneText: "",
       currentZoneId: "",
       zoneMsgCooldown: 0,
+      deathCount: 0,
     };
 
     this._pickupMsgCooldown = 0;
@@ -107,11 +104,25 @@ export default class Game {
 
     this.buffs = {
       waystoneBlessingT: 0,
+      frenzyT: 0,
+      respawnShieldT: 0,
     };
 
     this.streak = {
       count: 0,
       timer: 0,
+    };
+
+    this.arcane = {
+      charge: 0,
+      max: 100,
+      empoweredNext: false,
+    };
+
+    this.survival = {
+      lastChanceReady: true,
+      dead: false,
+      respawnT: 0,
     };
 
     this._tryLoad();
@@ -166,6 +177,7 @@ export default class Game {
         Array.isArray(s.progress.clearedCamps) ? s.progress.clearedCamps : []
       );
       this.progress.eliteKills = Math.max(0, s.progress.eliteKills | 0);
+      this.progress.deathCount = Math.max(0, s.progress.deathCount | 0);
     }
 
     if (s.hero?.lastMove && Number.isFinite(s.hero.lastMove.x) && Number.isFinite(s.hero.lastMove.y)) {
@@ -200,6 +212,7 @@ export default class Game {
         discoveredDocks: Array.from(this.progress.discoveredDocks),
         clearedCamps: Array.from(this.progress.clearedCamps),
         eliteKills: this.progress.eliteKills | 0,
+        deathCount: this.progress.deathCount | 0,
       },
     });
   }
@@ -313,6 +326,7 @@ export default class Game {
     const gear = makeGear(slot, Math.max(1, this.hero.level || 1), rarity, gearSeed);
     this.loot.push(new Loot(cx + 4, cy + 18, "gear", { gear }));
 
+    this._addArcaneCharge(18, true);
     this._shake(0.10, 4.5);
   }
 
@@ -328,6 +342,8 @@ export default class Game {
 
   _tickBuffs(dt) {
     this.buffs.waystoneBlessingT = Math.max(0, this.buffs.waystoneBlessingT - dt);
+    this.buffs.frenzyT = Math.max(0, this.buffs.frenzyT - dt);
+    this.buffs.respawnShieldT = Math.max(0, this.buffs.respawnShieldT - dt);
   }
 
   _tickStreak(dt) {
@@ -339,9 +355,42 @@ export default class Game {
     }
   }
 
+  _tickDeathState(dt) {
+    if (!this.survival.dead) return;
+    this.survival.respawnT = Math.max(0, this.survival.respawnT - dt);
+    if (this.survival.respawnT <= 0) {
+      this._respawnHero();
+    }
+  }
+
   _grantWaystoneBlessing() {
     this.buffs.waystoneBlessingT = 45;
-    this._msg("Waystone blessing gained! Damage and mana regen increased.", 2.8);
+    this.arcane.charge = this.arcane.max;
+    this.arcane.empoweredNext = true;
+    this.survival.lastChanceReady = true;
+    this._msg("Waystone blessing gained! Surge charged.", 2.8);
+  }
+
+  _grantFrenzy() {
+    this.buffs.frenzyT = 8;
+    this._msg("Frenzy! Faster movement, cooldowns, and stronger spells.", 2.0);
+  }
+
+  _addArcaneCharge(n, silent = false) {
+    const before = this.arcane.charge | 0;
+    this.arcane.charge = clamp(before + (n | 0), 0, this.arcane.max);
+
+    if (this.arcane.charge >= this.arcane.max && before < this.arcane.max) {
+      this.arcane.empoweredNext = true;
+      if (!silent) this._msg("Arcane Surge ready! Your next spell is empowered.", 2.0);
+    }
+  }
+
+  _consumeArcaneSurge() {
+    if (!this.arcane.empoweredNext) return false;
+    this.arcane.empoweredNext = false;
+    this.arcane.charge = 0;
+    return true;
   }
 
   _getCombatStats() {
@@ -353,12 +402,22 @@ export default class Game {
       out.blessed = true;
     }
 
+    if (this.buffs.frenzyT > 0) {
+      out.dmg = Math.round(out.dmg * 1.10);
+      out.crit = Math.min(0.75, (out.crit || 0) + 0.05);
+      out.frenzy = true;
+    }
+
     return out;
   }
 
   _awardKillStreak(enemy) {
     this.streak.count = (this.streak.count | 0) + 1;
     this.streak.timer = 4.0;
+
+    if (this.streak.count === 5) {
+      this._grantFrenzy();
+    }
 
     if (this.streak.count >= 3) {
       const bonusGold = Math.min(12, this.streak.count + (enemy?.elite ? 3 : 0));
@@ -369,6 +428,106 @@ export default class Game {
       this._msg(`Kill streak x${this.streak.count}! +${bonusGold} Gold, +${bonusXP} XP`, 2.0);
       this._saveSoon();
     }
+  }
+
+  _grantOnKillSustain(enemy) {
+    const st = this.hero.getStats?.() || { maxHp: this.hero.maxHp || 100, maxMana: this.hero.maxMana || 60 };
+    const heal = enemy?.elite ? 6 : 3;
+    const mana = enemy?.elite ? 8 : 4;
+
+    this.hero.hp = Math.min(st.maxHp, this.hero.hp + heal);
+    this.hero.mana = Math.min(st.maxMana, this.hero.mana + mana);
+  }
+
+  _forceHeroDamage(n) {
+    this.hero.hp -= Math.max(1, n | 0);
+  }
+
+  _handleLethalHit() {
+    if (this.survival.dead) return;
+
+    if (this.survival.lastChanceReady) {
+      this.survival.lastChanceReady = false;
+      this.hero.hp = 1;
+      this.hero.mana = Math.min(this.hero.getStats?.().maxMana || this.hero.maxMana || 60, this.hero.mana + 12);
+      this.buffs.respawnShieldT = 1.5;
+      this.streak.count = 0;
+      this.streak.timer = 0;
+      this._msg("LAST CHANCE! You cling to life.", 2.0);
+      this._shake(0.18, 5.2);
+      return;
+    }
+
+    this._beginDeath();
+  }
+
+  _beginDeath() {
+    if (this.survival.dead) return;
+
+    this.survival.dead = true;
+    this.survival.respawnT = 1.2;
+    this.progress.deathCount += 1;
+
+    const lostGold = Math.min(this.hero.gold | 0, Math.max(5, Math.floor((this.hero.gold || 0) * 0.12)));
+    this.hero.gold = Math.max(0, (this.hero.gold | 0) - lostGold);
+
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+    this.hero.state.dashT = 0;
+    this.hero.state.sailing = false;
+
+    this.streak.count = 0;
+    this.streak.timer = 0;
+    this.buffs.frenzyT = 0;
+
+    this._msg(`You died. Lost ${lostGold} Gold.`, 2.2);
+    this._shake(0.25, 7);
+    this._saveSoon();
+  }
+
+  _getRespawnPoint() {
+    const ways = this._getDiscoveredWaystones();
+    if (ways.length) {
+      let best = ways[0];
+      let bestD = dist2(this.hero.x, this.hero.y, best.x, best.y);
+      for (let i = 1; i < ways.length; i++) {
+        const w = ways[i];
+        const d = dist2(this.hero.x, this.hero.y, w.x, w.y);
+        if (d < bestD) {
+          bestD = d;
+          best = w;
+        }
+      }
+      return { x: best.x, y: best.y + 42 };
+    }
+
+    return {
+      x: this.world.spawn?.x ?? 0,
+      y: this.world.spawn?.y ?? 0,
+    };
+  }
+
+  _respawnHero() {
+    const p = this._getRespawnPoint();
+    const st = this.hero.getStats?.() || { maxHp: this.hero.maxHp || 100, maxMana: this.hero.maxMana || 60 };
+
+    this.hero.x = p.x;
+    this.hero.y = p.y;
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+    this.hero.state.dashT = 0;
+    this.hero.state.sailing = false;
+
+    this.hero.hp = Math.max(20, Math.round((st.maxHp || 100) * 0.6));
+    this.hero.mana = Math.max(15, Math.round((st.maxMana || 60) * 0.6));
+
+    this.survival.dead = false;
+    this.survival.respawnT = 0;
+    this.buffs.respawnShieldT = 2.5;
+
+    this._msg("You respawned.", 1.8);
+    this._shake(0.12, 4.5);
+    this._saveSoon();
   }
 
   _coolMsg(text, t = 1.6) {
@@ -488,16 +647,16 @@ export default class Game {
     if (this.hero.mana >= st.maxMana) return;
 
     let base = this.hero.state?.sailing ? 3.0 : 4.5;
-    if (this.buffs.waystoneBlessingT > 0) {
-      base += 2.0;
-    }
+    if (this.buffs.waystoneBlessingT > 0) base += 2.0;
+    if (this.buffs.frenzyT > 0) base += 1.5;
 
     this.hero.mana = Math.min(st.maxMana, this.hero.mana + base * dt);
   }
 
   _tickSpellCooldowns(dt) {
+    const mult = this.buffs.frenzyT > 0 ? 1.35 : 1;
     for (const k of Object.keys(this.spellCd)) {
-      this.spellCd[k] = Math.max(0, this.spellCd[k] - dt);
+      this.spellCd[k] = Math.max(0, this.spellCd[k] - dt * mult);
     }
   }
 
@@ -517,7 +676,7 @@ export default class Game {
       this._spellMsg(`${def.name} cooling down`, 0.8);
       return false;
     }
-    if ((this.hero.mana || 0) < def.mana) {
+    if (!this.arcane.empoweredNext && (this.hero.mana || 0) < def.mana) {
       this._spellMsg("Not enough mana", 0.9);
       return false;
     }
@@ -526,8 +685,21 @@ export default class Game {
 
   _startSpell(key) {
     const def = this.spells[key];
-    this.hero.mana -= def.mana;
-    this.spellCd[key] = def.cd;
+    const empowered = this._consumeArcaneSurge();
+
+    if (!empowered) {
+      this.hero.mana -= def.mana;
+    } else {
+      this._msg(`${def.name} overcharged!`, 1.1);
+      this._shake(0.08, 3.6);
+    }
+
+    let cd = def.cd;
+    if (empowered) cd *= 0.65;
+    if (this.buffs.frenzyT > 0) cd *= 0.82;
+    this.spellCd[key] = cd;
+
+    return empowered;
   }
 
   _liveArrowAim() {
@@ -577,6 +749,8 @@ export default class Game {
     this.hero.giveXP?.(baseXP);
     this._questAddProgress("q_kill_5", 1);
     this._awardKillStreak(enemy);
+    this._grantOnKillSustain(enemy);
+    this._addArcaneCharge(enemy?.elite ? 24 : 12, true);
 
     if (enemy.elite) {
       this.progress.eliteKills += 1;
@@ -609,6 +783,7 @@ export default class Game {
       q.done = true;
       this.hero.giveXP?.(q.xp || 0);
       this.hero.gold += q.gold || 0;
+      this._addArcaneCharge(10, true);
       this._msg(`Quest complete: ${q.name} (+${q.xp} XP, +${q.gold} Gold)`, 3.2);
       this._saveSoon();
     }
@@ -841,7 +1016,9 @@ export default class Game {
       this.aim = { x: n.x, y: n.y };
       this.hero.lastMove = { x: n.x, y: n.y };
 
-      const speed = this.hero.state?.sailing ? 190 : 150;
+      let speed = this.hero.state?.sailing ? 190 : 150;
+      if (this.buffs.frenzyT > 0) speed *= 1.18;
+
       this.hero.vx = n.x * speed;
       this.hero.vy = n.y * speed;
 
@@ -987,7 +1164,7 @@ export default class Game {
 
   _castBolt(dx, dy) {
     if (!this._canCastSpell("q")) return;
-    this._startSpell("q");
+    const empowered = this._startSpell("q");
 
     const st = this._getCombatStats();
     const shots = [{ dx, dy }];
@@ -998,29 +1175,36 @@ export default class Game {
       shots.push({ dx: dx + dy * spread, dy: dy - dx * spread });
     }
 
+    if (empowered) {
+      const spread = 0.28;
+      shots.push({ dx: dx - dy * spread, dy: dy + dx * spread });
+      shots.push({ dx: dx + dy * spread, dy: dy - dx * spread });
+    }
+
     for (const s of shots) {
       const n = norm(s.dx, s.dy);
       const p = new Projectile(
         this.hero.x + n.x * 12,
         this.hero.y + n.y * 12 - 6,
-        n.x * 520,
-        n.y * 520,
-        Math.round(st.dmg * 0.85),
-        1.15,
+        n.x * (empowered ? 620 : 520),
+        n.y * (empowered ? 620 : 520),
+        Math.round(st.dmg * (empowered ? 1.18 : 0.85)),
+        empowered ? 1.45 : 1.15,
         this.hero.level || 1,
-        { color: "rgba(145,215,255,0.95)", radius: 6, type: "bolt", hitRadius: 18 }
+        { color: "rgba(145,215,255,0.95)", radius: empowered ? 7 : 6, type: "bolt", hitRadius: empowered ? 22 : 18 }
       );
       p.meta.crit = st.crit;
       p.meta.critMult = st.critMult;
+      if (empowered) p.meta.pierce = true;
       this.projectiles.push(p);
     }
 
-    this._shake(0.05, 2);
+    this._shake(0.05, empowered ? 3 : 2);
   }
 
   _castNova() {
     if (!this._canCastSpell("w")) return;
-    this._startSpell("w");
+    const empowered = this._startSpell("w");
 
     const st = this._getCombatStats();
     const p = new Projectile(
@@ -1028,41 +1212,42 @@ export default class Game {
       this.hero.y - 6,
       0,
       0,
-      Math.round(st.dmg * 0.65),
-      0.55,
+      Math.round(st.dmg * (empowered ? 0.95 : 0.65)),
+      empowered ? 0.85 : 0.55,
       this.hero.level || 1,
-      { color: "rgba(200,240,255,0.95)", radius: 10, type: "nova", hitRadius: 120 }
+      { color: "rgba(200,240,255,0.95)", radius: empowered ? 12 : 10, type: "nova", hitRadius: empowered ? 148 : 120 }
     );
     p.meta.nova = true;
     this.projectiles.push(p);
 
-    const radius = 92;
+    const radius = empowered ? 118 : 92;
     for (const e of this.enemies) {
       if (!e.alive) continue;
       if (!this._withinRadius(e.x, e.y, this.perf.enemyUpdateRadius)) continue;
       if (dist2(this.hero.x, this.hero.y, e.x, e.y) <= radius * radius) {
-        const dmg = Math.round(st.dmg * 0.55);
+        const dmg = Math.round(st.dmg * (empowered ? 0.92 : 0.55));
         e.takeDamage?.(dmg);
 
         const n = norm(e.x - this.hero.x, e.y - this.hero.y);
-        e.x += n.x * 14;
-        e.y += n.y * 14;
+        const shove = empowered ? 24 : 14;
+        e.x += n.x * shove;
+        e.y += n.y * shove;
 
         if (!e.alive) this._onEnemyDefeated(e);
       }
     }
 
-    this._shake(0.10, 3.2);
+    this._shake(0.10, empowered ? 4.4 : 3.2);
   }
 
   _castDash(dx, dy) {
     if (!this._canCastSpell("e")) return;
-    this._startSpell("e");
+    const empowered = this._startSpell("e");
 
     if (this.hero.state.dashT > 0) return;
-    this.hero.state.dashT = 0.35;
+    this.hero.state.dashT = empowered ? 0.48 : 0.35;
 
-    const dist = 138;
+    const dist = empowered ? 188 : 138;
     const nx = this.hero.x + dx * dist;
     const ny = this.hero.y + dy * dist;
 
@@ -1072,7 +1257,7 @@ export default class Game {
     } else {
       let x = this.hero.x;
       let y = this.hero.y;
-      const steps = 12;
+      const steps = empowered ? 16 : 12;
       for (let i = 0; i < steps; i++) {
         const t = (i + 1) / steps;
         const px = lerp(this.hero.x, nx, t);
@@ -1089,21 +1274,21 @@ export default class Game {
     }
 
     const st = this._getCombatStats();
-    const burstR = 56;
+    const burstR = empowered ? 82 : 56;
     for (const e of this.enemies) {
       if (!e.alive) continue;
       if (dist2(this.hero.x, this.hero.y, e.x, e.y) <= burstR * burstR) {
-        e.takeDamage?.(Math.round(st.dmg * 0.7));
+        e.takeDamage?.(Math.round(st.dmg * (empowered ? 1.0 : 0.7)));
         if (!e.alive) this._onEnemyDefeated(e);
       }
     }
 
-    this._shake(0.08, 2.8);
+    this._shake(0.08, empowered ? 4.2 : 2.8);
   }
 
   _castOrb(dx, dy) {
     if (!this._canCastSpell("r")) return;
-    this._startSpell("r");
+    const empowered = this._startSpell("r");
 
     const st = this._getCombatStats();
     const shots = [{ dx, dy }];
@@ -1114,23 +1299,31 @@ export default class Game {
       shots.push({ dx: dx + dy * spread, dy: dy - dx * spread });
     }
 
+    if (empowered) {
+      const spread = 0.40;
+      shots.push({ dx: dx - dy * spread, dy: dy + dx * spread });
+      shots.push({ dx: dx + dy * spread, dy: dy - dx * spread });
+    }
+
     for (const s of shots) {
       const n = norm(s.dx, s.dy);
       const p = new Projectile(
         this.hero.x + n.x * 12,
         this.hero.y + n.y * 12 - 6,
-        n.x * 320,
-        n.y * 320,
-        Math.round(st.dmg * 1.05),
-        1.55,
+        n.x * (empowered ? 380 : 320),
+        n.y * (empowered ? 380 : 320),
+        Math.round(st.dmg * (empowered ? 1.35 : 1.05)),
+        empowered ? 1.95 : 1.55,
         this.hero.level || 1,
-        { color: "rgba(190,160,255,0.95)", radius: 8, type: "orb", hitRadius: 22, pierce: true }
+        { color: "rgba(190,160,255,0.95)", radius: empowered ? 10 : 8, type: "orb", hitRadius: empowered ? 28 : 22, pierce: true }
       );
       p.meta.pierce = true;
+      p.meta.crit = st.crit;
+      p.meta.critMult = st.critMult;
       this.projectiles.push(p);
     }
 
-    this._shake(0.06, 2.3);
+    this._shake(0.06, empowered ? 3.8 : 2.3);
   }
 
   _updateProjectiles(dt) {
@@ -1144,13 +1337,23 @@ export default class Game {
       if (!p.alive) continue;
 
       if (p.meta?.onHitHero || p.friendly === false) {
+        if (this.buffs.respawnShieldT > 0) {
+          p.alive = false;
+          continue;
+        }
+
         if (dist2(p.x, p.y, this.hero.x, this.hero.y) < (p.hitRadius || 18) ** 2) {
-          const dealt = this.hero.takeDamage?.(p.dmg) || p.dmg;
-          this._msg(`-${dealt} HP`, 1.1);
+          this._forceHeroDamage(p.dmg);
           p.alive = false;
           this._shake(0.08, 3);
           this.streak.count = 0;
           this.streak.timer = 0;
+
+          if ((this.hero.hp || 0) <= 0) {
+            this._handleLethalHit();
+          } else {
+            this._msg(`-${p.dmg} HP`, 1.1);
+          }
         }
         continue;
       }
@@ -1170,7 +1373,8 @@ export default class Game {
           if (Math.random() < crit) dmg = Math.round(dmg * critMult);
 
           e.takeDamage?.(dmg);
-          p._hitSet?.add?.(id);
+          if (!p._hitSet) p._hitSet = new Set();
+          p._hitSet.add(id);
           this._shake(0.04, 1.8);
 
           if (!p.meta?.pierce) p.alive = false;
@@ -1285,6 +1489,7 @@ export default class Game {
     this._tickResetConfirm(dt);
     this._tickBuffs(dt);
     this._tickStreak(dt);
+    this._tickDeathState(dt);
 
     this._handleMenus();
     this._handleFastTravelInput();
@@ -1292,6 +1497,32 @@ export default class Game {
     this._handleResetHotkey();
 
     this.world?.update?.(dt, this.hero);
+
+    if (this.survival.dead) {
+      this.hero.vx = 0;
+      this.hero.vy = 0;
+      this._updateCamera(dt);
+      this.ui?.update?.(dt, this);
+
+      this.perf.cleanupTimer += dt;
+      if (this.perf.cleanupTimer >= this.perf.cleanupEvery) {
+        this.perf.cleanupTimer = 0;
+        this._cleanupFarEntities();
+      }
+
+      this.enemies = this.enemies.filter(e => e.alive);
+      this.projectiles = this.projectiles.filter(p => p.alive);
+      this.loot = this.loot.filter(l => l.alive);
+
+      this.input.endFrame();
+
+      this._autosaveT += dt;
+      if (this._autosaveT >= 5) {
+        this._autosaveT = 0;
+        this._save();
+      }
+      return;
+    }
 
     const blockMove =
       this.menu.open === "inventory" ||
@@ -1323,6 +1554,10 @@ export default class Game {
     }
 
     this._updateProjectiles(dt);
+
+    if (this.buffs.respawnShieldT <= 0 && (this.hero.hp || 0) <= 0) {
+      this._handleLethalHit();
+    }
 
     const lootR = this.perf.lootUpdateRadius;
     for (const l of this.loot) {
@@ -1395,7 +1630,7 @@ export default class Game {
 
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = "rgb(18,22,30)";
+    ctx.fillStyle = this.survival.dead ? "rgb(10,4,6)" : "rgb(18,22,30)";
     ctx.fillRect(0, 0, this.w, this.h);
     ctx.restore();
 
@@ -1437,6 +1672,20 @@ export default class Game {
     }
 
     ctx.restore();
+
+    if (this.survival.dead) {
+      ctx.save();
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
+      ctx.fillRect(0, 0, this.w, this.h);
+      ctx.fillStyle = "rgba(255,210,210,0.96)";
+      ctx.font = "bold 28px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("YOU DIED", this.w * 0.5, this.h * 0.5 - 10);
+      ctx.font = "16px Arial";
+      ctx.fillStyle = "rgba(255,235,235,0.92)";
+      ctx.fillText(`Respawning in ${this.survival.respawnT.toFixed(1)}s`, this.w * 0.5, this.h * 0.5 + 22);
+      ctx.restore();
+    }
 
     this.ui?.draw?.(ctx, this);
   }
