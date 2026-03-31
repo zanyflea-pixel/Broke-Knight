@@ -1,11 +1,17 @@
 // src/game.js
-// v37 REWARDING EXPLORATION + SAFE PROGRESSION PASS (FULL FILE)
+// v38 WAYSTONE BLESSING + KILL STREAK BONUS (FULL FILE)
 // Adds:
+// - map fast travel with awakened waystones
+// - inventory quick-equip on 1-9 / 0 while inventory is open
+// - safe swap: old equipped item returns to bag
+// - SAFE hard reset / new game from Options menu with Delete twice
 // - immediate save on important progression changes
-// - waystones fully restore HP + mana
-// - docks grant supply restocks
-// - first-time camp clears create a reward burst
+// - waystones fully heal + refill mana
+// - waystones grant temporary blessing buff
+// - docks grant potion restocks
+// - first-time camp clears grant a reward burst at camp center
 // - even-numbered level ups grant +1 HP potion
+// - kill streak bonus rewards quick chained kills
 // - keeps aim, spells, camps, loot, save/load, and progression systems intact
 
 import World from "./world.js";
@@ -29,7 +35,7 @@ export default class Game {
 
     this.input = new Input(window);
     this.ui = new UI(canvas);
-    this.save = new Save("broke-knight-save-v37");
+    this.save = new Save("broke-knight-save-v38");
 
     this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
     this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
@@ -98,6 +104,15 @@ export default class Game {
       r: { name: "Orb", mana: 18, cd: 2.4 },
     };
     this.spellCd = { q: 0, w: 0, e: 0, r: 0 };
+
+    this.buffs = {
+      waystoneBlessingT: 0,
+    };
+
+    this.streak = {
+      count: 0,
+      timer: 0,
+    };
 
     this._tryLoad();
     this._primeCamps();
@@ -311,6 +326,51 @@ export default class Game {
     return false;
   }
 
+  _tickBuffs(dt) {
+    this.buffs.waystoneBlessingT = Math.max(0, this.buffs.waystoneBlessingT - dt);
+  }
+
+  _tickStreak(dt) {
+    if (this.streak.timer > 0) {
+      this.streak.timer = Math.max(0, this.streak.timer - dt);
+      if (this.streak.timer <= 0) {
+        this.streak.count = 0;
+      }
+    }
+  }
+
+  _grantWaystoneBlessing() {
+    this.buffs.waystoneBlessingT = 45;
+    this._msg("Waystone blessing gained! Damage and mana regen increased.", 2.8);
+  }
+
+  _getCombatStats() {
+    const st = this.hero.getStats?.() || { dmg: 8, crit: 0.05, critMult: 1.7, maxMana: 60 };
+    const out = { ...st };
+
+    if (this.buffs.waystoneBlessingT > 0) {
+      out.dmg = Math.round(out.dmg * 1.15);
+      out.blessed = true;
+    }
+
+    return out;
+  }
+
+  _awardKillStreak(enemy) {
+    this.streak.count = (this.streak.count | 0) + 1;
+    this.streak.timer = 4.0;
+
+    if (this.streak.count >= 3) {
+      const bonusGold = Math.min(12, this.streak.count + (enemy?.elite ? 3 : 0));
+      const bonusXP = Math.min(10, Math.floor(this.streak.count / 2) + (enemy?.elite ? 2 : 0));
+
+      this._grantGold(bonusGold);
+      this._grantXP(bonusXP);
+      this._msg(`Kill streak x${this.streak.count}! +${bonusGold} Gold, +${bonusXP} XP`, 2.0);
+      this._saveSoon();
+    }
+  }
+
   _coolMsg(text, t = 1.6) {
     if (this._pickupMsgCooldown > 0) return;
     this._pickupMsgCooldown = 0.45;
@@ -427,7 +487,11 @@ export default class Game {
     const st = this.hero.getStats?.() || { maxMana: 60 };
     if (this.hero.mana >= st.maxMana) return;
 
-    const base = this.hero.state?.sailing ? 3.0 : 4.5;
+    let base = this.hero.state?.sailing ? 3.0 : 4.5;
+    if (this.buffs.waystoneBlessingT > 0) {
+      base += 2.0;
+    }
+
     this.hero.mana = Math.min(st.maxMana, this.hero.mana + base * dt);
   }
 
@@ -512,6 +576,7 @@ export default class Game {
     const baseXP = enemy.xpValue?.() || 6;
     this.hero.giveXP?.(baseXP);
     this._questAddProgress("q_kill_5", 1);
+    this._awardKillStreak(enemy);
 
     if (enemy.elite) {
       this.progress.eliteKills += 1;
@@ -719,9 +784,7 @@ export default class Game {
 
     try {
       this.save?.clear?.();
-    } catch (_) {
-      // ignore clear failures; still try reloading
-    }
+    } catch (_) {}
 
     setTimeout(() => {
       if (typeof window !== "undefined" && window.location) {
@@ -847,13 +910,14 @@ export default class Game {
         this.progress.discoveredWaystones.add(w.id);
 
         this._fullRestoreHero();
+        this._grantWaystoneBlessing();
 
         if (first) {
           this._grantXP(20);
           this._grantGold(15);
-          this._msg("Waystone awakened! Full restore. (+20 XP, +15 Gold)", 3);
+          this._msg("Waystone awakened! Full restore. Blessing gained. (+20 XP, +15 Gold)", 3);
         } else {
-          this._msg("Waystone restored your strength.", 2.2);
+          this._msg("Waystone restored and blessed you.", 2.4);
         }
 
         this._questAddProgress("q_find_way", 1);
@@ -925,7 +989,7 @@ export default class Game {
     if (!this._canCastSpell("q")) return;
     this._startSpell("q");
 
-    const st = this.hero.getStats?.() || { dmg: 8, crit: 0.05, critMult: 1.7 };
+    const st = this._getCombatStats();
     const shots = [{ dx, dy }];
 
     if ((this.hero.level || 1) >= 5) {
@@ -958,7 +1022,7 @@ export default class Game {
     if (!this._canCastSpell("w")) return;
     this._startSpell("w");
 
-    const st = this.hero.getStats?.() || { dmg: 8 };
+    const st = this._getCombatStats();
     const p = new Projectile(
       this.hero.x,
       this.hero.y - 6,
@@ -1024,7 +1088,7 @@ export default class Game {
       this.hero.y = y;
     }
 
-    const st = this.hero.getStats?.() || { dmg: 8 };
+    const st = this._getCombatStats();
     const burstR = 56;
     for (const e of this.enemies) {
       if (!e.alive) continue;
@@ -1041,7 +1105,7 @@ export default class Game {
     if (!this._canCastSpell("r")) return;
     this._startSpell("r");
 
-    const st = this.hero.getStats?.() || { dmg: 8 };
+    const st = this._getCombatStats();
     const shots = [{ dx, dy }];
 
     if ((this.hero.level || 1) >= 7) {
@@ -1085,6 +1149,8 @@ export default class Game {
           this._msg(`-${dealt} HP`, 1.1);
           p.alive = false;
           this._shake(0.08, 3);
+          this.streak.count = 0;
+          this.streak.timer = 0;
         }
         continue;
       }
@@ -1217,6 +1283,8 @@ export default class Game {
 
     this._tickSpellCooldowns(dt);
     this._tickResetConfirm(dt);
+    this._tickBuffs(dt);
+    this._tickStreak(dt);
 
     this._handleMenus();
     this._handleFastTravelInput();

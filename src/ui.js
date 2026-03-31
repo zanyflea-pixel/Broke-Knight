@@ -1,5 +1,5 @@
 // src/ui.js
-// v47 UI RESET HINT + CONTROL POLISH (FULL FILE)
+// v48 BUFF + STREAK HUD PASS (FULL FILE)
 // Safe UI-only upgrade:
 // - clearer interaction prompt
 // - stronger pinned quest box
@@ -8,6 +8,7 @@
 // - map markers + fast travel legend
 // - inventory hotkey reminder
 // - options menu shows Delete reset / new game hint
+// - NEW: blessing timer + kill streak HUD
 // - keeps the current panel/menu structure intact
 
 import { clamp } from "./util.js";
@@ -64,6 +65,7 @@ export default class UI {
     this._drawPinnedQuest(ctx, game);
     this._drawProgressStrip(ctx, game);
     this._drawSpellBar(ctx, game);
+    this._drawStatusPanel(ctx, game);
     this._drawMinimap(ctx, game);
     this._drawQuickHelp(ctx);
     this._drawInteractPrompt(ctx, game);
@@ -311,6 +313,64 @@ export default class UI {
       ctx.textAlign = "right";
       ctx.fillStyle = ready ? "rgba(145,235,165,0.96)" : "rgba(255,208,160,0.96)";
       ctx.fillText(ready ? "READY" : `${cd.toFixed(1)}s`, x + cardW - 10, y + 33);
+      ctx.textAlign = "left";
+    }
+
+    ctx.restore();
+  }
+
+  _drawStatusPanel(ctx, game) {
+    const blessT = Math.max(0, game?.buffs?.waystoneBlessingT || 0);
+    const streakCount = Math.max(0, game?.streak?.count || 0);
+    const streakT = Math.max(0, game?.streak?.timer || 0);
+
+    if (blessT <= 0 && streakCount < 2) return;
+
+    const x = this.w - 222;
+    const y = 186;
+    const w = 208;
+    let h = 18;
+    if (blessT > 0) h += 28;
+    if (streakCount >= 2) h += 28;
+
+    ctx.save();
+
+    ctx.globalAlpha = 0.90;
+    ctx.fillStyle = "rgba(10,12,18,0.70)";
+    roundRect(ctx, x, y, w, h, 14);
+    ctx.fill();
+
+    ctx.globalAlpha = 0.12;
+    ctx.fillStyle = "rgba(255,255,255,1)";
+    roundRect(ctx, x, y, w, 18, 14);
+    ctx.fill();
+
+    ctx.globalAlpha = 0.98;
+    ctx.fillStyle = "rgba(255,255,255,0.94)";
+    ctx.font = "bold 12px system-ui, Arial";
+    ctx.fillText("ACTIVE STATUS", x + 12, y + 13);
+
+    let yy = y + 34;
+    ctx.font = "12px system-ui, Arial";
+
+    if (blessT > 0) {
+      ctx.fillStyle = "rgba(255,226,140,0.98)";
+      ctx.fillText(`Waystone Blessing`, x + 12, yy);
+
+      ctx.textAlign = "right";
+      ctx.fillStyle = "rgba(255,245,188,0.96)";
+      ctx.fillText(`${blessT.toFixed(0)}s`, x + w - 12, yy);
+      ctx.textAlign = "left";
+      yy += 22;
+    }
+
+    if (streakCount >= 2) {
+      ctx.fillStyle = "rgba(255,140,140,0.98)";
+      ctx.fillText(`Kill Streak x${streakCount}`, x + 12, yy);
+
+      ctx.textAlign = "right";
+      ctx.fillStyle = "rgba(255,210,210,0.96)";
+      ctx.fillText(`${streakT.toFixed(1)}s`, x + w - 12, yy);
       ctx.textAlign = "left";
     }
 
@@ -793,10 +853,10 @@ export default class UI {
 
     ctx.font = "13px system-ui, Arial";
     ctx.fillStyle = "rgba(230,230,235,0.92)";
-    ctx.fillText("Arrow Keys   - Move / Aim", x, y); y += 22;
-    ctx.fillText("F            - Interact", x, y); y += 22;
+    ctx.fillText("Arrow Keys    - Move / Aim", x, y); y += 22;
+    ctx.fillText("F             - Interact", x, y); y += 22;
     ctx.fillText("Q / W / E / R - Cast spells", x, y); y += 22;
-    ctx.fillText("1 / 2        - Use potions", x, y); y += 22;
+    ctx.fillText("1 / 2         - Use potions", x, y); y += 22;
     ctx.fillText("I / J / M / O - Open menus", x, y); y += 22;
 
     y += 10;
