@@ -1,15 +1,5 @@
 // src/ui.js
-// v48 BUFF + STREAK HUD PASS (FULL FILE)
-// Safe UI-only upgrade:
-// - clearer interaction prompt
-// - stronger pinned quest box
-// - better message styling
-// - cleaner spell bar emphasis
-// - map markers + fast travel legend
-// - inventory hotkey reminder
-// - options menu shows Delete reset / new game hint
-// - NEW: blessing timer + kill streak HUD
-// - keeps the current panel/menu structure intact
+// v50 CENTERED MINIMAP + FOLLOWING MAP PANEL (FULL FILE)
 
 import { clamp } from "./util.js";
 
@@ -52,7 +42,7 @@ export default class UI {
     }
 
     this._miniT += dt;
-    if (this._miniT >= 0.35) {
+    if (this._miniT >= 0.18) {
       this._miniT = 0;
       this._mini = game?.world?.getMinimapCanvas?.() || null;
     }
@@ -65,7 +55,6 @@ export default class UI {
     this._drawPinnedQuest(ctx, game);
     this._drawProgressStrip(ctx, game);
     this._drawSpellBar(ctx, game);
-    this._drawStatusPanel(ctx, game);
     this._drawMinimap(ctx, game);
     this._drawQuickHelp(ctx);
     this._drawInteractPrompt(ctx, game);
@@ -149,6 +138,14 @@ export default class UI {
     ctx.fillText(`DMG ${Math.round(st.dmg || 0)}`, bx + 120, by + 92);
     ctx.fillText(`ARM ${Math.round(st.armor || 0)}`, bx + 190, by + 92);
     ctx.fillText(`CRIT ${critPct}%`, bx + 255, by + 92);
+
+    if (game?.dungeon?.active) {
+      ctx.fillStyle = "rgba(188,158,255,0.96)";
+      ctx.fillText(`Dungeon Floor ${game.dungeon.floor || 1}`, bx, by + 114);
+    } else if ((game?.progress?.dungeonBest || 0) > 0) {
+      ctx.fillStyle = "rgba(188,158,255,0.90)";
+      ctx.fillText(`Best Depth ${game.progress.dungeonBest}`, bx, by + 114);
+    }
 
     ctx.restore();
   }
@@ -319,67 +316,10 @@ export default class UI {
     ctx.restore();
   }
 
-  _drawStatusPanel(ctx, game) {
-    const blessT = Math.max(0, game?.buffs?.waystoneBlessingT || 0);
-    const streakCount = Math.max(0, game?.streak?.count || 0);
-    const streakT = Math.max(0, game?.streak?.timer || 0);
-
-    if (blessT <= 0 && streakCount < 2) return;
-
-    const x = this.w - 222;
-    const y = 186;
-    const w = 208;
-    let h = 18;
-    if (blessT > 0) h += 28;
-    if (streakCount >= 2) h += 28;
-
-    ctx.save();
-
-    ctx.globalAlpha = 0.90;
-    ctx.fillStyle = "rgba(10,12,18,0.70)";
-    roundRect(ctx, x, y, w, h, 14);
-    ctx.fill();
-
-    ctx.globalAlpha = 0.12;
-    ctx.fillStyle = "rgba(255,255,255,1)";
-    roundRect(ctx, x, y, w, 18, 14);
-    ctx.fill();
-
-    ctx.globalAlpha = 0.98;
-    ctx.fillStyle = "rgba(255,255,255,0.94)";
-    ctx.font = "bold 12px system-ui, Arial";
-    ctx.fillText("ACTIVE STATUS", x + 12, y + 13);
-
-    let yy = y + 34;
-    ctx.font = "12px system-ui, Arial";
-
-    if (blessT > 0) {
-      ctx.fillStyle = "rgba(255,226,140,0.98)";
-      ctx.fillText(`Waystone Blessing`, x + 12, yy);
-
-      ctx.textAlign = "right";
-      ctx.fillStyle = "rgba(255,245,188,0.96)";
-      ctx.fillText(`${blessT.toFixed(0)}s`, x + w - 12, yy);
-      ctx.textAlign = "left";
-      yy += 22;
-    }
-
-    if (streakCount >= 2) {
-      ctx.fillStyle = "rgba(255,140,140,0.98)";
-      ctx.fillText(`Kill Streak x${streakCount}`, x + 12, yy);
-
-      ctx.textAlign = "right";
-      ctx.fillStyle = "rgba(255,210,210,0.96)";
-      ctx.fillText(`${streakT.toFixed(1)}s`, x + w - 12, yy);
-      ctx.textAlign = "left";
-    }
-
-    ctx.restore();
-  }
-
   _drawMinimap(ctx, game) {
-    const mini = this._mini || game?.world?.getMinimapCanvas?.();
-    if (!mini) return;
+    const world = game?.world;
+    const mini = this._mini || world?.getMinimapCanvas?.();
+    if (!mini || !world) return;
 
     const size = 154;
     const x = this.w - size - 16;
@@ -392,27 +332,57 @@ export default class UI {
     roundRect(ctx, x - 8, y - 8, size + 16, size + 16, 16);
     ctx.fill();
 
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(mini, x, y, size, size);
-    ctx.imageSmoothingEnabled = true;
+    // Keep player centered while minimap terrain moves under them.
+    const span = getMapSpan(world, world.mapMode || "small");
+    const half = span * 0.5;
 
-    const span = 2600;
-    const half = span / 2;
-    const sx = game.world?.spawn?.x || 0;
-    const sy = game.world?.spawn?.y || 0;
-    const hx = ((game.hero.x - (sx - half)) / span) * (size - 1);
-    const hy = ((game.hero.y - (sy - half)) / span) * (size - 1);
+    const heroNormX = clamp((game.hero.x + half) / span, 0, 1);
+    const heroNormY = clamp((game.hero.y + half) / span, 0, 1);
+
+    const srcFrac = 0.22;
+    const srcW = Math.max(28, Math.floor(mini.width * srcFrac));
+    const srcH = Math.max(28, Math.floor(mini.height * srcFrac));
+
+    let srcX = Math.floor(heroNormX * mini.width - srcW * 0.5);
+    let srcY = Math.floor(heroNormY * mini.height - srcH * 0.5);
+
+    srcX = clamp(srcX, 0, Math.max(0, mini.width - srcW));
+    srcY = clamp(srcY, 0, Math.max(0, mini.height - srcH));
+
+    roundRect(ctx, x, y, size, size, 12);
+    ctx.clip();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(mini, srcX, srcY, srcW, srcH, x, y, size, size);
+    ctx.imageSmoothingEnabled = true;
+    ctx.restore();
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,255,255,0.16)";
+    ctx.lineWidth = 1;
+    roundRect(ctx, x, y, size, size, 12);
+    ctx.stroke();
+
+    const px = x + size * 0.5;
+    const py = y + size * 0.5;
+
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, py + 0.5);
+    ctx.lineTo(x + size, py + 0.5);
+    ctx.moveTo(px + 0.5, y);
+    ctx.lineTo(px + 0.5, y + size);
+    ctx.stroke();
 
     ctx.fillStyle = "rgba(20,20,20,0.92)";
-    ctx.fillRect((x + hx - 3) | 0, (y + hy - 3) | 0, 6, 6);
-
+    ctx.fillRect((px - 3) | 0, (py - 3) | 0, 6, 6);
     ctx.fillStyle = "rgba(255,255,255,1)";
-    ctx.fillRect((x + hx - 1) | 0, (y + hy - 1) | 0, 2, 2);
+    ctx.fillRect((px - 1) | 0, (py - 1) | 0, 2, 2);
 
     ctx.globalAlpha = 0.98;
     ctx.fillStyle = "rgba(255,255,255,0.94)";
     ctx.font = "bold 11px system-ui, Arial";
-    ctx.fillText("MINIMAP", x + 8, y + 14);
+    ctx.fillText(`MINIMAP (${world.mapMode || "small"})`, x + 8, y + 14);
 
     ctx.restore();
   }
@@ -443,18 +413,35 @@ export default class UI {
     const hero = game.hero;
     let text = "";
 
-    for (const d of game.world?.docks || []) {
-      if (sq(hero.x - d.x, hero.y - d.y) < 72 * 72) {
-        text = hero.state?.sailing ? "Press F to dock / stop sailing" : "Press F to sail";
-        break;
+    if (game?.dungeon?.active) {
+      if (game.dungeon.justCleared && game.dungeon.stairsDown && sq(hero.x - game.dungeon.stairsDown.x, hero.y - game.dungeon.stairsDown.y) < 72 * 72) {
+        text = "Press F to descend";
+      } else if (game.dungeon.exit && sq(hero.x - game.dungeon.exit.x, hero.y - game.dungeon.exit.y) < 72 * 72) {
+        text = "Press F to leave dungeon";
       }
-    }
-
-    if (!text) {
-      for (const w of game.world?.waystones || []) {
-        if (sq(hero.x - w.x, hero.y - w.y) < 82 * 82) {
-          text = "Press F to awaken waystone";
+    } else {
+      for (const dg of game.world?.dungeons || []) {
+        if (sq(hero.x - dg.x, hero.y - dg.y) < 90 * 90) {
+          text = "Press F to enter dungeon";
           break;
+        }
+      }
+
+      if (!text) {
+        for (const d of game.world?.docks || []) {
+          if (sq(hero.x - d.x, hero.y - d.y) < 72 * 72) {
+            text = hero.state?.sailing ? "Press F to dock / stop sailing" : "Press F to sail";
+            break;
+          }
+        }
+      }
+
+      if (!text) {
+        for (const w of game.world?.waystones || []) {
+          if (sq(hero.x - w.x, hero.y - w.y) < 82 * 82) {
+            text = "Press F to awaken waystone";
+            break;
+          }
         }
       }
     }
@@ -685,89 +672,95 @@ export default class UI {
     ctx.fillStyle = "rgba(255,224,130,0.96)";
     ctx.fillText(`Elite Kills: ${prog.eliteKills || 0}`, px, py + 42);
 
+    if ((prog.dungeonBest || 0) > 0) {
+      ctx.fillStyle = "rgba(188,158,255,0.96)";
+      ctx.fillText(`Best Depth: ${prog.dungeonBest || 0}`, px + 150, py + 42);
+    }
+
     this._drawPanelFooter(ctx, panel, "Esc / J to close");
     ctx.restore();
   }
 
   _drawMap(ctx, game) {
-    const panel = this._panelRect(720, 600);
+    const panel = this._panelRect(840, 620);
     this._drawPanelShell(ctx, panel, "WORLD MAP");
 
     const mini = this._mini || game?.world?.getMinimapCanvas?.();
-    const innerPad = 20;
-    const mapSize = 420;
-    const x = panel.x + innerPad;
-    const y = panel.y + 56;
+    const world = game?.world;
+    const mode = world?.mapMode || "small";
 
     ctx.save();
     ctx.font = "12px system-ui, Arial";
 
-    if (mini) {
+    const mapX = panel.x + 20;
+    const mapY = panel.y + 56;
+    const mapW = 520;
+    const mapH = 520;
+
+    ctx.fillStyle = "rgba(18,20,26,0.92)";
+    roundRect(ctx, mapX, mapY, mapW, mapH, 14);
+    ctx.fill();
+
+    if (mini && world) {
+      const span = getMapSpan(world, mode);
+      const half = span * 0.5;
+
+      const heroNormX = clamp((game.hero.x + half) / span, 0, 1);
+      const heroNormY = clamp((game.hero.y + half) / span, 0, 1);
+
+      const srcFrac = mode === "large" ? 0.75 : 0.26;
+      const srcW = Math.max(28, Math.floor(mini.width * srcFrac));
+      const srcH = Math.max(28, Math.floor(mini.height * srcFrac));
+
+      let srcX = Math.floor(heroNormX * mini.width - srcW * 0.5);
+      let srcY = Math.floor(heroNormY * mini.height - srcH * 0.5);
+
+      srcX = clamp(srcX, 0, Math.max(0, mini.width - srcW));
+      srcY = clamp(srcY, 0, Math.max(0, mini.height - srcH));
+
+      ctx.save();
+      roundRect(ctx, mapX, mapY, mapW, mapH, 14);
+      ctx.clip();
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(mini, x, y, mapSize, mapSize);
+      ctx.drawImage(mini, srcX, srcY, srcW, srcH, mapX, mapY, mapW, mapH);
       ctx.imageSmoothingEnabled = true;
+      ctx.restore();
 
-      const span = 2600;
-      const half = span / 2;
-      const sx = game.world?.spawn?.x || 0;
-      const sy = game.world?.spawn?.y || 0;
+      const px = mapX + mapW * 0.5;
+      const py = mapY + mapH * 0.5;
 
-      const mapPoint = (wx, wy) => {
-        const px = x + ((wx - (sx - half)) / span) * (mapSize - 1);
-        const py = y + ((wy - (sy - half)) / span) * (mapSize - 1);
-        return { x: px, y: py };
-      };
-
-      for (const c of game.world?.camps || []) {
-        const p = mapPoint(c.x, c.y);
-        ctx.fillStyle = "rgba(255,90,90,0.95)";
-        ctx.fillRect((p.x - 2) | 0, (p.y - 2) | 0, 4, 4);
-      }
-
-      for (const d of game.world?.docks || []) {
-        if (!game.progress?.discoveredDocks?.has?.(d.id)) continue;
-        const p = mapPoint(d.x, d.y);
-        ctx.fillStyle = "rgba(90,210,255,0.96)";
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      const ways = typeof game._getDiscoveredWaystones === "function"
-        ? game._getDiscoveredWaystones()
-        : [];
-
-      for (let i = 0; i < ways.length && i < 9; i++) {
-        const w = ways[i];
-        const p = mapPoint(w.x, w.y);
-
-        ctx.fillStyle = "rgba(255,218,92,0.98)";
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.fillStyle = "rgba(25,25,25,0.98)";
-        ctx.font = "bold 10px system-ui, Arial";
-        ctx.textAlign = "center";
-        ctx.fillText(String(i + 1), p.x, p.y + 3);
-        ctx.textAlign = "left";
-      }
-
-      const hp = mapPoint(game.hero.x, game.hero.y);
-      ctx.fillStyle = "rgba(20,20,20,0.92)";
-      ctx.fillRect((hp.x - 4) | 0, (hp.y - 4) | 0, 8, 8);
+      ctx.fillStyle = "rgba(20,20,20,0.96)";
+      ctx.fillRect((px - 6) | 0, (py - 6) | 0, 12, 12);
       ctx.fillStyle = "rgba(255,255,255,1)";
-      ctx.fillRect((hp.x - 2) | 0, (hp.y - 2) | 0, 4, 4);
+      ctx.fillRect((px - 3) | 0, (py - 3) | 0, 6, 6);
+
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(mapX, py + 0.5);
+      ctx.lineTo(mapX + mapW, py + 0.5);
+      ctx.moveTo(px + 0.5, mapY);
+      ctx.lineTo(px + 0.5, mapY + mapH);
+      ctx.stroke();
 
       ctx.strokeStyle = "rgba(255,255,255,0.16)";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x - 0.5, y - 0.5, mapSize + 1, mapSize + 1);
+      ctx.strokeRect(mapX - 0.5, mapY - 0.5, mapW + 1, mapH + 1);
+
+      const leftWorld = -half + (srcX / mini.width) * span;
+      const topWorld = -half + (srcY / mini.height) * span;
+      const rightWorld = -half + ((srcX + srcW) / mini.width) * span;
+      const bottomWorld = -half + ((srcY + srcH) / mini.height) * span;
+
+      ctx.fillStyle = "rgba(225,230,238,0.92)";
+      ctx.fillText(`Mode: ${mode}`, mapX + 10, mapY + 18);
+      ctx.fillText(`View X: ${Math.round(leftWorld)} to ${Math.round(rightWorld)}`, mapX + 10, mapY + mapH - 24);
+      ctx.fillText(`View Y: ${Math.round(topWorld)} to ${Math.round(bottomWorld)}`, mapX + 10, mapY + mapH - 8);
     } else {
       ctx.fillStyle = "rgba(220,220,220,0.82)";
-      ctx.fillText("Minimap not ready.", x, y + 14);
+      ctx.fillText("Map not ready.", mapX + 16, mapY + 20);
     }
 
-    const rx = panel.x + 468;
+    const rx = panel.x + 570;
     let ry = panel.y + 64;
 
     ctx.fillStyle = "rgba(255,255,255,0.96)";
@@ -777,12 +770,31 @@ export default class UI {
 
     this._legendDot(ctx, rx, ry, "rgba(255,255,255,1)", "You");
     ry += 22;
-    this._legendDot(ctx, rx, ry, "rgba(255,218,92,0.98)", "Awakened Waystone");
+    this._legendDot(ctx, rx, ry, "rgba(255,218,92,0.98)", "Waystone");
     ry += 22;
-    this._legendDot(ctx, rx, ry, "rgba(90,210,255,0.96)", "Discovered Dock");
+    this._legendDot(ctx, rx, ry, "rgba(90,210,255,0.96)", "Dock");
     ry += 22;
-    this._legendDot(ctx, rx, ry, "rgba(255,90,90,0.95)", "Enemy Camp");
+    this._legendDot(ctx, rx, ry, "rgba(255,90,90,0.95)", "Camp");
+    ry += 22;
+    this._legendDot(ctx, rx, ry, "rgba(182,140,255,0.98)", "Dungeon");
     ry += 34;
+
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.font = "bold 13px system-ui, Arial";
+    ctx.fillText("Map Notes", rx, ry);
+    ry += 22;
+
+    ctx.font = "12px system-ui, Arial";
+    ctx.fillStyle = "rgba(220,224,232,0.88)";
+    ctx.fillText("Minimap stays centered on you.", rx, ry); ry += 18;
+    ctx.fillText("Full map follows the hero too.", rx, ry); ry += 18;
+    ctx.fillText("Dark areas are unrevealed.", rx, ry); ry += 18;
+    ctx.fillText("Walk to uncover more land.", rx, ry); ry += 22;
+
+    ctx.fillStyle = "rgba(255,240,170,0.96)";
+    ctx.fillText("Press Z to toggle map scale", rx, ry); ry += 18;
+    ctx.fillStyle = "rgba(220,224,232,0.88)";
+    ctx.fillText("(small / large)", rx, ry); ry += 26;
 
     const ways = typeof game._getDiscoveredWaystones === "function"
       ? game._getDiscoveredWaystones()
@@ -796,7 +808,7 @@ export default class UI {
     ctx.font = "12px system-ui, Arial";
     if (!ways.length) {
       ctx.fillStyle = "rgba(220,220,220,0.82)";
-      ctx.fillText("Awaken a waystone with F first.", rx, ry);
+      ctx.fillText("Awaken a waystone first.", rx, ry);
       ry += 18;
     } else {
       for (let i = 0; i < ways.length && i < 9; i++) {
@@ -814,14 +826,9 @@ export default class UI {
       ry += 10;
       ctx.fillStyle = "rgba(255,160,160,0.96)";
       ctx.fillText("Cannot fast travel while sailing.", rx, ry);
-      ry += 18;
     }
 
-    ry += 10;
-    ctx.fillStyle = "rgba(220,224,232,0.82)";
-    ctx.fillText("Map markers only show docks after you find them.", rx, ry);
-
-    this._drawPanelFooter(ctx, panel, "Esc / M to close • 1-9 fast travel • camps=danger • docks=travel");
+    this._drawPanelFooter(ctx, panel, "Esc / M to close • Z scale • 1-9 fast travel");
     ctx.restore();
   }
 
@@ -858,6 +865,7 @@ export default class UI {
     ctx.fillText("Q / W / E / R - Cast spells", x, y); y += 22;
     ctx.fillText("1 / 2         - Use potions", x, y); y += 22;
     ctx.fillText("I / J / M / O - Open menus", x, y); y += 22;
+    ctx.fillText("Z (on map)    - Toggle map scale", x, y); y += 22;
 
     y += 10;
     ctx.fillStyle = "rgba(255,255,255,0.96)";
@@ -884,6 +892,13 @@ export default class UI {
     this._drawPanelFooter(ctx, panel, "Esc / O to close • Delete = clear save + restart");
     ctx.restore();
   }
+}
+
+function getMapSpan(world, mode) {
+  if (!world) return 2600;
+  if (typeof world._getMapSpan === "function") return world._getMapSpan(mode);
+  if (mode === "small") return 4200;
+  return (world.boundsRadius || 4600) * 2;
 }
 
 function sq(x, y) {

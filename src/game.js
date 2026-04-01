@@ -1,14 +1,5 @@
 // src/game.js
-// v40 DEATH / RESPAWN + LAST CHANCE (FULL FILE)
-// Adds:
-// - everything from v39
-// - death / respawn restored
-// - Last Chance passive blocks one lethal hit
-// - respawn at nearest awakened waystone, otherwise spawn
-// - small gold penalty on death
-// - short respawn invulnerability
-// - waystones restore Last Chance
-// - keeps current world / entities / ui compatibility intact
+// v46 DUNGEON REWARD CHESTS + DEEPER FLOOR LOOP (FULL FILE)
 
 import World from "./world.js";
 import { clamp, lerp, dist2, norm, RNG, hash2 } from "./util.js";
@@ -31,7 +22,7 @@ export default class Game {
 
     this.input = new Input(window);
     this.ui = new UI(canvas);
-    this.save = new Save("broke-knight-save-v40");
+    this.save = new Save("broke-knight-save-v46");
 
     this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
     this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
@@ -51,13 +42,13 @@ export default class Game {
     };
 
     this.perf = {
-      enemyUpdateRadius: 1100,
-      lootUpdateRadius: 700,
-      projectileUpdateRadius: 1300,
-      spawnRadius: 1200,
+      enemyUpdateRadius: 1500,
+      lootUpdateRadius: 900,
+      projectileUpdateRadius: 1700,
+      spawnRadius: 1400,
       drawPad: 180,
-      maxEnemies: 72,
-      maxLoot: 100,
+      maxEnemies: 110,
+      maxLoot: 140,
       cleanupTimer: 0,
       cleanupEvery: 0.35,
     };
@@ -83,7 +74,7 @@ export default class Game {
       currentZoneText: "",
       currentZoneId: "",
       zoneMsgCooldown: 0,
-      deathCount: 0,
+      dungeonBest: 0,
     };
 
     this._pickupMsgCooldown = 0;
@@ -102,27 +93,15 @@ export default class Game {
     };
     this.spellCd = { q: 0, w: 0, e: 0, r: 0 };
 
-    this.buffs = {
-      waystoneBlessingT: 0,
-      frenzyT: 0,
-      respawnShieldT: 0,
-    };
-
-    this.streak = {
-      count: 0,
-      timer: 0,
-    };
-
-    this.arcane = {
-      charge: 0,
-      max: 100,
-      empoweredNext: false,
-    };
-
-    this.survival = {
-      lastChanceReady: true,
-      dead: false,
-      respawnT: 0,
+    this.dungeon = {
+      active: false,
+      floor: 0,
+      room: null,
+      stairsDown: null,
+      exit: null,
+      justCleared: false,
+      rewardChest: null,
+      rewardTaken: false,
     };
 
     this._tryLoad();
@@ -177,7 +156,7 @@ export default class Game {
         Array.isArray(s.progress.clearedCamps) ? s.progress.clearedCamps : []
       );
       this.progress.eliteKills = Math.max(0, s.progress.eliteKills | 0);
-      this.progress.deathCount = Math.max(0, s.progress.deathCount | 0);
+      this.progress.dungeonBest = Math.max(0, s.progress.dungeonBest | 0);
     }
 
     if (s.hero?.lastMove && Number.isFinite(s.hero.lastMove.x) && Number.isFinite(s.hero.lastMove.y)) {
@@ -212,7 +191,7 @@ export default class Game {
         discoveredDocks: Array.from(this.progress.discoveredDocks),
         clearedCamps: Array.from(this.progress.clearedCamps),
         eliteKills: this.progress.eliteKills | 0,
-        deathCount: this.progress.deathCount | 0,
+        dungeonBest: this.progress.dungeonBest | 0,
       },
     });
   }
@@ -281,253 +260,9 @@ export default class Game {
   }
 
   _fullRestoreHero() {
-    const st = this.hero.getStats?.() || {
-      maxHp: this.hero.maxHp || 100,
-      maxMana: this.hero.maxMana || 60,
-    };
+    const st = this.hero.getStats?.() || { maxHp: this.hero.maxHp || 100, maxMana: this.hero.maxMana || 60 };
     this.hero.hp = st.maxHp;
     this.hero.mana = st.maxMana;
-  }
-
-  _grantDockSupplies(firstDock = false) {
-    this.hero.potions.hp = (this.hero.potions.hp | 0) + (firstDock ? 2 : 1);
-    this.hero.potions.mana = (this.hero.potions.mana | 0) + 1;
-  }
-
-  _spawnCampRewardBurst(camp) {
-    if (!camp) return;
-    if (this.loot.length >= this.perf.maxLoot - 5) return;
-
-    const cx = camp.x;
-    const cy = camp.y;
-    const tier = Math.max(1, camp.tier | 0);
-
-    this.loot.push(new Loot(cx - 16, cy - 6, "gold", { amount: 10 + tier * 4 }));
-    this.loot.push(new Loot(cx + 16, cy - 2, "gold", { amount: 8 + tier * 3 }));
-    this.loot.push(new Loot(cx, cy + 14, "potion", {
-      potionType: Math.random() < 0.55 ? "hp" : "mana",
-      amount: 1,
-    }));
-
-    const slotRoll = Math.random();
-    const slot =
-      slotRoll < 0.30 ? "weapon" :
-      slotRoll < 0.52 ? "armor" :
-      slotRoll < 0.66 ? "helm" :
-      slotRoll < 0.80 ? "boots" :
-      slotRoll < 0.90 ? "ring" : "trinket";
-
-    const rarity =
-      tier >= 3
-        ? (Math.random() < 0.30 ? "epic" : "rare")
-        : (Math.random() < 0.55 ? "rare" : "uncommon");
-
-    const gearSeed = hash2(this.seed ^ 0x7788, (camp.id | 0) * 97 + tier * 11);
-    const gear = makeGear(slot, Math.max(1, this.hero.level || 1), rarity, gearSeed);
-    this.loot.push(new Loot(cx + 4, cy + 18, "gear", { gear }));
-
-    this._addArcaneCharge(18, true);
-    this._shake(0.10, 4.5);
-  }
-
-  _maybeGrantLevelPotionBonus() {
-    const lvl = this.hero.level | 0;
-    if (lvl > 0 && lvl % 2 === 0) {
-      this.hero.potions.hp = (this.hero.potions.hp | 0) + 1;
-      this._msg(`Level ${lvl}! Bonus HP potion gained.`, 2.4);
-      return true;
-    }
-    return false;
-  }
-
-  _tickBuffs(dt) {
-    this.buffs.waystoneBlessingT = Math.max(0, this.buffs.waystoneBlessingT - dt);
-    this.buffs.frenzyT = Math.max(0, this.buffs.frenzyT - dt);
-    this.buffs.respawnShieldT = Math.max(0, this.buffs.respawnShieldT - dt);
-  }
-
-  _tickStreak(dt) {
-    if (this.streak.timer > 0) {
-      this.streak.timer = Math.max(0, this.streak.timer - dt);
-      if (this.streak.timer <= 0) {
-        this.streak.count = 0;
-      }
-    }
-  }
-
-  _tickDeathState(dt) {
-    if (!this.survival.dead) return;
-    this.survival.respawnT = Math.max(0, this.survival.respawnT - dt);
-    if (this.survival.respawnT <= 0) {
-      this._respawnHero();
-    }
-  }
-
-  _grantWaystoneBlessing() {
-    this.buffs.waystoneBlessingT = 45;
-    this.arcane.charge = this.arcane.max;
-    this.arcane.empoweredNext = true;
-    this.survival.lastChanceReady = true;
-    this._msg("Waystone blessing gained! Surge charged.", 2.8);
-  }
-
-  _grantFrenzy() {
-    this.buffs.frenzyT = 8;
-    this._msg("Frenzy! Faster movement, cooldowns, and stronger spells.", 2.0);
-  }
-
-  _addArcaneCharge(n, silent = false) {
-    const before = this.arcane.charge | 0;
-    this.arcane.charge = clamp(before + (n | 0), 0, this.arcane.max);
-
-    if (this.arcane.charge >= this.arcane.max && before < this.arcane.max) {
-      this.arcane.empoweredNext = true;
-      if (!silent) this._msg("Arcane Surge ready! Your next spell is empowered.", 2.0);
-    }
-  }
-
-  _consumeArcaneSurge() {
-    if (!this.arcane.empoweredNext) return false;
-    this.arcane.empoweredNext = false;
-    this.arcane.charge = 0;
-    return true;
-  }
-
-  _getCombatStats() {
-    const st = this.hero.getStats?.() || { dmg: 8, crit: 0.05, critMult: 1.7, maxMana: 60 };
-    const out = { ...st };
-
-    if (this.buffs.waystoneBlessingT > 0) {
-      out.dmg = Math.round(out.dmg * 1.15);
-      out.blessed = true;
-    }
-
-    if (this.buffs.frenzyT > 0) {
-      out.dmg = Math.round(out.dmg * 1.10);
-      out.crit = Math.min(0.75, (out.crit || 0) + 0.05);
-      out.frenzy = true;
-    }
-
-    return out;
-  }
-
-  _awardKillStreak(enemy) {
-    this.streak.count = (this.streak.count | 0) + 1;
-    this.streak.timer = 4.0;
-
-    if (this.streak.count === 5) {
-      this._grantFrenzy();
-    }
-
-    if (this.streak.count >= 3) {
-      const bonusGold = Math.min(12, this.streak.count + (enemy?.elite ? 3 : 0));
-      const bonusXP = Math.min(10, Math.floor(this.streak.count / 2) + (enemy?.elite ? 2 : 0));
-
-      this._grantGold(bonusGold);
-      this._grantXP(bonusXP);
-      this._msg(`Kill streak x${this.streak.count}! +${bonusGold} Gold, +${bonusXP} XP`, 2.0);
-      this._saveSoon();
-    }
-  }
-
-  _grantOnKillSustain(enemy) {
-    const st = this.hero.getStats?.() || { maxHp: this.hero.maxHp || 100, maxMana: this.hero.maxMana || 60 };
-    const heal = enemy?.elite ? 6 : 3;
-    const mana = enemy?.elite ? 8 : 4;
-
-    this.hero.hp = Math.min(st.maxHp, this.hero.hp + heal);
-    this.hero.mana = Math.min(st.maxMana, this.hero.mana + mana);
-  }
-
-  _forceHeroDamage(n) {
-    this.hero.hp -= Math.max(1, n | 0);
-  }
-
-  _handleLethalHit() {
-    if (this.survival.dead) return;
-
-    if (this.survival.lastChanceReady) {
-      this.survival.lastChanceReady = false;
-      this.hero.hp = 1;
-      this.hero.mana = Math.min(this.hero.getStats?.().maxMana || this.hero.maxMana || 60, this.hero.mana + 12);
-      this.buffs.respawnShieldT = 1.5;
-      this.streak.count = 0;
-      this.streak.timer = 0;
-      this._msg("LAST CHANCE! You cling to life.", 2.0);
-      this._shake(0.18, 5.2);
-      return;
-    }
-
-    this._beginDeath();
-  }
-
-  _beginDeath() {
-    if (this.survival.dead) return;
-
-    this.survival.dead = true;
-    this.survival.respawnT = 1.2;
-    this.progress.deathCount += 1;
-
-    const lostGold = Math.min(this.hero.gold | 0, Math.max(5, Math.floor((this.hero.gold || 0) * 0.12)));
-    this.hero.gold = Math.max(0, (this.hero.gold | 0) - lostGold);
-
-    this.hero.vx = 0;
-    this.hero.vy = 0;
-    this.hero.state.dashT = 0;
-    this.hero.state.sailing = false;
-
-    this.streak.count = 0;
-    this.streak.timer = 0;
-    this.buffs.frenzyT = 0;
-
-    this._msg(`You died. Lost ${lostGold} Gold.`, 2.2);
-    this._shake(0.25, 7);
-    this._saveSoon();
-  }
-
-  _getRespawnPoint() {
-    const ways = this._getDiscoveredWaystones();
-    if (ways.length) {
-      let best = ways[0];
-      let bestD = dist2(this.hero.x, this.hero.y, best.x, best.y);
-      for (let i = 1; i < ways.length; i++) {
-        const w = ways[i];
-        const d = dist2(this.hero.x, this.hero.y, w.x, w.y);
-        if (d < bestD) {
-          bestD = d;
-          best = w;
-        }
-      }
-      return { x: best.x, y: best.y + 42 };
-    }
-
-    return {
-      x: this.world.spawn?.x ?? 0,
-      y: this.world.spawn?.y ?? 0,
-    };
-  }
-
-  _respawnHero() {
-    const p = this._getRespawnPoint();
-    const st = this.hero.getStats?.() || { maxHp: this.hero.maxHp || 100, maxMana: this.hero.maxMana || 60 };
-
-    this.hero.x = p.x;
-    this.hero.y = p.y;
-    this.hero.vx = 0;
-    this.hero.vy = 0;
-    this.hero.state.dashT = 0;
-    this.hero.state.sailing = false;
-
-    this.hero.hp = Math.max(20, Math.round((st.maxHp || 100) * 0.6));
-    this.hero.mana = Math.max(15, Math.round((st.maxMana || 60) * 0.6));
-
-    this.survival.dead = false;
-    this.survival.respawnT = 0;
-    this.buffs.respawnShieldT = 2.5;
-
-    this._msg("You respawned.", 1.8);
-    this._shake(0.12, 4.5);
-    this._saveSoon();
   }
 
   _coolMsg(text, t = 1.6) {
@@ -616,9 +351,10 @@ export default class Game {
   }
 
   _pickupNearbyLootBonus() {
+    const pickupR = this.dungeon.active ? 34 : 26;
     for (const l of this.loot) {
       if (!l.alive) continue;
-      if (dist2(this.hero.x, this.hero.y, l.x, l.y) < 26 * 26) {
+      if (dist2(this.hero.x, this.hero.y, l.x, l.y) < pickupR * pickupR) {
         const kind = l.kind;
         const data = l.data || {};
 
@@ -646,26 +382,20 @@ export default class Game {
     const st = this.hero.getStats?.() || { maxMana: 60 };
     if (this.hero.mana >= st.maxMana) return;
 
-    let base = this.hero.state?.sailing ? 3.0 : 4.5;
-    if (this.buffs.waystoneBlessingT > 0) base += 2.0;
-    if (this.buffs.frenzyT > 0) base += 1.5;
-
+    const base = this.dungeon.active ? 5.2 : (this.hero.state?.sailing ? 3.0 : 4.5);
     this.hero.mana = Math.min(st.maxMana, this.hero.mana + base * dt);
   }
 
   _tickSpellCooldowns(dt) {
-    const mult = this.buffs.frenzyT > 0 ? 1.35 : 1;
     for (const k of Object.keys(this.spellCd)) {
-      this.spellCd[k] = Math.max(0, this.spellCd[k] - dt * mult);
+      this.spellCd[k] = Math.max(0, this.spellCd[k] - dt);
     }
   }
 
   _tickResetConfirm(dt) {
     if (this._resetConfirmT > 0) {
       this._resetConfirmT = Math.max(0, this._resetConfirmT - dt);
-      if (this._resetConfirmT <= 0) {
-        this._resetConfirmT = 0;
-      }
+      if (this._resetConfirmT <= 0) this._resetConfirmT = 0;
     }
   }
 
@@ -676,7 +406,7 @@ export default class Game {
       this._spellMsg(`${def.name} cooling down`, 0.8);
       return false;
     }
-    if (!this.arcane.empoweredNext && (this.hero.mana || 0) < def.mana) {
+    if ((this.hero.mana || 0) < def.mana) {
       this._spellMsg("Not enough mana", 0.9);
       return false;
     }
@@ -685,21 +415,8 @@ export default class Game {
 
   _startSpell(key) {
     const def = this.spells[key];
-    const empowered = this._consumeArcaneSurge();
-
-    if (!empowered) {
-      this.hero.mana -= def.mana;
-    } else {
-      this._msg(`${def.name} overcharged!`, 1.1);
-      this._shake(0.08, 3.6);
-    }
-
-    let cd = def.cd;
-    if (empowered) cd *= 0.65;
-    if (this.buffs.frenzyT > 0) cd *= 0.82;
-    this.spellCd[key] = cd;
-
-    return empowered;
+    this.hero.mana -= def.mana;
+    this.spellCd[key] = def.cd;
   }
 
   _liveArrowAim() {
@@ -715,9 +432,7 @@ export default class Game {
     if (up) ay -= 1;
     if (down) ay += 1;
 
-    if (ax !== 0 || ay !== 0) {
-      return norm(ax, ay);
-    }
+    if (ax !== 0 || ay !== 0) return norm(ax, ay);
     return null;
   }
 
@@ -748,9 +463,6 @@ export default class Game {
     const baseXP = enemy.xpValue?.() || 6;
     this.hero.giveXP?.(baseXP);
     this._questAddProgress("q_kill_5", 1);
-    this._awardKillStreak(enemy);
-    this._grantOnKillSustain(enemy);
-    this._addArcaneCharge(enemy?.elite ? 24 : 12, true);
 
     if (enemy.elite) {
       this.progress.eliteKills += 1;
@@ -761,6 +473,11 @@ export default class Game {
       this._msg(`Elite defeated! (+${baseXP + bonusXP} XP, +${bonusGold} Gold)`, 2.6);
       this._shake(0.08, 3.2);
       this._saveSoon();
+    }
+
+    if (this.dungeon.active) {
+      this._grantGold(2 + (this.dungeon.floor | 0));
+      this._grantXP(1 + Math.floor(this.dungeon.floor * 0.5));
     }
 
     this._dropLoot(enemy.x, enemy.y, enemy.tier || 1, enemy.kind, !!enemy.elite);
@@ -783,7 +500,6 @@ export default class Game {
       q.done = true;
       this.hero.giveXP?.(q.xp || 0);
       this.hero.gold += q.gold || 0;
-      this._addArcaneCharge(10, true);
       this._msg(`Quest complete: ${q.name} (+${q.xp} XP, +${q.gold} Gold)`, 3.2);
       this._saveSoon();
     }
@@ -810,6 +526,7 @@ export default class Game {
   }
 
   _spawnFromCamps(dt) {
+    if (this.dungeon.active) return;
     if (this.enemies.length >= this.perf.maxEnemies) return;
 
     this._spawnTimer += dt;
@@ -836,10 +553,12 @@ export default class Game {
         if (!st.clearedOnce) {
           st.clearedOnce = true;
           this.progress.clearedCamps.add(c.id);
+
           const xp = 8 + c.tier * 4;
           const gold = 12 + c.tier * 4;
           this._grantGold(gold);
           this._grantXP(xp);
+
           this._spawnCampRewardBurst(c);
           this._msg(`Camp cleared! Reward cache found. (+${xp} XP, +${gold} Gold)`, 3.2);
           this._saveSoon();
@@ -874,40 +593,51 @@ export default class Game {
     }
   }
 
-  _updateCampZoneHints() {
-    const camps = this.world?.camps || [];
-    let nearest = null;
-    let best = Infinity;
+  _spawnCampRewardBurst(camp) {
+    if (!camp) return;
+    if (this.loot.length >= this.perf.maxLoot - 4) return;
 
-    for (const c of camps) {
-      const d = dist2(this.hero.x, this.hero.y, c.x, c.y);
-      if (d < best) {
-        best = d;
-        nearest = c;
-      }
-    }
+    const cx = camp.x;
+    const cy = camp.y;
+    const tier = Math.max(1, camp.tier | 0);
 
-    if (nearest && best < 180 * 180) {
-      const st = this._campState.get(nearest.id);
-      if (st && !st.announcedNearby) {
-        st.announcedNearby = true;
-        this._msg(`Enemy camp nearby (Tier ${nearest.tier}).`, 2.2);
-      }
-    }
+    this.loot.push(new Loot(cx - 14, cy - 8, "gold", { amount: 10 + tier * 4 }));
+    this.loot.push(new Loot(cx + 14, cy - 4, "gold", { amount: 8 + tier * 3 }));
+    this.loot.push(new Loot(cx - 8, cy + 10, "potion", {
+      potionType: Math.random() < 0.5 ? "hp" : "mana",
+      amount: 1,
+    }));
+
+    const slotRoll = Math.random();
+    const slot =
+      slotRoll < 0.28 ? "weapon" :
+      slotRoll < 0.50 ? "armor" :
+      slotRoll < 0.66 ? "helm" :
+      slotRoll < 0.80 ? "boots" :
+      slotRoll < 0.90 ? "ring" : "trinket";
+
+    const rarity =
+      tier >= 3
+        ? (Math.random() < 0.30 ? "epic" : "rare")
+        : (Math.random() < 0.55 ? "rare" : "uncommon");
+
+    const gearSeed = hash2(this.seed ^ 0x7788, (camp.id | 0) * 97 + tier * 11);
+    const gear = makeGear(slot, Math.max(1, this.hero.level || 1), rarity, gearSeed);
+    this.loot.push(new Loot(cx + 2, cy + 16, "gear", { gear }));
+
+    this._shake(0.10, 4.5);
   }
 
   _getDiscoveredWaystones() {
     const all = Array.isArray(this.world?.waystones) ? this.world.waystones.slice() : [];
     return all
       .filter(w => this.progress?.discoveredWaystones?.has?.(w.id))
-      .sort((a, b) => {
-        const ai = Number.isFinite(a?.id) ? a.id : 0;
-        const bi = Number.isFinite(b?.id) ? b.id : 0;
-        return ai - bi;
-      });
+      .sort((a, b) => (a.id || 0) - (b.id || 0));
   }
 
   _teleportToWaystone(index) {
+    if (this.dungeon.active) return;
+
     const ways = this._getDiscoveredWaystones();
 
     if (!ways.length) {
@@ -939,6 +669,11 @@ export default class Game {
 
   _handleFastTravelInput() {
     if (this.menu.open !== "map") return;
+
+    if (this.input.wasPressed("z")) {
+      this.world.toggleMapScale();
+      this._msg(`Map scale: ${this.world.mapMode}`, 1.2);
+    }
 
     if (this.input.wasPressed("1")) this._teleportToWaystone(0);
     else if (this.input.wasPressed("2")) this._teleportToWaystone(1);
@@ -1016,16 +751,18 @@ export default class Game {
       this.aim = { x: n.x, y: n.y };
       this.hero.lastMove = { x: n.x, y: n.y };
 
-      let speed = this.hero.state?.sailing ? 190 : 150;
-      if (this.buffs.frenzyT > 0) speed *= 1.18;
-
+      const speed = this.hero.state?.sailing ? 190 : 150;
       this.hero.vx = n.x * speed;
       this.hero.vy = n.y * speed;
 
       const nx = this.hero.x + this.hero.vx * dt;
       const ny = this.hero.y + this.hero.vy * dt;
 
-      if (this.hero.state?.sailing) {
+      if (this.dungeon.active) {
+        const room = this.dungeon.room;
+        this.hero.x = clamp(nx, room.x0 + 20, room.x1 - 20);
+        this.hero.y = clamp(ny, room.y0 + 20, room.y1 - 20);
+      } else if (this.hero.state?.sailing) {
         this.hero.x = nx;
         this.hero.y = ny;
       } else {
@@ -1054,6 +791,32 @@ export default class Game {
   _handleInteract() {
     if (!this.input.wasPressed("f")) return;
 
+    if (this.dungeon.active) {
+      if (this.dungeon.rewardChest && !this.dungeon.rewardTaken && dist2(this.hero.x, this.hero.y, this.dungeon.rewardChest.x, this.dungeon.rewardChest.y) < 78 * 78) {
+        this._openDungeonChest();
+        return;
+      }
+
+      if (this.dungeon.justCleared && this.dungeon.stairsDown && dist2(this.hero.x, this.hero.y, this.dungeon.stairsDown.x, this.dungeon.stairsDown.y) < 70 * 70) {
+        this._enterDungeonFloor(this.dungeon.floor + 1);
+        return;
+      }
+
+      if (this.dungeon.exit && dist2(this.hero.x, this.hero.y, this.dungeon.exit.x, this.dungeon.exit.y) < 70 * 70) {
+        this._leaveDungeon();
+        return;
+      }
+
+      return;
+    }
+
+    for (const dg of this.world?.dungeons || []) {
+      if (dist2(this.hero.x, this.hero.y, dg.x, dg.y) < 90 * 90) {
+        this._enterDungeonFloor(1);
+        return;
+      }
+    }
+
     for (const d of this.world?.docks || []) {
       if (dist2(this.hero.x, this.hero.y, d.x, d.y) < 70 * 70) {
         const firstDock = !this.progress.discoveredDocks.has(d.id);
@@ -1063,16 +826,11 @@ export default class Game {
 
         if (firstDock) {
           this._grantGold(10);
-          this._grantDockSupplies(true);
-          this._msg(
-            this.hero.state.sailing
-              ? "New dock found. Sailing: ON (+10 Gold, supplies gained)"
-              : "New dock found (+10 Gold, supplies gained)",
-            3
-          );
+          this.hero.potions.hp = (this.hero.potions.hp | 0) + 2;
+          this.hero.potions.mana = (this.hero.potions.mana | 0) + 1;
+          this._msg(this.hero.state.sailing ? "New dock found. Sailing: ON (+10 Gold)" : "New dock found (+10 Gold)", 2.6);
         } else {
-          this._grantDockSupplies(false);
-          this._msg(this.hero.state.sailing ? "Sailing: ON (+supplies)" : "Sailing: OFF (+supplies)");
+          this._msg(this.hero.state.sailing ? "Sailing: ON" : "Sailing: OFF");
         }
 
         this._questAddProgress("q_sail", 1);
@@ -1087,14 +845,13 @@ export default class Game {
         this.progress.discoveredWaystones.add(w.id);
 
         this._fullRestoreHero();
-        this._grantWaystoneBlessing();
 
         if (first) {
           this._grantXP(20);
           this._grantGold(15);
-          this._msg("Waystone awakened! Full restore. Blessing gained. (+20 XP, +15 Gold)", 3);
+          this._msg("Waystone awakened! Full restore. (+20 XP, +15 Gold)", 3);
         } else {
-          this._msg("Waystone restored and blessed you.", 2.4);
+          this._msg("Waystone restored your strength.", 2.2);
         }
 
         this._questAddProgress("q_find_way", 1);
@@ -1106,9 +863,168 @@ export default class Game {
     this._msg("Nothing to interact with here.");
   }
 
+  _enterDungeonFloor(floor) {
+    this.dungeon.active = true;
+    this.dungeon.floor = Math.max(1, floor | 0);
+    this.dungeon.justCleared = false;
+    this.dungeon.rewardChest = null;
+    this.dungeon.rewardTaken = false;
+
+    const size = 520 + this.dungeon.floor * 18;
+    this.dungeon.room = {
+      x0: -size * 0.5,
+      y0: -size * 0.5,
+      x1: size * 0.5,
+      y1: size * 0.5,
+    };
+    this.dungeon.exit = { x: 0, y: size * 0.5 - 52 };
+    this.dungeon.stairsDown = { x: 0, y: -size * 0.5 + 56 };
+
+    this.hero.x = 0;
+    this.hero.y = size * 0.5 - 96;
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+    this.hero.state.sailing = false;
+
+    this.enemies = [];
+    this.projectiles = [];
+    this.loot = [];
+
+    const count = 5 + this.dungeon.floor * 2;
+    for (let i = 0; i < count; i++) {
+      const px = this._rng.range(this.dungeon.room.x0 + 60, this.dungeon.room.x1 - 60);
+      const py = this._rng.range(this.dungeon.room.y0 + 70, this.dungeon.room.y1 - 120);
+
+      const tier = Math.min(16, 1 + Math.floor(this.dungeon.floor * 0.9) + (i % 3));
+      const kind = ["blob", "stalker", "brute", "caster"][i % 4];
+      const e = new Enemy(px, py, tier, kind, hash2(this.seed, this.dungeon.floor * 100 + i));
+
+      if (this.dungeon.floor >= 3 && i === count - 1) e.elite = true;
+      if (this.dungeon.floor >= 6 && i === count - 2) e.elite = true;
+      if (this.dungeon.floor >= 10 && i % 5 === 0) e.elite = true;
+
+      this.enemies.push(e);
+    }
+
+    this._msg(`Entered dungeon floor ${this.dungeon.floor}`, 2.4);
+    this.progress.dungeonBest = Math.max(this.progress.dungeonBest | 0, this.dungeon.floor | 0);
+    this._saveSoon();
+  }
+
+  _spawnDungeonRewardChest() {
+    if (!this.dungeon.active || this.dungeon.rewardChest) return;
+    this.dungeon.rewardChest = {
+      x: 0,
+      y: 0,
+    };
+    this.dungeon.rewardTaken = false;
+  }
+
+  _openDungeonChest() {
+    if (!this.dungeon.rewardChest || this.dungeon.rewardTaken) return;
+
+    const floor = this.dungeon.floor | 0;
+    const gold = 18 + floor * 10;
+    const xp = 14 + floor * 7;
+
+    this._grantGold(gold);
+    this._grantXP(xp);
+
+    this.hero.potions.hp = (this.hero.potions.hp | 0) + (floor >= 4 ? 1 : 0);
+    this.hero.potions.mana = (this.hero.potions.mana | 0) + 1;
+
+    if (this.loot.length < this.perf.maxLoot - 3) {
+      this.loot.push(new Loot(this.dungeon.rewardChest.x - 18, this.dungeon.rewardChest.y + 10, "gold", { amount: 8 + floor * 2 }));
+      this.loot.push(new Loot(this.dungeon.rewardChest.x + 18, this.dungeon.rewardChest.y + 10, "gold", { amount: 6 + floor * 2 }));
+    }
+
+    if (Math.random() < Math.min(0.85, 0.28 + floor * 0.06)) {
+      const slotRoll = Math.random();
+      const slot =
+        slotRoll < 0.28 ? "weapon" :
+        slotRoll < 0.50 ? "armor" :
+        slotRoll < 0.66 ? "helm" :
+        slotRoll < 0.80 ? "boots" :
+        slotRoll < 0.90 ? "ring" : "trinket";
+
+      const rarity =
+        floor >= 8
+          ? (Math.random() < 0.35 ? "epic" : "rare")
+          : (Math.random() < 0.55 ? "rare" : "uncommon");
+
+      const gearSeed = hash2(this.seed ^ 0x9911, floor * 211 + (this.hero.level || 1) * 17);
+      const gear = makeGear(slot, Math.max(1, (this.hero.level || 1) + Math.floor(floor / 2)), rarity, gearSeed);
+      this.hero.inventory.push(gear);
+      const equipped = this._maybeAutoEquip(gear);
+      this._msg(equipped ? `Dungeon chest! Equipped ${gear.name}` : `Dungeon chest! Found ${gear.name}`, 2.8);
+    } else {
+      this._msg(`Dungeon chest opened! (+${xp} XP, +${gold} Gold)`, 2.8);
+    }
+
+    this.dungeon.rewardTaken = true;
+    this._shake(0.12, 5);
+    this._saveSoon();
+  }
+
+  _leaveDungeon() {
+    this.dungeon.active = false;
+    this.dungeon.rewardChest = null;
+    this.dungeon.rewardTaken = false;
+
+    this.enemies = [];
+    this.projectiles = [];
+    this.loot = [];
+
+    const dg = this.world.dungeons?.[0];
+    if (dg) {
+      this.hero.x = dg.x + 42;
+      this.hero.y = dg.y + 18;
+    } else {
+      this.hero.x = this.world.spawn.x;
+      this.hero.y = this.world.spawn.y;
+    }
+
+    this._msg(`Escaped the dungeon. Best floor: ${this.progress.dungeonBest}`, 2.8);
+    this._saveSoon();
+  }
+
+  _updateDungeonClear() {
+    if (!this.dungeon.active) return;
+    const alive = this.enemies.some(e => e.alive);
+    if (!alive && !this.dungeon.justCleared) {
+      this.dungeon.justCleared = true;
+
+      const floor = this.dungeon.floor | 0;
+      const gold = 12 + floor * 8;
+      const xp = 10 + floor * 6;
+
+      this._grantGold(gold);
+      this._grantXP(xp);
+      this.hero.potions.mana = (this.hero.potions.mana | 0) + (floor >= 3 ? 1 : 0);
+
+      this._spawnDungeonRewardChest();
+
+      this._msg(`Floor ${floor} cleared! Chest unlocked. (+${xp} XP, +${gold} Gold)`, 3.0);
+      this._shake(0.16, 5);
+      this._saveSoon();
+    }
+  }
+
   _updateZoneMessages(dt) {
     if (this.progress.zoneMsgCooldown > 0) {
       this.progress.zoneMsgCooldown -= dt;
+    }
+
+    if (this.dungeon.active) {
+      const zoneText = `Dungeon Floor ${this.dungeon.floor}`;
+      const zoneId = `dungeon-${this.dungeon.floor}`;
+      if (zoneId !== this.progress.currentZoneId && this.progress.zoneMsgCooldown <= 0) {
+        this.progress.currentZoneId = zoneId;
+        this.progress.currentZoneText = zoneText;
+        this.progress.zoneMsgCooldown = 2.0;
+        this._msg(zoneText, 1.8);
+      }
+      return;
     }
 
     let zoneText = "";
@@ -1127,6 +1043,16 @@ export default class Game {
         if (dist2(this.hero.x, this.hero.y, d.x, d.y) < 150 * 150) {
           zoneText = "Old Dock";
           zoneId = `dock-${d.id}`;
+          break;
+        }
+      }
+    }
+
+    if (!zoneText) {
+      for (const dg of this.world?.dungeons || []) {
+        if (dist2(this.hero.x, this.hero.y, dg.x, dg.y) < 150 * 150) {
+          zoneText = "Dungeon Entrance";
+          zoneId = `dungeon-entrance-${dg.id}`;
           break;
         }
       }
@@ -1164,19 +1090,13 @@ export default class Game {
 
   _castBolt(dx, dy) {
     if (!this._canCastSpell("q")) return;
-    const empowered = this._startSpell("q");
+    this._startSpell("q");
 
-    const st = this._getCombatStats();
+    const st = this.hero.getStats?.() || { dmg: 8, crit: 0.05, critMult: 1.7 };
     const shots = [{ dx, dy }];
 
     if ((this.hero.level || 1) >= 5) {
       const spread = 0.16;
-      shots.push({ dx: dx - dy * spread, dy: dy + dx * spread });
-      shots.push({ dx: dx + dy * spread, dy: dy - dx * spread });
-    }
-
-    if (empowered) {
-      const spread = 0.28;
       shots.push({ dx: dx - dy * spread, dy: dy + dx * spread });
       shots.push({ dx: dx + dy * spread, dy: dy - dx * spread });
     }
@@ -1186,78 +1106,77 @@ export default class Game {
       const p = new Projectile(
         this.hero.x + n.x * 12,
         this.hero.y + n.y * 12 - 6,
-        n.x * (empowered ? 620 : 520),
-        n.y * (empowered ? 620 : 520),
-        Math.round(st.dmg * (empowered ? 1.18 : 0.85)),
-        empowered ? 1.45 : 1.15,
+        n.x * 520,
+        n.y * 520,
+        Math.round(st.dmg * 0.85),
+        1.15,
         this.hero.level || 1,
-        { color: "rgba(145,215,255,0.95)", radius: empowered ? 7 : 6, type: "bolt", hitRadius: empowered ? 22 : 18 }
+        { color: "rgba(145,215,255,0.95)", radius: 6, type: "bolt", hitRadius: 18 }
       );
       p.meta.crit = st.crit;
       p.meta.critMult = st.critMult;
-      if (empowered) p.meta.pierce = true;
       this.projectiles.push(p);
     }
 
-    this._shake(0.05, empowered ? 3 : 2);
+    this._shake(0.05, 2);
   }
 
   _castNova() {
     if (!this._canCastSpell("w")) return;
-    const empowered = this._startSpell("w");
+    this._startSpell("w");
 
-    const st = this._getCombatStats();
+    const st = this.hero.getStats?.() || { dmg: 8 };
     const p = new Projectile(
       this.hero.x,
       this.hero.y - 6,
       0,
       0,
-      Math.round(st.dmg * (empowered ? 0.95 : 0.65)),
-      empowered ? 0.85 : 0.55,
+      Math.round(st.dmg * 0.65),
+      0.55,
       this.hero.level || 1,
-      { color: "rgba(200,240,255,0.95)", radius: empowered ? 12 : 10, type: "nova", hitRadius: empowered ? 148 : 120 }
+      { color: "rgba(200,240,255,0.95)", radius: 10, type: "nova", hitRadius: 120 }
     );
     p.meta.nova = true;
     this.projectiles.push(p);
 
-    const radius = empowered ? 118 : 92;
+    const radius = 92;
     for (const e of this.enemies) {
       if (!e.alive) continue;
-      if (!this._withinRadius(e.x, e.y, this.perf.enemyUpdateRadius)) continue;
       if (dist2(this.hero.x, this.hero.y, e.x, e.y) <= radius * radius) {
-        const dmg = Math.round(st.dmg * (empowered ? 0.92 : 0.55));
+        const dmg = Math.round(st.dmg * 0.55);
         e.takeDamage?.(dmg);
-
         const n = norm(e.x - this.hero.x, e.y - this.hero.y);
-        const shove = empowered ? 24 : 14;
-        e.x += n.x * shove;
-        e.y += n.y * shove;
-
+        e.x += n.x * 14;
+        e.y += n.y * 14;
         if (!e.alive) this._onEnemyDefeated(e);
       }
     }
 
-    this._shake(0.10, empowered ? 4.4 : 3.2);
+    this._shake(0.10, 3.2);
   }
 
   _castDash(dx, dy) {
     if (!this._canCastSpell("e")) return;
-    const empowered = this._startSpell("e");
+    this._startSpell("e");
 
     if (this.hero.state.dashT > 0) return;
-    this.hero.state.dashT = empowered ? 0.48 : 0.35;
+    this.hero.state.dashT = 0.35;
 
-    const dist = empowered ? 188 : 138;
+    const dist = 138;
     const nx = this.hero.x + dx * dist;
     const ny = this.hero.y + dy * dist;
 
-    if (this.hero.state?.sailing) {
+    if (this.dungeon.active) {
+      const room = this.dungeon.room;
+      this.hero.x = clamp(nx, room.x0 + 20, room.x1 - 20);
+      this.hero.y = clamp(ny, room.y0 + 20, room.y1 - 20);
+    } else if (this.hero.state?.sailing) {
       this.hero.x = nx;
       this.hero.y = ny;
     } else {
       let x = this.hero.x;
       let y = this.hero.y;
-      const steps = empowered ? 16 : 12;
+      const steps = 12;
       for (let i = 0; i < steps; i++) {
         const t = (i + 1) / steps;
         const px = lerp(this.hero.x, nx, t);
@@ -1273,34 +1192,28 @@ export default class Game {
       this.hero.y = y;
     }
 
-    const st = this._getCombatStats();
-    const burstR = empowered ? 82 : 56;
+    const st = this.hero.getStats?.() || { dmg: 8 };
+    const burstR = 56;
     for (const e of this.enemies) {
       if (!e.alive) continue;
       if (dist2(this.hero.x, this.hero.y, e.x, e.y) <= burstR * burstR) {
-        e.takeDamage?.(Math.round(st.dmg * (empowered ? 1.0 : 0.7)));
+        e.takeDamage?.(Math.round(st.dmg * 0.7));
         if (!e.alive) this._onEnemyDefeated(e);
       }
     }
 
-    this._shake(0.08, empowered ? 4.2 : 2.8);
+    this._shake(0.08, 2.8);
   }
 
   _castOrb(dx, dy) {
     if (!this._canCastSpell("r")) return;
-    const empowered = this._startSpell("r");
+    this._startSpell("r");
 
-    const st = this._getCombatStats();
+    const st = this.hero.getStats?.() || { dmg: 8 };
     const shots = [{ dx, dy }];
 
     if ((this.hero.level || 1) >= 7) {
       const spread = 0.22;
-      shots.push({ dx: dx - dy * spread, dy: dy + dx * spread });
-      shots.push({ dx: dx + dy * spread, dy: dy - dx * spread });
-    }
-
-    if (empowered) {
-      const spread = 0.40;
       shots.push({ dx: dx - dy * spread, dy: dy + dx * spread });
       shots.push({ dx: dx + dy * spread, dy: dy - dx * spread });
     }
@@ -1310,20 +1223,18 @@ export default class Game {
       const p = new Projectile(
         this.hero.x + n.x * 12,
         this.hero.y + n.y * 12 - 6,
-        n.x * (empowered ? 380 : 320),
-        n.y * (empowered ? 380 : 320),
-        Math.round(st.dmg * (empowered ? 1.35 : 1.05)),
-        empowered ? 1.95 : 1.55,
+        n.x * 320,
+        n.y * 320,
+        Math.round(st.dmg * 1.05),
+        1.55,
         this.hero.level || 1,
-        { color: "rgba(190,160,255,0.95)", radius: empowered ? 10 : 8, type: "orb", hitRadius: empowered ? 28 : 22, pierce: true }
+        { color: "rgba(190,160,255,0.95)", radius: 8, type: "orb", hitRadius: 22, pierce: true }
       );
       p.meta.pierce = true;
-      p.meta.crit = st.crit;
-      p.meta.critMult = st.critMult;
       this.projectiles.push(p);
     }
 
-    this._shake(0.06, empowered ? 3.8 : 2.3);
+    this._shake(0.06, 2.3);
   }
 
   _updateProjectiles(dt) {
@@ -1331,29 +1242,17 @@ export default class Game {
 
     for (const p of this.projectiles) {
       if (!p.alive) continue;
-      if (!this._withinRadius(p.x, p.y, r)) continue;
+      if (!this._withinRadius(p.x, p.y, r) && !this.dungeon.active) continue;
 
       p.update?.(dt, this.world);
       if (!p.alive) continue;
 
       if (p.meta?.onHitHero || p.friendly === false) {
-        if (this.buffs.respawnShieldT > 0) {
-          p.alive = false;
-          continue;
-        }
-
         if (dist2(p.x, p.y, this.hero.x, this.hero.y) < (p.hitRadius || 18) ** 2) {
-          this._forceHeroDamage(p.dmg);
+          const dealt = this.hero.takeDamage?.(p.dmg) || p.dmg;
+          this._msg(`-${Math.round(dealt)} HP`, 1.1);
           p.alive = false;
           this._shake(0.08, 3);
-          this.streak.count = 0;
-          this.streak.timer = 0;
-
-          if ((this.hero.hp || 0) <= 0) {
-            this._handleLethalHit();
-          } else {
-            this._msg(`-${p.dmg} HP`, 1.1);
-          }
         }
         continue;
       }
@@ -1361,8 +1260,6 @@ export default class Game {
       const hr2 = (p.hitRadius || 18) ** 2;
       for (const e of this.enemies) {
         if (!e.alive) continue;
-        if (!this._withinRadius(e.x, e.y, this.perf.enemyUpdateRadius)) continue;
-
         const id = e._id || (e._id = `${Math.random()}`);
         if (p._hitSet && p._hitSet.has(id)) continue;
 
@@ -1379,9 +1276,7 @@ export default class Game {
 
           if (!p.meta?.pierce) p.alive = false;
 
-          if (!e.alive) {
-            this._onEnemyDefeated(e);
-          }
+          if (!e.alive) this._onEnemyDefeated(e);
           break;
         }
       }
@@ -1451,6 +1346,8 @@ export default class Game {
   }
 
   _cleanupFarEntities() {
+    if (this.dungeon.active) return;
+
     const enemyKeepR2 = (this.perf.enemyUpdateRadius + 900) ** 2;
     const lootKeepR2 = (this.perf.lootUpdateRadius + 900) ** 2;
     const projKeepR2 = (this.perf.projectileUpdateRadius + 900) ** 2;
@@ -1478,50 +1375,19 @@ export default class Game {
     dt = clamp(dt, 0, this._dtClamp);
     this.time += dt;
 
-    if (this._pickupMsgCooldown > 0) {
-      this._pickupMsgCooldown = Math.max(0, this._pickupMsgCooldown - dt);
-    }
-    if (this._spellMsgCooldown > 0) {
-      this._spellMsgCooldown = Math.max(0, this._spellMsgCooldown - dt);
-    }
+    if (this._pickupMsgCooldown > 0) this._pickupMsgCooldown = Math.max(0, this._pickupMsgCooldown - dt);
+    if (this._spellMsgCooldown > 0) this._spellMsgCooldown = Math.max(0, this._spellMsgCooldown - dt);
 
     this._tickSpellCooldowns(dt);
     this._tickResetConfirm(dt);
-    this._tickBuffs(dt);
-    this._tickStreak(dt);
-    this._tickDeathState(dt);
 
     this._handleMenus();
     this._handleFastTravelInput();
     this._handleInventoryHotkeys();
     this._handleResetHotkey();
 
-    this.world?.update?.(dt, this.hero);
-
-    if (this.survival.dead) {
-      this.hero.vx = 0;
-      this.hero.vy = 0;
-      this._updateCamera(dt);
-      this.ui?.update?.(dt, this);
-
-      this.perf.cleanupTimer += dt;
-      if (this.perf.cleanupTimer >= this.perf.cleanupEvery) {
-        this.perf.cleanupTimer = 0;
-        this._cleanupFarEntities();
-      }
-
-      this.enemies = this.enemies.filter(e => e.alive);
-      this.projectiles = this.projectiles.filter(p => p.alive);
-      this.loot = this.loot.filter(l => l.alive);
-
-      this.input.endFrame();
-
-      this._autosaveT += dt;
-      if (this._autosaveT >= 5) {
-        this._autosaveT = 0;
-        this._save();
-      }
-      return;
+    if (!this.dungeon.active) {
+      this.world?.update?.(dt, this.hero);
     }
 
     const blockMove =
@@ -1542,38 +1408,32 @@ export default class Game {
     this._regenMana(dt);
 
     this._updateZoneMessages(dt);
-    this._updateCampZoneHints();
 
-    this._spawnFromCamps(dt);
+    if (!this.dungeon.active) this._spawnFromCamps(dt);
 
     const enemyR = this.perf.enemyUpdateRadius;
     for (const e of this.enemies) {
       if (!e.alive) continue;
-      if (!this._withinRadius(e.x, e.y, enemyR)) continue;
+      if (!this.dungeon.active && !this._withinRadius(e.x, e.y, enemyR)) continue;
       e.update?.(dt, this.hero, this.world, this);
     }
 
     this._updateProjectiles(dt);
 
-    if (this.buffs.respawnShieldT <= 0 && (this.hero.hp || 0) <= 0) {
-      this._handleLethalHit();
-    }
-
     const lootR = this.perf.lootUpdateRadius;
     for (const l of this.loot) {
       if (!l.alive) continue;
-      if (!this._withinRadius(l.x, l.y, lootR)) continue;
+      if (!this.dungeon.active && !this._withinRadius(l.x, l.y, lootR)) continue;
       l.update?.(dt, this.hero);
     }
 
     this._pickupNearbyLootBonus();
+    this._updateDungeonClear();
 
     if ((this.hero.level || 1) > this._levelMsgShown) {
       this._levelMsgShown = this.hero.level || 1;
-      const gotPotion = this._maybeGrantLevelPotionBonus();
-      if (!gotPotion) {
-        this._msg(`Level up! You are now level ${this.hero.level}.`, 2.8);
-      }
+      this._msg(`Level up! You are now level ${this.hero.level}.`, 2.8);
+      this.hero.potions.hp = (this.hero.potions.hp | 0) + 1;
       this._saveSoon();
     }
 
@@ -1621,7 +1481,46 @@ export default class Game {
       cam.sy = 0;
     }
 
-    cam.zoom = lerp(cam.zoom, 1.0, 1 - Math.pow(0.001, dt));
+    cam.zoom = lerp(cam.zoom, this.dungeon.active ? 1.04 : 1.0, 1 - Math.pow(0.001, dt));
+  }
+
+  _drawDungeonRoom(ctx) {
+    const r = this.dungeon.room;
+    if (!r) return;
+
+    ctx.fillStyle = "rgba(26,24,34,1)";
+    ctx.fillRect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
+
+    ctx.strokeStyle = "rgba(90,84,108,1)";
+    ctx.lineWidth = 14;
+    ctx.strokeRect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
+
+    for (let x = r.x0 + 18; x < r.x1 - 18; x += 40) {
+      for (let y = r.y0 + 18; y < r.y1 - 18; y += 40) {
+        ctx.fillStyle = ((Math.floor((x + y) / 40) % 2) === 0)
+          ? "rgba(44,40,56,1)"
+          : "rgba(38,35,48,1)";
+        ctx.fillRect(x, y, 38, 38);
+      }
+    }
+
+    ctx.fillStyle = "rgba(120,88,70,1)";
+    ctx.fillRect(this.dungeon.exit.x - 16, this.dungeon.exit.y - 14, 32, 20);
+
+    ctx.fillStyle = this.dungeon.justCleared ? "rgba(188,158,255,1)" : "rgba(88,76,112,1)";
+    ctx.fillRect(this.dungeon.stairsDown.x - 18, this.dungeon.stairsDown.y - 14, 36, 24);
+    ctx.fillStyle = "rgba(32,28,42,1)";
+    ctx.fillRect(this.dungeon.stairsDown.x - 10, this.dungeon.stairsDown.y - 6, 20, 10);
+
+    if (this.dungeon.rewardChest) {
+      const c = this.dungeon.rewardChest;
+      ctx.fillStyle = this.dungeon.rewardTaken ? "rgba(110,86,54,1)" : "rgba(164,118,58,1)";
+      ctx.fillRect(c.x - 16, c.y - 10, 32, 20);
+      ctx.fillStyle = "rgba(212,182,86,1)";
+      ctx.fillRect(c.x - 12, c.y - 6, 24, 7);
+      ctx.fillStyle = "rgba(88,62,28,1)";
+      ctx.fillRect(c.x - 4, c.y - 2, 8, 4);
+    }
   }
 
   draw() {
@@ -1630,7 +1529,7 @@ export default class Game {
 
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = this.survival.dead ? "rgb(10,4,6)" : "rgb(18,22,30)";
+    ctx.fillStyle = this.dungeon.active ? "rgb(14,12,18)" : "rgb(18,22,30)";
     ctx.fillRect(0, 0, this.w, this.h);
     ctx.restore();
 
@@ -1649,17 +1548,21 @@ export default class Game {
 
     const vb = this._viewBoundsWorld();
 
-    this.world?.draw?.(ctx, { x: cam.x, y: cam.y, w: this.w, h: this.h, zoom: z });
+    if (this.dungeon.active) {
+      this._drawDungeonRoom(ctx);
+    } else {
+      this.world?.draw?.(ctx, { x: cam.x, y: cam.y, w: this.w, h: this.h, zoom: z });
+    }
 
     for (const l of this.loot) {
       if (!l.alive) continue;
-      if (!this._inView(l.x, l.y, vb)) continue;
+      if (!this.dungeon.active && !this._inView(l.x, l.y, vb)) continue;
       l.draw?.(ctx, this.time);
     }
 
     for (const e of this.enemies) {
       if (!e.alive) continue;
-      if (!this._inView(e.x, e.y, vb)) continue;
+      if (!this.dungeon.active && !this._inView(e.x, e.y, vb)) continue;
       e.draw?.(ctx, this.time);
     }
 
@@ -1667,26 +1570,29 @@ export default class Game {
 
     for (const p of this.projectiles) {
       if (!p.alive) continue;
-      if (!this._inView(p.x, p.y, vb)) continue;
+      if (!this.dungeon.active && !this._inView(p.x, p.y, vb)) continue;
       p.draw?.(ctx, this.time);
     }
 
     ctx.restore();
 
-    if (this.survival.dead) {
+    this.ui?.draw?.(ctx, this);
+
+    if (this.dungeon.active) {
       ctx.save();
-      ctx.fillStyle = "rgba(0,0,0,0.45)";
-      ctx.fillRect(0, 0, this.w, this.h);
-      ctx.fillStyle = "rgba(255,210,210,0.96)";
-      ctx.font = "bold 28px Arial";
+      ctx.fillStyle = "rgba(220,210,255,0.9)";
+      ctx.font = "bold 14px Arial";
       ctx.textAlign = "center";
-      ctx.fillText("YOU DIED", this.w * 0.5, this.h * 0.5 - 10);
-      ctx.font = "16px Arial";
-      ctx.fillStyle = "rgba(255,235,235,0.92)";
-      ctx.fillText(`Respawning in ${this.survival.respawnT.toFixed(1)}s`, this.w * 0.5, this.h * 0.5 + 22);
+      ctx.fillText(`Dungeon Floor ${this.dungeon.floor}`, this.w * 0.5, 24);
+
+      if (this.dungeon.justCleared) {
+        ctx.fillStyle = "rgba(188,255,188,0.94)";
+        ctx.fillText("Floor clear — open the chest, then press F at the purple stairs to go deeper or F at the south gate to leave", this.w * 0.5, 46);
+      } else {
+        ctx.fillStyle = "rgba(255,220,180,0.92)";
+        ctx.fillText("Clear the room to unlock the stairs and chest", this.w * 0.5, 46);
+      }
       ctx.restore();
     }
-
-    this.ui?.draw?.(ctx, this);
   }
 }
