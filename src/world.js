@@ -1,5 +1,13 @@
 // src/world.js
-// v45 CENTERED MINIMAP + TRUE LARGE MAP (FULL FILE)
+// v45 WORLD/MAP MATCH FIX (FULL FILE)
+//
+// Goals:
+// - keep the old good blue water / green grass / rock / sand look
+// - make the REAL world much bigger
+// - make map space match real world space
+// - reveal the map as the hero walks
+// - keep compatibility with the current game/ui files
+// - keep minimap generation self-contained
 
 import { hash2, fbm, RNG } from "./util.js";
 
@@ -16,8 +24,10 @@ export default class World {
 
     this.spawn = { x: 0, y: 0 };
 
-    // Real playable world half-size
-    this.boundsRadius = 4600;
+    // REAL PLAYABLE WORLD HALF-SIZE
+    // This is intentionally much bigger so the player does not feel
+    // like they can walk outside the meaningful map space.
+    this.boundsRadius = 5200;
 
     this.camps = [];
     this.waystones = [];
@@ -32,8 +42,10 @@ export default class World {
     this._minimapDirty = true;
     this._minimapTimer = 0;
 
+    // kept for game/ui compatibility
     this.mapMode = "small"; // "small" | "large"
 
+    // fog reveal sets
     this._revealedSmall = new Set();
     this._revealedLarge = new Set();
 
@@ -53,7 +65,7 @@ export default class World {
   update(dt, hero) {
     if (hero) {
       this._queueAround(hero.x, hero.y, 3);
-      this.revealAround(hero.x, hero.y, 230);
+      this.revealAround(hero.x, hero.y, 240);
     }
 
     let built = 0;
@@ -216,8 +228,9 @@ export default class World {
   }
 
   _getMapSpan(mode = this.mapMode) {
-    // Small should still feel useful, but large MUST cover the whole world.
-    if (mode === "small") return 4200;
+    // Small map still shows a large region.
+    // Large map MUST cover the full real world.
+    if (mode === "small") return 5200;
     return this.boundsRadius * 2;
   }
 
@@ -324,20 +337,21 @@ export default class World {
     if (x < -this.boundsRadius || x > this.boundsRadius) return "water";
     if (y < -this.boundsRadius || y > this.boundsRadius) return "water";
 
-    const largeA = fbm((x + this.seed * 0.11) * 0.00075, (y - this.seed * 0.07) * 0.00075, 4);
-    const largeB = fbm((x - this.seed * 0.05) * 0.00135, (y + this.seed * 0.09) * 0.00135, 4);
-    const med = fbm((x + this.seed * 0.03) * 0.0035, (y + this.seed * 0.04) * 0.0035, 3);
-    const rockN = fbm((x - this.seed * 0.02) * 0.0075, (y + this.seed * 0.05) * 0.0075, 2);
+    // continent shaping: much weaker "round island" pull than before
+    const largeA = fbm((x + this.seed * 0.11) * 0.00062, (y - this.seed * 0.07) * 0.00062, 4);
+    const largeB = fbm((x - this.seed * 0.05) * 0.00108, (y + this.seed * 0.09) * 0.00108, 4);
+    const med = fbm((x + this.seed * 0.03) * 0.0032, (y + this.seed * 0.04) * 0.0032, 3);
+    const rockN = fbm((x - this.seed * 0.02) * 0.0072, (y + this.seed * 0.05) * 0.0072, 2);
 
     const edgeX = Math.abs(x) / this.boundsRadius;
     const edgeY = Math.abs(y) / this.boundsRadius;
-    const edgePenalty = Math.max(edgeX, edgeY) * 0.22;
+    const edgePenalty = Math.max(edgeX, edgeY) * 0.12;
 
-    const land = largeA * 0.60 + largeB * 0.28 + med * 0.18 - edgePenalty;
+    const land = largeA * 0.62 + largeB * 0.30 + med * 0.18 - edgePenalty;
 
-    if (land < -0.20) return "water";
-    if (land < -0.08) return "sand";
-    if (rockN > 0.42 && land > -0.01) return "rock";
+    if (land < -0.24) return "water";
+    if (land < -0.11) return "sand";
+    if (rockN > 0.43 && land > -0.02) return "rock";
     return "grass";
   }
 
@@ -369,34 +383,35 @@ export default class World {
 
     let wid = 1;
 
-    const waystoneRings = [520, 1100, 1750, 2400, 3100, 3800];
+    const waystoneRings = [520, 1200, 1950, 2800, 3650, 4500];
     for (let ringIndex = 0; ringIndex < waystoneRings.length; ringIndex++) {
       const ring = waystoneRings[ringIndex];
       const count = 4 + ringIndex;
+
       for (let i = 0; i < count; i++) {
         const a = (i / count) * Math.PI * 2 + ringIndex * 0.17;
         const x = Math.round(Math.cos(a) * ring);
         const y = Math.round(Math.sin(a) * ring);
-        const p = this._findNearbyLand(x, y, 260);
+        const p = this._findNearbyLand(x, y, 280);
         if (p) this.waystones.push({ id: wid++, x: p.x, y: p.y });
       }
     }
 
-    for (let i = 0; i < 18; i++) {
-      const a = (i / 18) * Math.PI * 2 + 0.31;
-      const r = 1200 + (i % 5) * 540;
+    for (let i = 0; i < 22; i++) {
+      const a = (i / 22) * Math.PI * 2 + 0.31;
+      const r = 1300 + (i % 6) * 560;
       const x = Math.round(Math.cos(a) * r);
       const y = Math.round(Math.sin(a) * r);
-      const p = this._findNearbyShore(x, y, 280);
+      const p = this._findNearbyShore(x, y, 300);
       if (p) this.docks.push({ id: i + 1, x: p.x, y: p.y });
     }
 
-    for (let i = 0; i < 34; i++) {
-      const a = (i / 34) * Math.PI * 2 + 0.13;
-      const r = 850 + (i % 7) * 470;
+    for (let i = 0; i < 42; i++) {
+      const a = (i / 42) * Math.PI * 2 + 0.13;
+      const r = 900 + (i % 8) * 520;
       const x = Math.round(Math.cos(a) * r);
       const y = Math.round(Math.sin(a) * r);
-      const p = this._findNearbyLand(x, y, 280);
+      const p = this._findNearbyLand(x, y, 320);
       if (p) {
         this.camps.push({
           id: i + 1,
@@ -407,15 +422,15 @@ export default class World {
       }
     }
 
-    const dg = this._findNearbyLand(this.spawn.x + 360, this.spawn.y + 180, 260) || {
-      x: this.spawn.x + 320,
-      y: this.spawn.y + 180,
+    const dg = this._findNearbyLand(this.spawn.x + 420, this.spawn.y + 220, 260) || {
+      x: this.spawn.x + 360,
+      y: this.spawn.y + 220,
     };
     this.dungeons.push({ id: 1, x: dg.x, y: dg.y, name: "Deep Ruin" });
   }
 
   _findGoodSpawn() {
-    for (let r = 0; r <= 420; r += 24) {
+    for (let r = 0; r <= 500; r += 24) {
       for (let i = 0; i < 24; i++) {
         const a = (i / 24) * Math.PI * 2;
         const x = Math.cos(a) * r;
@@ -428,7 +443,7 @@ export default class World {
     return { x: 0, y: 0 };
   }
 
-  _findNearbyLand(x, y, maxR = 220) {
+  _findNearbyLand(x, y, maxR = 240) {
     for (let r = 0; r <= maxR; r += 16) {
       for (let i = 0; i < 24; i++) {
         const a = (i / 24) * Math.PI * 2;
@@ -443,7 +458,7 @@ export default class World {
     return null;
   }
 
-  _findNearbyShore(x, y, maxR = 220) {
+  _findNearbyShore(x, y, maxR = 240) {
     for (let r = 0; r <= maxR; r += 16) {
       for (let i = 0; i < 24; i++) {
         const a = (i / 24) * Math.PI * 2;
