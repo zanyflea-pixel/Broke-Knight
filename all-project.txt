@@ -7142,18 +7142,7 @@ function roundedRectFill(ctx, x, y, w, h, r) {
 }
 ===== ./src/game.js =====
 // src/game.js
-// v37 REWARDING EXPLORATION + CAMP REWARD PASS (FULL FILE)
-// Adds:
-// - map fast travel with awakened waystones
-// - inventory quick-equip on 1-9 / 0 while inventory is open
-// - safe swap: old equipped item returns to bag
-// - SAFE hard reset / new game from Options menu with Delete twice
-// - immediate save on important progression changes
-// - waystones fully heal + refill mana
-// - new docks grant potion restocks
-// - first-time camp clears grant a reward burst at camp center
-// - occasional potion bonus on level up
-// - keeps aim, spells, camps, loot, save/load, and progression systems intact
+// v46 DUNGEON REWARD CHESTS + DEEPER FLOOR LOOP (FULL FILE)
 
 import World from "./world.js";
 import { clamp, lerp, dist2, norm, RNG, hash2 } from "./util.js";
@@ -7176,7 +7165,7 @@ export default class Game {
 
     this.input = new Input(window);
     this.ui = new UI(canvas);
-    this.save = new Save("broke-knight-save-v37");
+    this.save = new Save("broke-knight-save-v46");
 
     this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
     this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
@@ -7196,13 +7185,13 @@ export default class Game {
     };
 
     this.perf = {
-      enemyUpdateRadius: 1100,
-      lootUpdateRadius: 700,
-      projectileUpdateRadius: 1300,
-      spawnRadius: 1200,
+      enemyUpdateRadius: 1500,
+      lootUpdateRadius: 900,
+      projectileUpdateRadius: 1700,
+      spawnRadius: 1400,
       drawPad: 180,
-      maxEnemies: 72,
-      maxLoot: 100,
+      maxEnemies: 110,
+      maxLoot: 140,
       cleanupTimer: 0,
       cleanupEvery: 0.35,
     };
@@ -7228,6 +7217,7 @@ export default class Game {
       currentZoneText: "",
       currentZoneId: "",
       zoneMsgCooldown: 0,
+      dungeonBest: 0,
     };
 
     this._pickupMsgCooldown = 0;
@@ -7245,6 +7235,17 @@ export default class Game {
       r: { name: "Orb", mana: 18, cd: 2.4 },
     };
     this.spellCd = { q: 0, w: 0, e: 0, r: 0 };
+
+    this.dungeon = {
+      active: false,
+      floor: 0,
+      room: null,
+      stairsDown: null,
+      exit: null,
+      justCleared: false,
+      rewardChest: null,
+      rewardTaken: false,
+    };
 
     this._tryLoad();
     this._primeCamps();
@@ -7298,6 +7299,7 @@ export default class Game {
         Array.isArray(s.progress.clearedCamps) ? s.progress.clearedCamps : []
       );
       this.progress.eliteKills = Math.max(0, s.progress.eliteKills | 0);
+      this.progress.dungeonBest = Math.max(0, s.progress.dungeonBest | 0);
     }
 
     if (s.hero?.lastMove && Number.isFinite(s.hero.lastMove.x) && Number.isFinite(s.hero.lastMove.y)) {
@@ -7332,6 +7334,7 @@ export default class Game {
         discoveredDocks: Array.from(this.progress.discoveredDocks),
         clearedCamps: Array.from(this.progress.clearedCamps),
         eliteKills: this.progress.eliteKills | 0,
+        dungeonBest: this.progress.dungeonBest | 0,
       },
     });
   }
@@ -7403,61 +7406,6 @@ export default class Game {
     const st = this.hero.getStats?.() || { maxHp: this.hero.maxHp || 100, maxMana: this.hero.maxMana || 60 };
     this.hero.hp = st.maxHp;
     this.hero.mana = st.maxMana;
-  }
-
-  _grantDockRestock(firstDock = false) {
-    const hpGain = firstDock ? 2 : 1;
-    const manaGain = 1;
-    this.hero.potions.hp = (this.hero.potions.hp | 0) + hpGain;
-    this.hero.potions.mana = (this.hero.potions.mana | 0) + manaGain;
-  }
-
-  _spawnCampRewardBurst(camp) {
-    if (!camp) return;
-    if (this.loot.length >= this.perf.maxLoot - 4) return;
-
-    const cx = camp.x;
-    const cy = camp.y;
-    const tier = Math.max(1, camp.tier | 0);
-
-    this.loot.push(new Loot(cx - 14, cy - 8, "gold", { amount: 10 + tier * 4 }));
-    this.loot.push(new Loot(cx + 14, cy - 4, "gold", { amount: 8 + tier * 3 }));
-
-    if (Math.random() < 0.85) {
-      this.loot.push(new Loot(cx - 8, cy + 10, "potion", {
-        potionType: Math.random() < 0.5 ? "hp" : "mana",
-        amount: 1,
-      }));
-    }
-
-    const slotRoll = Math.random();
-    const slot =
-      slotRoll < 0.28 ? "weapon" :
-      slotRoll < 0.50 ? "armor" :
-      slotRoll < 0.66 ? "helm" :
-      slotRoll < 0.80 ? "boots" :
-      slotRoll < 0.90 ? "ring" : "trinket";
-
-    const rarity =
-      tier >= 3
-        ? (Math.random() < 0.30 ? "epic" : "rare")
-        : (Math.random() < 0.55 ? "rare" : "uncommon");
-
-    const gearSeed = hash2(this.seed ^ 0x7788, (camp.id | 0) * 97 + tier * 11);
-    const gear = makeGear(slot, Math.max(1, this.hero.level || 1), rarity, gearSeed);
-    this.loot.push(new Loot(cx + 2, cy + 16, "gear", { gear }));
-
-    this._shake(0.10, 4.5);
-  }
-
-  _maybeGrantLevelPotionBonus() {
-    const lvl = this.hero.level | 0;
-    if (lvl > 0 && lvl % 2 === 0) {
-      this.hero.potions.hp = (this.hero.potions.hp | 0) + 1;
-      this._msg(`Level ${lvl}! Bonus HP potion gained.`, 2.4);
-      return true;
-    }
-    return false;
   }
 
   _coolMsg(text, t = 1.6) {
@@ -7546,9 +7494,10 @@ export default class Game {
   }
 
   _pickupNearbyLootBonus() {
+    const pickupR = this.dungeon.active ? 34 : 26;
     for (const l of this.loot) {
       if (!l.alive) continue;
-      if (dist2(this.hero.x, this.hero.y, l.x, l.y) < 26 * 26) {
+      if (dist2(this.hero.x, this.hero.y, l.x, l.y) < pickupR * pickupR) {
         const kind = l.kind;
         const data = l.data || {};
 
@@ -7576,7 +7525,7 @@ export default class Game {
     const st = this.hero.getStats?.() || { maxMana: 60 };
     if (this.hero.mana >= st.maxMana) return;
 
-    const base = this.hero.state?.sailing ? 3.0 : 4.5;
+    const base = this.dungeon.active ? 5.2 : (this.hero.state?.sailing ? 3.0 : 4.5);
     this.hero.mana = Math.min(st.maxMana, this.hero.mana + base * dt);
   }
 
@@ -7589,9 +7538,7 @@ export default class Game {
   _tickResetConfirm(dt) {
     if (this._resetConfirmT > 0) {
       this._resetConfirmT = Math.max(0, this._resetConfirmT - dt);
-      if (this._resetConfirmT <= 0) {
-        this._resetConfirmT = 0;
-      }
+      if (this._resetConfirmT <= 0) this._resetConfirmT = 0;
     }
   }
 
@@ -7628,9 +7575,7 @@ export default class Game {
     if (up) ay -= 1;
     if (down) ay += 1;
 
-    if (ax !== 0 || ay !== 0) {
-      return norm(ax, ay);
-    }
+    if (ax !== 0 || ay !== 0) return norm(ax, ay);
     return null;
   }
 
@@ -7671,6 +7616,11 @@ export default class Game {
       this._msg(`Elite defeated! (+${baseXP + bonusXP} XP, +${bonusGold} Gold)`, 2.6);
       this._shake(0.08, 3.2);
       this._saveSoon();
+    }
+
+    if (this.dungeon.active) {
+      this._grantGold(2 + (this.dungeon.floor | 0));
+      this._grantXP(1 + Math.floor(this.dungeon.floor * 0.5));
     }
 
     this._dropLoot(enemy.x, enemy.y, enemy.tier || 1, enemy.kind, !!enemy.elite);
@@ -7719,6 +7669,7 @@ export default class Game {
   }
 
   _spawnFromCamps(dt) {
+    if (this.dungeon.active) return;
     if (this.enemies.length >= this.perf.maxEnemies) return;
 
     this._spawnTimer += dt;
@@ -7752,7 +7703,6 @@ export default class Game {
           this._grantXP(xp);
 
           this._spawnCampRewardBurst(c);
-
           this._msg(`Camp cleared! Reward cache found. (+${xp} XP, +${gold} Gold)`, 3.2);
           this._saveSoon();
         } else {
@@ -7786,40 +7736,51 @@ export default class Game {
     }
   }
 
-  _updateCampZoneHints() {
-    const camps = this.world?.camps || [];
-    let nearest = null;
-    let best = Infinity;
+  _spawnCampRewardBurst(camp) {
+    if (!camp) return;
+    if (this.loot.length >= this.perf.maxLoot - 4) return;
 
-    for (const c of camps) {
-      const d = dist2(this.hero.x, this.hero.y, c.x, c.y);
-      if (d < best) {
-        best = d;
-        nearest = c;
-      }
-    }
+    const cx = camp.x;
+    const cy = camp.y;
+    const tier = Math.max(1, camp.tier | 0);
 
-    if (nearest && best < 180 * 180) {
-      const st = this._campState.get(nearest.id);
-      if (st && !st.announcedNearby) {
-        st.announcedNearby = true;
-        this._msg(`Enemy camp nearby (Tier ${nearest.tier}).`, 2.2);
-      }
-    }
+    this.loot.push(new Loot(cx - 14, cy - 8, "gold", { amount: 10 + tier * 4 }));
+    this.loot.push(new Loot(cx + 14, cy - 4, "gold", { amount: 8 + tier * 3 }));
+    this.loot.push(new Loot(cx - 8, cy + 10, "potion", {
+      potionType: Math.random() < 0.5 ? "hp" : "mana",
+      amount: 1,
+    }));
+
+    const slotRoll = Math.random();
+    const slot =
+      slotRoll < 0.28 ? "weapon" :
+      slotRoll < 0.50 ? "armor" :
+      slotRoll < 0.66 ? "helm" :
+      slotRoll < 0.80 ? "boots" :
+      slotRoll < 0.90 ? "ring" : "trinket";
+
+    const rarity =
+      tier >= 3
+        ? (Math.random() < 0.30 ? "epic" : "rare")
+        : (Math.random() < 0.55 ? "rare" : "uncommon");
+
+    const gearSeed = hash2(this.seed ^ 0x7788, (camp.id | 0) * 97 + tier * 11);
+    const gear = makeGear(slot, Math.max(1, this.hero.level || 1), rarity, gearSeed);
+    this.loot.push(new Loot(cx + 2, cy + 16, "gear", { gear }));
+
+    this._shake(0.10, 4.5);
   }
 
   _getDiscoveredWaystones() {
     const all = Array.isArray(this.world?.waystones) ? this.world.waystones.slice() : [];
     return all
       .filter(w => this.progress?.discoveredWaystones?.has?.(w.id))
-      .sort((a, b) => {
-        const ai = Number.isFinite(a?.id) ? a.id : 0;
-        const bi = Number.isFinite(b?.id) ? b.id : 0;
-        return ai - bi;
-      });
+      .sort((a, b) => (a.id || 0) - (b.id || 0));
   }
 
   _teleportToWaystone(index) {
+    if (this.dungeon.active) return;
+
     const ways = this._getDiscoveredWaystones();
 
     if (!ways.length) {
@@ -7852,6 +7813,11 @@ export default class Game {
   _handleFastTravelInput() {
     if (this.menu.open !== "map") return;
 
+    if (this.input.wasPressed("z")) {
+      this.world.toggleMapScale();
+      this._msg(`Map scale: ${this.world.mapMode}`, 1.2);
+    }
+
     if (this.input.wasPressed("1")) this._teleportToWaystone(0);
     else if (this.input.wasPressed("2")) this._teleportToWaystone(1);
     else if (this.input.wasPressed("3")) this._teleportToWaystone(2);
@@ -7871,9 +7837,7 @@ export default class Game {
 
     try {
       this.save?.clear?.();
-    } catch (_) {
-      // ignore clear failures; still try reloading
-    }
+    } catch (_) {}
 
     setTimeout(() => {
       if (typeof window !== "undefined" && window.location) {
@@ -7937,7 +7901,11 @@ export default class Game {
       const nx = this.hero.x + this.hero.vx * dt;
       const ny = this.hero.y + this.hero.vy * dt;
 
-      if (this.hero.state?.sailing) {
+      if (this.dungeon.active) {
+        const room = this.dungeon.room;
+        this.hero.x = clamp(nx, room.x0 + 20, room.x1 - 20);
+        this.hero.y = clamp(ny, room.y0 + 20, room.y1 - 20);
+      } else if (this.hero.state?.sailing) {
         this.hero.x = nx;
         this.hero.y = ny;
       } else {
@@ -7966,6 +7934,32 @@ export default class Game {
   _handleInteract() {
     if (!this.input.wasPressed("f")) return;
 
+    if (this.dungeon.active) {
+      if (this.dungeon.rewardChest && !this.dungeon.rewardTaken && dist2(this.hero.x, this.hero.y, this.dungeon.rewardChest.x, this.dungeon.rewardChest.y) < 78 * 78) {
+        this._openDungeonChest();
+        return;
+      }
+
+      if (this.dungeon.justCleared && this.dungeon.stairsDown && dist2(this.hero.x, this.hero.y, this.dungeon.stairsDown.x, this.dungeon.stairsDown.y) < 70 * 70) {
+        this._enterDungeonFloor(this.dungeon.floor + 1);
+        return;
+      }
+
+      if (this.dungeon.exit && dist2(this.hero.x, this.hero.y, this.dungeon.exit.x, this.dungeon.exit.y) < 70 * 70) {
+        this._leaveDungeon();
+        return;
+      }
+
+      return;
+    }
+
+    for (const dg of this.world?.dungeons || []) {
+      if (dist2(this.hero.x, this.hero.y, dg.x, dg.y) < 90 * 90) {
+        this._enterDungeonFloor(1);
+        return;
+      }
+    }
+
     for (const d of this.world?.docks || []) {
       if (dist2(this.hero.x, this.hero.y, d.x, d.y) < 70 * 70) {
         const firstDock = !this.progress.discoveredDocks.has(d.id);
@@ -7975,16 +7969,11 @@ export default class Game {
 
         if (firstDock) {
           this._grantGold(10);
-          this._grantDockRestock(true);
-          this._msg(
-            this.hero.state.sailing
-              ? "New dock found. Sailing: ON (+10 Gold, dock supplies gained)"
-              : "New dock found (+10 Gold, dock supplies gained)",
-            3
-          );
+          this.hero.potions.hp = (this.hero.potions.hp | 0) + 2;
+          this.hero.potions.mana = (this.hero.potions.mana | 0) + 1;
+          this._msg(this.hero.state.sailing ? "New dock found. Sailing: ON (+10 Gold)" : "New dock found (+10 Gold)", 2.6);
         } else {
-          this._grantDockRestock(false);
-          this._msg(this.hero.state.sailing ? "Sailing: ON (+dock supplies)" : "Sailing: OFF (+dock supplies)");
+          this._msg(this.hero.state.sailing ? "Sailing: ON" : "Sailing: OFF");
         }
 
         this._questAddProgress("q_sail", 1);
@@ -8017,9 +8006,168 @@ export default class Game {
     this._msg("Nothing to interact with here.");
   }
 
+  _enterDungeonFloor(floor) {
+    this.dungeon.active = true;
+    this.dungeon.floor = Math.max(1, floor | 0);
+    this.dungeon.justCleared = false;
+    this.dungeon.rewardChest = null;
+    this.dungeon.rewardTaken = false;
+
+    const size = 520 + this.dungeon.floor * 18;
+    this.dungeon.room = {
+      x0: -size * 0.5,
+      y0: -size * 0.5,
+      x1: size * 0.5,
+      y1: size * 0.5,
+    };
+    this.dungeon.exit = { x: 0, y: size * 0.5 - 52 };
+    this.dungeon.stairsDown = { x: 0, y: -size * 0.5 + 56 };
+
+    this.hero.x = 0;
+    this.hero.y = size * 0.5 - 96;
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+    this.hero.state.sailing = false;
+
+    this.enemies = [];
+    this.projectiles = [];
+    this.loot = [];
+
+    const count = 5 + this.dungeon.floor * 2;
+    for (let i = 0; i < count; i++) {
+      const px = this._rng.range(this.dungeon.room.x0 + 60, this.dungeon.room.x1 - 60);
+      const py = this._rng.range(this.dungeon.room.y0 + 70, this.dungeon.room.y1 - 120);
+
+      const tier = Math.min(16, 1 + Math.floor(this.dungeon.floor * 0.9) + (i % 3));
+      const kind = ["blob", "stalker", "brute", "caster"][i % 4];
+      const e = new Enemy(px, py, tier, kind, hash2(this.seed, this.dungeon.floor * 100 + i));
+
+      if (this.dungeon.floor >= 3 && i === count - 1) e.elite = true;
+      if (this.dungeon.floor >= 6 && i === count - 2) e.elite = true;
+      if (this.dungeon.floor >= 10 && i % 5 === 0) e.elite = true;
+
+      this.enemies.push(e);
+    }
+
+    this._msg(`Entered dungeon floor ${this.dungeon.floor}`, 2.4);
+    this.progress.dungeonBest = Math.max(this.progress.dungeonBest | 0, this.dungeon.floor | 0);
+    this._saveSoon();
+  }
+
+  _spawnDungeonRewardChest() {
+    if (!this.dungeon.active || this.dungeon.rewardChest) return;
+    this.dungeon.rewardChest = {
+      x: 0,
+      y: 0,
+    };
+    this.dungeon.rewardTaken = false;
+  }
+
+  _openDungeonChest() {
+    if (!this.dungeon.rewardChest || this.dungeon.rewardTaken) return;
+
+    const floor = this.dungeon.floor | 0;
+    const gold = 18 + floor * 10;
+    const xp = 14 + floor * 7;
+
+    this._grantGold(gold);
+    this._grantXP(xp);
+
+    this.hero.potions.hp = (this.hero.potions.hp | 0) + (floor >= 4 ? 1 : 0);
+    this.hero.potions.mana = (this.hero.potions.mana | 0) + 1;
+
+    if (this.loot.length < this.perf.maxLoot - 3) {
+      this.loot.push(new Loot(this.dungeon.rewardChest.x - 18, this.dungeon.rewardChest.y + 10, "gold", { amount: 8 + floor * 2 }));
+      this.loot.push(new Loot(this.dungeon.rewardChest.x + 18, this.dungeon.rewardChest.y + 10, "gold", { amount: 6 + floor * 2 }));
+    }
+
+    if (Math.random() < Math.min(0.85, 0.28 + floor * 0.06)) {
+      const slotRoll = Math.random();
+      const slot =
+        slotRoll < 0.28 ? "weapon" :
+        slotRoll < 0.50 ? "armor" :
+        slotRoll < 0.66 ? "helm" :
+        slotRoll < 0.80 ? "boots" :
+        slotRoll < 0.90 ? "ring" : "trinket";
+
+      const rarity =
+        floor >= 8
+          ? (Math.random() < 0.35 ? "epic" : "rare")
+          : (Math.random() < 0.55 ? "rare" : "uncommon");
+
+      const gearSeed = hash2(this.seed ^ 0x9911, floor * 211 + (this.hero.level || 1) * 17);
+      const gear = makeGear(slot, Math.max(1, (this.hero.level || 1) + Math.floor(floor / 2)), rarity, gearSeed);
+      this.hero.inventory.push(gear);
+      const equipped = this._maybeAutoEquip(gear);
+      this._msg(equipped ? `Dungeon chest! Equipped ${gear.name}` : `Dungeon chest! Found ${gear.name}`, 2.8);
+    } else {
+      this._msg(`Dungeon chest opened! (+${xp} XP, +${gold} Gold)`, 2.8);
+    }
+
+    this.dungeon.rewardTaken = true;
+    this._shake(0.12, 5);
+    this._saveSoon();
+  }
+
+  _leaveDungeon() {
+    this.dungeon.active = false;
+    this.dungeon.rewardChest = null;
+    this.dungeon.rewardTaken = false;
+
+    this.enemies = [];
+    this.projectiles = [];
+    this.loot = [];
+
+    const dg = this.world.dungeons?.[0];
+    if (dg) {
+      this.hero.x = dg.x + 42;
+      this.hero.y = dg.y + 18;
+    } else {
+      this.hero.x = this.world.spawn.x;
+      this.hero.y = this.world.spawn.y;
+    }
+
+    this._msg(`Escaped the dungeon. Best floor: ${this.progress.dungeonBest}`, 2.8);
+    this._saveSoon();
+  }
+
+  _updateDungeonClear() {
+    if (!this.dungeon.active) return;
+    const alive = this.enemies.some(e => e.alive);
+    if (!alive && !this.dungeon.justCleared) {
+      this.dungeon.justCleared = true;
+
+      const floor = this.dungeon.floor | 0;
+      const gold = 12 + floor * 8;
+      const xp = 10 + floor * 6;
+
+      this._grantGold(gold);
+      this._grantXP(xp);
+      this.hero.potions.mana = (this.hero.potions.mana | 0) + (floor >= 3 ? 1 : 0);
+
+      this._spawnDungeonRewardChest();
+
+      this._msg(`Floor ${floor} cleared! Chest unlocked. (+${xp} XP, +${gold} Gold)`, 3.0);
+      this._shake(0.16, 5);
+      this._saveSoon();
+    }
+  }
+
   _updateZoneMessages(dt) {
     if (this.progress.zoneMsgCooldown > 0) {
       this.progress.zoneMsgCooldown -= dt;
+    }
+
+    if (this.dungeon.active) {
+      const zoneText = `Dungeon Floor ${this.dungeon.floor}`;
+      const zoneId = `dungeon-${this.dungeon.floor}`;
+      if (zoneId !== this.progress.currentZoneId && this.progress.zoneMsgCooldown <= 0) {
+        this.progress.currentZoneId = zoneId;
+        this.progress.currentZoneText = zoneText;
+        this.progress.zoneMsgCooldown = 2.0;
+        this._msg(zoneText, 1.8);
+      }
+      return;
     }
 
     let zoneText = "";
@@ -8038,6 +8186,16 @@ export default class Game {
         if (dist2(this.hero.x, this.hero.y, d.x, d.y) < 150 * 150) {
           zoneText = "Old Dock";
           zoneId = `dock-${d.id}`;
+          break;
+        }
+      }
+    }
+
+    if (!zoneText) {
+      for (const dg of this.world?.dungeons || []) {
+        if (dist2(this.hero.x, this.hero.y, dg.x, dg.y) < 150 * 150) {
+          zoneText = "Dungeon Entrance";
+          zoneId = `dungeon-entrance-${dg.id}`;
           break;
         }
       }
@@ -8127,15 +8285,12 @@ export default class Game {
     const radius = 92;
     for (const e of this.enemies) {
       if (!e.alive) continue;
-      if (!this._withinRadius(e.x, e.y, this.perf.enemyUpdateRadius)) continue;
       if (dist2(this.hero.x, this.hero.y, e.x, e.y) <= radius * radius) {
         const dmg = Math.round(st.dmg * 0.55);
         e.takeDamage?.(dmg);
-
         const n = norm(e.x - this.hero.x, e.y - this.hero.y);
         e.x += n.x * 14;
         e.y += n.y * 14;
-
         if (!e.alive) this._onEnemyDefeated(e);
       }
     }
@@ -8154,7 +8309,11 @@ export default class Game {
     const nx = this.hero.x + dx * dist;
     const ny = this.hero.y + dy * dist;
 
-    if (this.hero.state?.sailing) {
+    if (this.dungeon.active) {
+      const room = this.dungeon.room;
+      this.hero.x = clamp(nx, room.x0 + 20, room.x1 - 20);
+      this.hero.y = clamp(ny, room.y0 + 20, room.y1 - 20);
+    } else if (this.hero.state?.sailing) {
       this.hero.x = nx;
       this.hero.y = ny;
     } else {
@@ -8226,7 +8385,7 @@ export default class Game {
 
     for (const p of this.projectiles) {
       if (!p.alive) continue;
-      if (!this._withinRadius(p.x, p.y, r)) continue;
+      if (!this._withinRadius(p.x, p.y, r) && !this.dungeon.active) continue;
 
       p.update?.(dt, this.world);
       if (!p.alive) continue;
@@ -8234,7 +8393,7 @@ export default class Game {
       if (p.meta?.onHitHero || p.friendly === false) {
         if (dist2(p.x, p.y, this.hero.x, this.hero.y) < (p.hitRadius || 18) ** 2) {
           const dealt = this.hero.takeDamage?.(p.dmg) || p.dmg;
-          this._msg(`-${dealt} HP`, 1.1);
+          this._msg(`-${Math.round(dealt)} HP`, 1.1);
           p.alive = false;
           this._shake(0.08, 3);
         }
@@ -8244,8 +8403,6 @@ export default class Game {
       const hr2 = (p.hitRadius || 18) ** 2;
       for (const e of this.enemies) {
         if (!e.alive) continue;
-        if (!this._withinRadius(e.x, e.y, this.perf.enemyUpdateRadius)) continue;
-
         const id = e._id || (e._id = `${Math.random()}`);
         if (p._hitSet && p._hitSet.has(id)) continue;
 
@@ -8256,14 +8413,13 @@ export default class Game {
           if (Math.random() < crit) dmg = Math.round(dmg * critMult);
 
           e.takeDamage?.(dmg);
-          p._hitSet?.add?.(id);
+          if (!p._hitSet) p._hitSet = new Set();
+          p._hitSet.add(id);
           this._shake(0.04, 1.8);
 
           if (!p.meta?.pierce) p.alive = false;
 
-          if (!e.alive) {
-            this._onEnemyDefeated(e);
-          }
+          if (!e.alive) this._onEnemyDefeated(e);
           break;
         }
       }
@@ -8333,6 +8489,8 @@ export default class Game {
   }
 
   _cleanupFarEntities() {
+    if (this.dungeon.active) return;
+
     const enemyKeepR2 = (this.perf.enemyUpdateRadius + 900) ** 2;
     const lootKeepR2 = (this.perf.lootUpdateRadius + 900) ** 2;
     const projKeepR2 = (this.perf.projectileUpdateRadius + 900) ** 2;
@@ -8360,12 +8518,8 @@ export default class Game {
     dt = clamp(dt, 0, this._dtClamp);
     this.time += dt;
 
-    if (this._pickupMsgCooldown > 0) {
-      this._pickupMsgCooldown = Math.max(0, this._pickupMsgCooldown - dt);
-    }
-    if (this._spellMsgCooldown > 0) {
-      this._spellMsgCooldown = Math.max(0, this._spellMsgCooldown - dt);
-    }
+    if (this._pickupMsgCooldown > 0) this._pickupMsgCooldown = Math.max(0, this._pickupMsgCooldown - dt);
+    if (this._spellMsgCooldown > 0) this._spellMsgCooldown = Math.max(0, this._spellMsgCooldown - dt);
 
     this._tickSpellCooldowns(dt);
     this._tickResetConfirm(dt);
@@ -8375,7 +8529,9 @@ export default class Game {
     this._handleInventoryHotkeys();
     this._handleResetHotkey();
 
-    this.world?.update?.(dt, this.hero);
+    if (!this.dungeon.active) {
+      this.world?.update?.(dt, this.hero);
+    }
 
     const blockMove =
       this.menu.open === "inventory" ||
@@ -8395,14 +8551,13 @@ export default class Game {
     this._regenMana(dt);
 
     this._updateZoneMessages(dt);
-    this._updateCampZoneHints();
 
-    this._spawnFromCamps(dt);
+    if (!this.dungeon.active) this._spawnFromCamps(dt);
 
     const enemyR = this.perf.enemyUpdateRadius;
     for (const e of this.enemies) {
       if (!e.alive) continue;
-      if (!this._withinRadius(e.x, e.y, enemyR)) continue;
+      if (!this.dungeon.active && !this._withinRadius(e.x, e.y, enemyR)) continue;
       e.update?.(dt, this.hero, this.world, this);
     }
 
@@ -8411,18 +8566,17 @@ export default class Game {
     const lootR = this.perf.lootUpdateRadius;
     for (const l of this.loot) {
       if (!l.alive) continue;
-      if (!this._withinRadius(l.x, l.y, lootR)) continue;
+      if (!this.dungeon.active && !this._withinRadius(l.x, l.y, lootR)) continue;
       l.update?.(dt, this.hero);
     }
 
     this._pickupNearbyLootBonus();
+    this._updateDungeonClear();
 
     if ((this.hero.level || 1) > this._levelMsgShown) {
       this._levelMsgShown = this.hero.level || 1;
-      const gotPotion = this._maybeGrantLevelPotionBonus();
-      if (!gotPotion) {
-        this._msg(`Level up! You are now level ${this.hero.level}.`, 2.8);
-      }
+      this._msg(`Level up! You are now level ${this.hero.level}.`, 2.8);
+      this.hero.potions.hp = (this.hero.potions.hp | 0) + 1;
       this._saveSoon();
     }
 
@@ -8470,7 +8624,46 @@ export default class Game {
       cam.sy = 0;
     }
 
-    cam.zoom = lerp(cam.zoom, 1.0, 1 - Math.pow(0.001, dt));
+    cam.zoom = lerp(cam.zoom, this.dungeon.active ? 1.04 : 1.0, 1 - Math.pow(0.001, dt));
+  }
+
+  _drawDungeonRoom(ctx) {
+    const r = this.dungeon.room;
+    if (!r) return;
+
+    ctx.fillStyle = "rgba(26,24,34,1)";
+    ctx.fillRect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
+
+    ctx.strokeStyle = "rgba(90,84,108,1)";
+    ctx.lineWidth = 14;
+    ctx.strokeRect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
+
+    for (let x = r.x0 + 18; x < r.x1 - 18; x += 40) {
+      for (let y = r.y0 + 18; y < r.y1 - 18; y += 40) {
+        ctx.fillStyle = ((Math.floor((x + y) / 40) % 2) === 0)
+          ? "rgba(44,40,56,1)"
+          : "rgba(38,35,48,1)";
+        ctx.fillRect(x, y, 38, 38);
+      }
+    }
+
+    ctx.fillStyle = "rgba(120,88,70,1)";
+    ctx.fillRect(this.dungeon.exit.x - 16, this.dungeon.exit.y - 14, 32, 20);
+
+    ctx.fillStyle = this.dungeon.justCleared ? "rgba(188,158,255,1)" : "rgba(88,76,112,1)";
+    ctx.fillRect(this.dungeon.stairsDown.x - 18, this.dungeon.stairsDown.y - 14, 36, 24);
+    ctx.fillStyle = "rgba(32,28,42,1)";
+    ctx.fillRect(this.dungeon.stairsDown.x - 10, this.dungeon.stairsDown.y - 6, 20, 10);
+
+    if (this.dungeon.rewardChest) {
+      const c = this.dungeon.rewardChest;
+      ctx.fillStyle = this.dungeon.rewardTaken ? "rgba(110,86,54,1)" : "rgba(164,118,58,1)";
+      ctx.fillRect(c.x - 16, c.y - 10, 32, 20);
+      ctx.fillStyle = "rgba(212,182,86,1)";
+      ctx.fillRect(c.x - 12, c.y - 6, 24, 7);
+      ctx.fillStyle = "rgba(88,62,28,1)";
+      ctx.fillRect(c.x - 4, c.y - 2, 8, 4);
+    }
   }
 
   draw() {
@@ -8479,7 +8672,7 @@ export default class Game {
 
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = "rgb(18,22,30)";
+    ctx.fillStyle = this.dungeon.active ? "rgb(14,12,18)" : "rgb(18,22,30)";
     ctx.fillRect(0, 0, this.w, this.h);
     ctx.restore();
 
@@ -8498,17 +8691,21 @@ export default class Game {
 
     const vb = this._viewBoundsWorld();
 
-    this.world?.draw?.(ctx, { x: cam.x, y: cam.y, w: this.w, h: this.h, zoom: z });
+    if (this.dungeon.active) {
+      this._drawDungeonRoom(ctx);
+    } else {
+      this.world?.draw?.(ctx, { x: cam.x, y: cam.y, w: this.w, h: this.h, zoom: z });
+    }
 
     for (const l of this.loot) {
       if (!l.alive) continue;
-      if (!this._inView(l.x, l.y, vb)) continue;
+      if (!this.dungeon.active && !this._inView(l.x, l.y, vb)) continue;
       l.draw?.(ctx, this.time);
     }
 
     for (const e of this.enemies) {
       if (!e.alive) continue;
-      if (!this._inView(e.x, e.y, vb)) continue;
+      if (!this.dungeon.active && !this._inView(e.x, e.y, vb)) continue;
       e.draw?.(ctx, this.time);
     }
 
@@ -8516,13 +8713,30 @@ export default class Game {
 
     for (const p of this.projectiles) {
       if (!p.alive) continue;
-      if (!this._inView(p.x, p.y, vb)) continue;
+      if (!this.dungeon.active && !this._inView(p.x, p.y, vb)) continue;
       p.draw?.(ctx, this.time);
     }
 
     ctx.restore();
 
     this.ui?.draw?.(ctx, this);
+
+    if (this.dungeon.active) {
+      ctx.save();
+      ctx.fillStyle = "rgba(220,210,255,0.9)";
+      ctx.font = "bold 14px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(`Dungeon Floor ${this.dungeon.floor}`, this.w * 0.5, 24);
+
+      if (this.dungeon.justCleared) {
+        ctx.fillStyle = "rgba(188,255,188,0.94)";
+        ctx.fillText("Floor clear — open the chest, then press F at the purple stairs to go deeper or F at the south gate to leave", this.w * 0.5, 46);
+      } else {
+        ctx.fillStyle = "rgba(255,220,180,0.92)";
+        ctx.fillText("Clear the room to unlock the stairs and chest", this.w * 0.5, 46);
+      }
+      ctx.restore();
+    }
   }
 }
 ===== ./src/input.js =====
@@ -9300,16 +9514,7 @@ function dedupeInts(arr) {
 }
 ===== ./src/ui.js =====
 // src/ui.js
-// v47 UI RESET HINT + CONTROL POLISH (FULL FILE)
-// Safe UI-only upgrade:
-// - clearer interaction prompt
-// - stronger pinned quest box
-// - better message styling
-// - cleaner spell bar emphasis
-// - map markers + fast travel legend
-// - inventory hotkey reminder
-// - options menu shows Delete reset / new game hint
-// - keeps the current panel/menu structure intact
+// v50 CENTERED MINIMAP + FOLLOWING MAP PANEL (FULL FILE)
 
 import { clamp } from "./util.js";
 
@@ -9352,7 +9557,7 @@ export default class UI {
     }
 
     this._miniT += dt;
-    if (this._miniT >= 0.35) {
+    if (this._miniT >= 0.18) {
       this._miniT = 0;
       this._mini = game?.world?.getMinimapCanvas?.() || null;
     }
@@ -9448,6 +9653,14 @@ export default class UI {
     ctx.fillText(`DMG ${Math.round(st.dmg || 0)}`, bx + 120, by + 92);
     ctx.fillText(`ARM ${Math.round(st.armor || 0)}`, bx + 190, by + 92);
     ctx.fillText(`CRIT ${critPct}%`, bx + 255, by + 92);
+
+    if (game?.dungeon?.active) {
+      ctx.fillStyle = "rgba(188,158,255,0.96)";
+      ctx.fillText(`Dungeon Floor ${game.dungeon.floor || 1}`, bx, by + 114);
+    } else if ((game?.progress?.dungeonBest || 0) > 0) {
+      ctx.fillStyle = "rgba(188,158,255,0.90)";
+      ctx.fillText(`Best Depth ${game.progress.dungeonBest}`, bx, by + 114);
+    }
 
     ctx.restore();
   }
@@ -9619,8 +9832,9 @@ export default class UI {
   }
 
   _drawMinimap(ctx, game) {
-    const mini = this._mini || game?.world?.getMinimapCanvas?.();
-    if (!mini) return;
+    const world = game?.world;
+    const mini = this._mini || world?.getMinimapCanvas?.();
+    if (!mini || !world) return;
 
     const size = 154;
     const x = this.w - size - 16;
@@ -9633,27 +9847,57 @@ export default class UI {
     roundRect(ctx, x - 8, y - 8, size + 16, size + 16, 16);
     ctx.fill();
 
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(mini, x, y, size, size);
-    ctx.imageSmoothingEnabled = true;
+    // Keep player centered while minimap terrain moves under them.
+    const span = getMapSpan(world, world.mapMode || "small");
+    const half = span * 0.5;
 
-    const span = 2600;
-    const half = span / 2;
-    const sx = game.world?.spawn?.x || 0;
-    const sy = game.world?.spawn?.y || 0;
-    const hx = ((game.hero.x - (sx - half)) / span) * (size - 1);
-    const hy = ((game.hero.y - (sy - half)) / span) * (size - 1);
+    const heroNormX = clamp((game.hero.x + half) / span, 0, 1);
+    const heroNormY = clamp((game.hero.y + half) / span, 0, 1);
+
+    const srcFrac = 0.22;
+    const srcW = Math.max(28, Math.floor(mini.width * srcFrac));
+    const srcH = Math.max(28, Math.floor(mini.height * srcFrac));
+
+    let srcX = Math.floor(heroNormX * mini.width - srcW * 0.5);
+    let srcY = Math.floor(heroNormY * mini.height - srcH * 0.5);
+
+    srcX = clamp(srcX, 0, Math.max(0, mini.width - srcW));
+    srcY = clamp(srcY, 0, Math.max(0, mini.height - srcH));
+
+    roundRect(ctx, x, y, size, size, 12);
+    ctx.clip();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(mini, srcX, srcY, srcW, srcH, x, y, size, size);
+    ctx.imageSmoothingEnabled = true;
+    ctx.restore();
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,255,255,0.16)";
+    ctx.lineWidth = 1;
+    roundRect(ctx, x, y, size, size, 12);
+    ctx.stroke();
+
+    const px = x + size * 0.5;
+    const py = y + size * 0.5;
+
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, py + 0.5);
+    ctx.lineTo(x + size, py + 0.5);
+    ctx.moveTo(px + 0.5, y);
+    ctx.lineTo(px + 0.5, y + size);
+    ctx.stroke();
 
     ctx.fillStyle = "rgba(20,20,20,0.92)";
-    ctx.fillRect((x + hx - 3) | 0, (y + hy - 3) | 0, 6, 6);
-
+    ctx.fillRect((px - 3) | 0, (py - 3) | 0, 6, 6);
     ctx.fillStyle = "rgba(255,255,255,1)";
-    ctx.fillRect((x + hx - 1) | 0, (y + hy - 1) | 0, 2, 2);
+    ctx.fillRect((px - 1) | 0, (py - 1) | 0, 2, 2);
 
     ctx.globalAlpha = 0.98;
     ctx.fillStyle = "rgba(255,255,255,0.94)";
     ctx.font = "bold 11px system-ui, Arial";
-    ctx.fillText("MINIMAP", x + 8, y + 14);
+    ctx.fillText(`MINIMAP (${world.mapMode || "small"})`, x + 8, y + 14);
 
     ctx.restore();
   }
@@ -9684,18 +9928,35 @@ export default class UI {
     const hero = game.hero;
     let text = "";
 
-    for (const d of game.world?.docks || []) {
-      if (sq(hero.x - d.x, hero.y - d.y) < 72 * 72) {
-        text = hero.state?.sailing ? "Press F to dock / stop sailing" : "Press F to sail";
-        break;
+    if (game?.dungeon?.active) {
+      if (game.dungeon.justCleared && game.dungeon.stairsDown && sq(hero.x - game.dungeon.stairsDown.x, hero.y - game.dungeon.stairsDown.y) < 72 * 72) {
+        text = "Press F to descend";
+      } else if (game.dungeon.exit && sq(hero.x - game.dungeon.exit.x, hero.y - game.dungeon.exit.y) < 72 * 72) {
+        text = "Press F to leave dungeon";
       }
-    }
-
-    if (!text) {
-      for (const w of game.world?.waystones || []) {
-        if (sq(hero.x - w.x, hero.y - w.y) < 82 * 82) {
-          text = "Press F to awaken waystone";
+    } else {
+      for (const dg of game.world?.dungeons || []) {
+        if (sq(hero.x - dg.x, hero.y - dg.y) < 90 * 90) {
+          text = "Press F to enter dungeon";
           break;
+        }
+      }
+
+      if (!text) {
+        for (const d of game.world?.docks || []) {
+          if (sq(hero.x - d.x, hero.y - d.y) < 72 * 72) {
+            text = hero.state?.sailing ? "Press F to dock / stop sailing" : "Press F to sail";
+            break;
+          }
+        }
+      }
+
+      if (!text) {
+        for (const w of game.world?.waystones || []) {
+          if (sq(hero.x - w.x, hero.y - w.y) < 82 * 82) {
+            text = "Press F to awaken waystone";
+            break;
+          }
         }
       }
     }
@@ -9926,89 +10187,95 @@ export default class UI {
     ctx.fillStyle = "rgba(255,224,130,0.96)";
     ctx.fillText(`Elite Kills: ${prog.eliteKills || 0}`, px, py + 42);
 
+    if ((prog.dungeonBest || 0) > 0) {
+      ctx.fillStyle = "rgba(188,158,255,0.96)";
+      ctx.fillText(`Best Depth: ${prog.dungeonBest || 0}`, px + 150, py + 42);
+    }
+
     this._drawPanelFooter(ctx, panel, "Esc / J to close");
     ctx.restore();
   }
 
   _drawMap(ctx, game) {
-    const panel = this._panelRect(720, 600);
+    const panel = this._panelRect(840, 620);
     this._drawPanelShell(ctx, panel, "WORLD MAP");
 
     const mini = this._mini || game?.world?.getMinimapCanvas?.();
-    const innerPad = 20;
-    const mapSize = 420;
-    const x = panel.x + innerPad;
-    const y = panel.y + 56;
+    const world = game?.world;
+    const mode = world?.mapMode || "small";
 
     ctx.save();
     ctx.font = "12px system-ui, Arial";
 
-    if (mini) {
+    const mapX = panel.x + 20;
+    const mapY = panel.y + 56;
+    const mapW = 520;
+    const mapH = 520;
+
+    ctx.fillStyle = "rgba(18,20,26,0.92)";
+    roundRect(ctx, mapX, mapY, mapW, mapH, 14);
+    ctx.fill();
+
+    if (mini && world) {
+      const span = getMapSpan(world, mode);
+      const half = span * 0.5;
+
+      const heroNormX = clamp((game.hero.x + half) / span, 0, 1);
+      const heroNormY = clamp((game.hero.y + half) / span, 0, 1);
+
+      const srcFrac = mode === "large" ? 0.75 : 0.26;
+      const srcW = Math.max(28, Math.floor(mini.width * srcFrac));
+      const srcH = Math.max(28, Math.floor(mini.height * srcFrac));
+
+      let srcX = Math.floor(heroNormX * mini.width - srcW * 0.5);
+      let srcY = Math.floor(heroNormY * mini.height - srcH * 0.5);
+
+      srcX = clamp(srcX, 0, Math.max(0, mini.width - srcW));
+      srcY = clamp(srcY, 0, Math.max(0, mini.height - srcH));
+
+      ctx.save();
+      roundRect(ctx, mapX, mapY, mapW, mapH, 14);
+      ctx.clip();
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(mini, x, y, mapSize, mapSize);
+      ctx.drawImage(mini, srcX, srcY, srcW, srcH, mapX, mapY, mapW, mapH);
       ctx.imageSmoothingEnabled = true;
+      ctx.restore();
 
-      const span = 2600;
-      const half = span / 2;
-      const sx = game.world?.spawn?.x || 0;
-      const sy = game.world?.spawn?.y || 0;
+      const px = mapX + mapW * 0.5;
+      const py = mapY + mapH * 0.5;
 
-      const mapPoint = (wx, wy) => {
-        const px = x + ((wx - (sx - half)) / span) * (mapSize - 1);
-        const py = y + ((wy - (sy - half)) / span) * (mapSize - 1);
-        return { x: px, y: py };
-      };
-
-      for (const c of game.world?.camps || []) {
-        const p = mapPoint(c.x, c.y);
-        ctx.fillStyle = "rgba(255,90,90,0.95)";
-        ctx.fillRect((p.x - 2) | 0, (p.y - 2) | 0, 4, 4);
-      }
-
-      for (const d of game.world?.docks || []) {
-        if (!game.progress?.discoveredDocks?.has?.(d.id)) continue;
-        const p = mapPoint(d.x, d.y);
-        ctx.fillStyle = "rgba(90,210,255,0.96)";
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      const ways = typeof game._getDiscoveredWaystones === "function"
-        ? game._getDiscoveredWaystones()
-        : [];
-
-      for (let i = 0; i < ways.length && i < 9; i++) {
-        const w = ways[i];
-        const p = mapPoint(w.x, w.y);
-
-        ctx.fillStyle = "rgba(255,218,92,0.98)";
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.fillStyle = "rgba(25,25,25,0.98)";
-        ctx.font = "bold 10px system-ui, Arial";
-        ctx.textAlign = "center";
-        ctx.fillText(String(i + 1), p.x, p.y + 3);
-        ctx.textAlign = "left";
-      }
-
-      const hp = mapPoint(game.hero.x, game.hero.y);
-      ctx.fillStyle = "rgba(20,20,20,0.92)";
-      ctx.fillRect((hp.x - 4) | 0, (hp.y - 4) | 0, 8, 8);
+      ctx.fillStyle = "rgba(20,20,20,0.96)";
+      ctx.fillRect((px - 6) | 0, (py - 6) | 0, 12, 12);
       ctx.fillStyle = "rgba(255,255,255,1)";
-      ctx.fillRect((hp.x - 2) | 0, (hp.y - 2) | 0, 4, 4);
+      ctx.fillRect((px - 3) | 0, (py - 3) | 0, 6, 6);
+
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(mapX, py + 0.5);
+      ctx.lineTo(mapX + mapW, py + 0.5);
+      ctx.moveTo(px + 0.5, mapY);
+      ctx.lineTo(px + 0.5, mapY + mapH);
+      ctx.stroke();
 
       ctx.strokeStyle = "rgba(255,255,255,0.16)";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x - 0.5, y - 0.5, mapSize + 1, mapSize + 1);
+      ctx.strokeRect(mapX - 0.5, mapY - 0.5, mapW + 1, mapH + 1);
+
+      const leftWorld = -half + (srcX / mini.width) * span;
+      const topWorld = -half + (srcY / mini.height) * span;
+      const rightWorld = -half + ((srcX + srcW) / mini.width) * span;
+      const bottomWorld = -half + ((srcY + srcH) / mini.height) * span;
+
+      ctx.fillStyle = "rgba(225,230,238,0.92)";
+      ctx.fillText(`Mode: ${mode}`, mapX + 10, mapY + 18);
+      ctx.fillText(`View X: ${Math.round(leftWorld)} to ${Math.round(rightWorld)}`, mapX + 10, mapY + mapH - 24);
+      ctx.fillText(`View Y: ${Math.round(topWorld)} to ${Math.round(bottomWorld)}`, mapX + 10, mapY + mapH - 8);
     } else {
       ctx.fillStyle = "rgba(220,220,220,0.82)";
-      ctx.fillText("Minimap not ready.", x, y + 14);
+      ctx.fillText("Map not ready.", mapX + 16, mapY + 20);
     }
 
-    const rx = panel.x + 468;
+    const rx = panel.x + 570;
     let ry = panel.y + 64;
 
     ctx.fillStyle = "rgba(255,255,255,0.96)";
@@ -10018,12 +10285,31 @@ export default class UI {
 
     this._legendDot(ctx, rx, ry, "rgba(255,255,255,1)", "You");
     ry += 22;
-    this._legendDot(ctx, rx, ry, "rgba(255,218,92,0.98)", "Awakened Waystone");
+    this._legendDot(ctx, rx, ry, "rgba(255,218,92,0.98)", "Waystone");
     ry += 22;
-    this._legendDot(ctx, rx, ry, "rgba(90,210,255,0.96)", "Discovered Dock");
+    this._legendDot(ctx, rx, ry, "rgba(90,210,255,0.96)", "Dock");
     ry += 22;
-    this._legendDot(ctx, rx, ry, "rgba(255,90,90,0.95)", "Enemy Camp");
+    this._legendDot(ctx, rx, ry, "rgba(255,90,90,0.95)", "Camp");
+    ry += 22;
+    this._legendDot(ctx, rx, ry, "rgba(182,140,255,0.98)", "Dungeon");
     ry += 34;
+
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.font = "bold 13px system-ui, Arial";
+    ctx.fillText("Map Notes", rx, ry);
+    ry += 22;
+
+    ctx.font = "12px system-ui, Arial";
+    ctx.fillStyle = "rgba(220,224,232,0.88)";
+    ctx.fillText("Minimap stays centered on you.", rx, ry); ry += 18;
+    ctx.fillText("Full map follows the hero too.", rx, ry); ry += 18;
+    ctx.fillText("Dark areas are unrevealed.", rx, ry); ry += 18;
+    ctx.fillText("Walk to uncover more land.", rx, ry); ry += 22;
+
+    ctx.fillStyle = "rgba(255,240,170,0.96)";
+    ctx.fillText("Press Z to toggle map scale", rx, ry); ry += 18;
+    ctx.fillStyle = "rgba(220,224,232,0.88)";
+    ctx.fillText("(small / large)", rx, ry); ry += 26;
 
     const ways = typeof game._getDiscoveredWaystones === "function"
       ? game._getDiscoveredWaystones()
@@ -10037,7 +10323,7 @@ export default class UI {
     ctx.font = "12px system-ui, Arial";
     if (!ways.length) {
       ctx.fillStyle = "rgba(220,220,220,0.82)";
-      ctx.fillText("Awaken a waystone with F first.", rx, ry);
+      ctx.fillText("Awaken a waystone first.", rx, ry);
       ry += 18;
     } else {
       for (let i = 0; i < ways.length && i < 9; i++) {
@@ -10055,14 +10341,9 @@ export default class UI {
       ry += 10;
       ctx.fillStyle = "rgba(255,160,160,0.96)";
       ctx.fillText("Cannot fast travel while sailing.", rx, ry);
-      ry += 18;
     }
 
-    ry += 10;
-    ctx.fillStyle = "rgba(220,224,232,0.82)";
-    ctx.fillText("Map markers only show docks after you find them.", rx, ry);
-
-    this._drawPanelFooter(ctx, panel, "Esc / M to close • 1-9 fast travel • camps=danger • docks=travel");
+    this._drawPanelFooter(ctx, panel, "Esc / M to close • Z scale • 1-9 fast travel");
     ctx.restore();
   }
 
@@ -10094,11 +10375,12 @@ export default class UI {
 
     ctx.font = "13px system-ui, Arial";
     ctx.fillStyle = "rgba(230,230,235,0.92)";
-    ctx.fillText("Arrow Keys   - Move / Aim", x, y); y += 22;
-    ctx.fillText("F            - Interact", x, y); y += 22;
+    ctx.fillText("Arrow Keys    - Move / Aim", x, y); y += 22;
+    ctx.fillText("F             - Interact", x, y); y += 22;
     ctx.fillText("Q / W / E / R - Cast spells", x, y); y += 22;
-    ctx.fillText("1 / 2        - Use potions", x, y); y += 22;
+    ctx.fillText("1 / 2         - Use potions", x, y); y += 22;
     ctx.fillText("I / J / M / O - Open menus", x, y); y += 22;
+    ctx.fillText("Z (on map)    - Toggle map scale", x, y); y += 22;
 
     y += 10;
     ctx.fillStyle = "rgba(255,255,255,0.96)";
@@ -10125,6 +10407,13 @@ export default class UI {
     this._drawPanelFooter(ctx, panel, "Esc / O to close • Delete = clear save + restart");
     ctx.restore();
   }
+}
+
+function getMapSpan(world, mode) {
+  if (!world) return 2600;
+  if (typeof world._getMapSpan === "function") return world._getMapSpan(mode);
+  if (mode === "small") return 4200;
+  return (world.boundsRadius || 4600) * 2;
 }
 
 function sq(x, y) {
@@ -10496,9 +10785,14 @@ export function randInt(rngOrMin, minOrMax, maybeMax) {
 }
 ===== ./src/world.js =====
 // src/world.js
-// v42 SAFE MINIMAP READABILITY PASS
-// Keeps the known-good blue water + shoreline + grass + rock + sand + POI baseline intact.
-// Adds better minimap readability without touching the safe water path.
+// v43 BIG WORLD + REAL MAP SPACE + REVEAL FOG (FULL FILE)
+//
+// Goals:
+// - keep the old safe look: blue water, green grass, sand, rocks
+// - make the actual world much bigger
+// - make the minimap use the SAME world space as the playable world
+// - reveal the minimap as the hero explores
+// - stay compatible with current game.js / ui.js baseline
 
 import { clamp, hash2, fbm, RNG } from "./util.js";
 
@@ -10514,11 +10808,15 @@ export default class World {
     this.viewH = opts.viewH || 540;
 
     this.spawn = { x: 0, y: 0 };
-    this.boundsRadius = 1280;
+
+    // REAL PLAYABLE WORLD HALF-SIZE
+    // old file had 1280 which was too small
+    this.boundsRadius = 5200;
 
     this.camps = [];
     this.waystones = [];
     this.docks = [];
+    this.dungeons = [];
 
     this._chunks = new Map();
     this._buildQueue = [];
@@ -10528,9 +10826,16 @@ export default class World {
     this._minimapDirty = true;
     this._minimapTimer = 0;
 
+    // kept for compatibility with later map code
+    this.mapMode = "small";
+
+    this._revealedSmall = new Set();
+    this._revealedLarge = new Set();
+
     this._poiRng = new RNG(hash2(this.seed, 777));
 
     this._initPOIs();
+    this.revealAround(this.spawn.x, this.spawn.y, 260);
     this._queueAround(this.spawn.x, this.spawn.y, 2);
   }
 
@@ -10539,1074 +10844,414 @@ export default class World {
     this.viewH = h | 0;
   }
 
-  getTileSize() {
-    return this.tileSize;
-  }
-
-  worldToTile(x, y) {
-    return {
-      tx: Math.floor(x / this.tileSize),
-      ty: Math.floor(y / this.tileSize),
-    };
-  }
-
-  tileToWorld(tx, ty) {
-    return {
-      x: tx * this.tileSize,
-      y: ty * this.tileSize,
-    };
-  }
-
-  getTile(tx, ty) {
-    const x = (tx + 0.5) * this.tileSize;
-    const y = (ty + 0.5) * this.tileSize;
-    const t = this._terrainN(x, y);
-    const biome = this._biomeFromT(t);
-    return {
-      biome,
-      water: biome === "water",
-      solid: biome === "rock",
-      col: this._tileColorFor(biome, t, x, y),
-      t,
-    };
-  }
-
-  getTileAt(x, y) {
-    const t = this._terrainN(x, y);
-    const biome = this._biomeFromT(t);
-    return {
-      biome,
-      water: biome === "water",
-      solid: biome === "rock",
-      col: this._tileColorFor(biome, t, x, y),
-      t,
-    };
-  }
-
-  canWalk(x, y) {
-    const t = this._terrainN(x, y);
-    return t >= 0.34 && t <= 0.83;
-  }
-
-  isWater(x, y) {
-    return this._terrainN(x, y) < 0.34;
-  }
-
-  isSolid(x, y) {
-    return this._terrainN(x, y) > 0.83;
-  }
-
-  clampPointToBounds(x, y, pad = 16) {
-    const dx = x - this.spawn.x;
-    const dy = y - this.spawn.y;
-    const r = this.boundsRadius - pad;
-    const d2 = dx * dx + dy * dy;
-
-    if (d2 <= r * r) return { x, y };
-
-    const d = Math.sqrt(d2) || 1;
-    const k = r / d;
-
-    return {
-      x: this.spawn.x + dx * k,
-      y: this.spawn.y + dy * k,
-    };
-  }
-
   update(dt, hero) {
-    if (hero && Number.isFinite(hero.x) && Number.isFinite(hero.y)) {
-      this._queueAround(hero.x, hero.y, 2);
+    if (hero) {
+      this._queueAround(hero.x, hero.y, 3);
+      this.revealAround(hero.x, hero.y, 240);
     }
 
-    this._buildSome(2.0);
+    let built = 0;
+    while (this._buildQueue.length && built < 4) {
+      const key = this._buildQueue.shift();
+      this._queued.delete(key);
+      const [cx, cy] = key.split(",").map(Number);
+      this._buildChunk(cx, cy);
+      built++;
+    }
 
-    if (this._minimapDirty) {
-      this._minimapTimer += dt;
-      if (this._minimapTimer >= 0.35) {
-        this._minimapTimer = 0;
-        this._rebuildMinimap();
-      }
+    this._minimapTimer += dt;
+    if (this._minimapTimer >= 0.18) {
+      this._minimapTimer = 0;
+      if (this._minimapDirty) this._renderMinimap();
     }
   }
 
-  draw(ctx, cam) {
-    const view = this._normalizeCam(cam);
-
-    const minCX = Math.floor(view.x0 / this.chunkSize) - 1;
-    const maxCX = Math.floor(view.x1 / this.chunkSize) + 1;
-    const minCY = Math.floor(view.y0 / this.chunkSize) - 1;
-    const maxCY = Math.floor(view.y1 / this.chunkSize) + 1;
-
-    for (let cy = minCY; cy <= maxCY; cy++) {
-      for (let cx = minCX; cx <= maxCX; cx++) {
-        this._ensureChunk(cx, cy);
-        const key = `${cx},${cy}`;
-        const ch = this._chunks.get(key);
-        if (!ch || !ch.canvas) continue;
-
-        const px = cx * this.chunkSize;
-        const py = cy * this.chunkSize;
-        ctx.drawImage(ch.canvas, px, py);
-      }
-    }
-
-    this._drawAnimatedWaterOverlay(ctx, view);
-    this._drawBoundsHint(ctx);
-    this._drawPOIs(ctx);
+  toggleMapScale() {
+    this.mapMode = this.mapMode === "small" ? "large" : "small";
+    this._minimapDirty = true;
   }
 
   getMinimapCanvas() {
-    if (!this._minimap) this._rebuildMinimap();
+    if (!this._minimap || this._minimapDirty) {
+      this._renderMinimap();
+    }
     return this._minimap;
   }
 
-  /* ===========================
-     Chunking
-  =========================== */
-
-  _queueAround(x, y, rChunks = 2) {
-    const cx = Math.floor(x / this.chunkSize);
-    const cy = Math.floor(y / this.chunkSize);
-
-    for (let yy = cy - rChunks; yy <= cy + rChunks; yy++) {
-      for (let xx = cx - rChunks; xx <= cx + rChunks; xx++) {
-        const key = `${xx},${yy}`;
-        if (this._chunks.has(key) || this._queued.has(key)) continue;
-        this._queued.add(key);
-        this._buildQueue.push({ cx: xx, cy: yy });
-      }
-    }
-  }
-
-  _buildSome(msBudget = 2.0) {
-    const t0 = performance.now();
-    while (this._buildQueue.length) {
-      const job = this._buildQueue.shift();
-      this._queued.delete(`${job.cx},${job.cy}`);
-      this._buildChunk(job.cx, job.cy);
-      if (performance.now() - t0 >= msBudget) break;
-    }
-  }
-
-  _ensureChunk(cx, cy) {
-    const key = `${cx},${cy}`;
-    if (this._chunks.has(key) || this._queued.has(key)) return;
-    this._queued.add(key);
-    this._buildQueue.push({ cx, cy });
-    this._buildSome(4.0);
-  }
-
-  _buildChunk(cx, cy) {
-    const key = `${cx},${cy}`;
-    if (this._chunks.has(key)) return this._chunks.get(key);
-
-    const canvas = document.createElement("canvas");
-    canvas.width = this.chunkSize;
-    canvas.height = this.chunkSize;
-    const c = canvas.getContext("2d");
-
-    const baseX = cx * this.chunkTiles;
-    const baseY = cy * this.chunkTiles;
-
-    for (let ty = 0; ty < this.chunkTiles; ty++) {
-      for (let tx = 0; tx < this.chunkTiles; tx++) {
-        const wx = (baseX + tx) * this.tileSize;
-        const wy = (baseY + ty) * this.tileSize;
-        const x = wx + this.tileSize * 0.5;
-        const y = wy + this.tileSize * 0.5;
-
-        const t = this._terrainN(x, y);
-        const biome = this._biomeFromT(t);
-        const col = this._tileColorFor(biome, t, x, y);
-
-        const px = tx * this.tileSize;
-        const py = ty * this.tileSize;
-
-        c.fillStyle = rgb(col[0], col[1], col[2]);
-        c.fillRect(px, py, this.tileSize, this.tileSize);
-
-        this._drawShoreEdge(c, px, py, x, y, biome);
-        this._drawRockEdgeShade(c, px, py, x, y, biome);
-        this._drawTileDecor(c, px, py, biome, x, y, t);
-      }
-    }
-
-    const ch = { cx, cy, canvas };
-    this._chunks.set(key, ch);
+  revealAround(wx, wy, radius = 220) {
+    this._revealModeAround(wx, wy, radius, "small");
+    this._revealModeAround(wx, wy, radius * 1.12, "large");
     this._minimapDirty = true;
-    return ch;
   }
 
-  /* ===========================
-     Rendering helpers
-  =========================== */
-
-  _normalizeCam(cam) {
-    if (!cam) {
-      return {
-        x0: -this.viewW * 0.5,
-        y0: -this.viewH * 0.5,
-        x1: this.viewW * 0.5,
-        y1: this.viewH * 0.5,
-      };
-    }
-
-    const z = cam.zoom || 1;
-    const halfW = this.viewW * 0.5 / z;
-    const halfH = this.viewH * 0.5 / z;
-
-    return {
-      x0: cam.x - halfW,
-      y0: cam.y - halfH,
-      x1: cam.x + halfW,
-      y1: cam.y + halfH,
-    };
-  }
-
-  _drawBoundsHint(ctx) {
-    ctx.save();
-    ctx.strokeStyle = "rgba(120,180,255,0.14)";
-    ctx.lineWidth = 6;
-    ctx.beginPath();
-    ctx.arc(this.spawn.x, this.spawn.y, this.boundsRadius, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  _drawPOIs(ctx) {
-    for (const camp of this.camps) this._drawCamp(ctx, camp);
-    for (const ws of this.waystones) this._drawWaystone(ctx, ws);
-    for (const dock of this.docks) this._drawDock(ctx, dock);
-  }
-
-  _drawPOIShadow(ctx, x, y, rx, ry, alpha = 0.16) {
-    ctx.save();
-    ctx.fillStyle = `rgba(0,0,0,${alpha})`;
-    ctx.beginPath();
-    ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  _drawCamp(ctx, camp) {
-    ctx.save();
-
-    this._drawPOIShadow(ctx, camp.x + 2, camp.y + 16, 26, 11, 0.18);
-
-    ctx.strokeStyle = "rgba(118,76,48,0.28)";
-    ctx.lineWidth = 5;
-    ctx.beginPath();
-    ctx.arc(camp.x, camp.y + 6, 24, 0, Math.PI * 2);
-    ctx.stroke();
-
-    ctx.fillStyle = "rgba(128,82,54,0.98)";
-    ctx.fillRect(camp.x - 18, camp.y - 10, 36, 20);
-
-    ctx.fillStyle = "rgba(204,142,94,0.98)";
-    ctx.beginPath();
-    ctx.moveTo(camp.x - 21, camp.y - 10);
-    ctx.lineTo(camp.x, camp.y - 24);
-    ctx.lineTo(camp.x + 21, camp.y - 10);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.fillStyle = "rgba(255,236,210,0.18)";
-    ctx.fillRect(camp.x - 14, camp.y - 7, 28, 2);
-
-    ctx.fillStyle = "rgba(88,58,38,0.95)";
-    ctx.fillRect(camp.x - 5, camp.y - 1, 10, 11);
-
-    ctx.fillStyle = "rgba(255,172,88,0.95)";
-    ctx.beginPath();
-    ctx.arc(camp.x + 22, camp.y + 11, 4, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.strokeStyle = "rgba(255,214,130,0.34)";
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.arc(camp.x + 22, camp.y + 11, 8, 0, Math.PI * 2);
-    ctx.stroke();
-
-    ctx.restore();
-  }
-
-  _drawWaystone(ctx, ws) {
-    ctx.save();
-
-    this._drawPOIShadow(ctx, ws.x + 1, ws.y + 15, 14, 8, 0.15);
-
-    ctx.fillStyle = "rgba(102,112,142,0.98)";
-    ctx.beginPath();
-    ctx.moveTo(ws.x, ws.y - 26);
-    ctx.lineTo(ws.x + 13, ws.y - 6);
-    ctx.lineTo(ws.x + 10, ws.y + 22);
-    ctx.lineTo(ws.x - 10, ws.y + 22);
-    ctx.lineTo(ws.x - 13, ws.y - 6);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.fillStyle = "rgba(166,210,255,0.24)";
-    ctx.beginPath();
-    ctx.moveTo(ws.x, ws.y - 21);
-    ctx.lineTo(ws.x + 6, ws.y - 6);
-    ctx.lineTo(ws.x + 4, ws.y + 15);
-    ctx.lineTo(ws.x - 4, ws.y + 15);
-    ctx.lineTo(ws.x - 6, ws.y - 6);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.strokeStyle = "rgba(188,232,255,0.55)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(ws.x, ws.y - 26);
-    ctx.lineTo(ws.x + 13, ws.y - 6);
-    ctx.lineTo(ws.x + 10, ws.y + 22);
-    ctx.lineTo(ws.x - 10, ws.y + 22);
-    ctx.lineTo(ws.x - 13, ws.y - 6);
-    ctx.closePath();
-    ctx.stroke();
-
-    const glow = 0.10 + 0.03 * Math.sin(performance.now() * 0.004 + ws.x * 0.01);
-    ctx.fillStyle = `rgba(160,220,255,${glow.toFixed(3)})`;
-    ctx.beginPath();
-    ctx.arc(ws.x, ws.y - 4, 16, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.restore();
-  }
-
-  _drawDock(ctx, dock) {
-    ctx.save();
-
-    this._drawPOIShadow(ctx, dock.x + 2, dock.y + 14, 34, 10, 0.16);
-
-    ctx.fillStyle = "rgba(112,80,52,0.98)";
-    ctx.fillRect(dock.x - 42, dock.y - 8, 84, 16);
-
-    ctx.fillStyle = "rgba(164,122,86,0.22)";
-    ctx.fillRect(dock.x - 42, dock.y - 8, 84, 2);
-
-    for (let i = -34; i <= 34; i += 17) {
-      ctx.fillStyle = "rgba(86,60,38,0.98)";
-      ctx.fillRect(dock.x + i, dock.y + 8, 6, 12);
-    }
-
-    ctx.strokeStyle = "rgba(214,178,126,0.30)";
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.moveTo(dock.x - 36, dock.y - 5);
-    ctx.lineTo(dock.x + 36, dock.y - 5);
-    ctx.moveTo(dock.x - 36, dock.y + 5);
-    ctx.lineTo(dock.x + 36, dock.y + 5);
-    ctx.stroke();
-
-    ctx.fillStyle = "rgba(82,56,36,0.96)";
-    ctx.fillRect(dock.x + 42, dock.y - 16, 3, 12);
-
-    ctx.fillStyle = "rgba(212,66,52,0.96)";
-    ctx.beginPath();
-    ctx.moveTo(dock.x + 45, dock.y - 16);
-    ctx.lineTo(dock.x + 53, dock.y - 13);
-    ctx.lineTo(dock.x + 45, dock.y - 10);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.restore();
-  }
-
-  _drawShoreEdge(ctx, px, py, x, y, biome) {
-    const ts = this.tileSize;
-    const up = this._biomeFromT(this._terrainN(x, y - ts));
-    const down = this._biomeFromT(this._terrainN(x, y + ts));
-    const left = this._biomeFromT(this._terrainN(x - ts, y));
-    const right = this._biomeFromT(this._terrainN(x + ts, y));
-
-    ctx.save();
-
-    if (biome === "water") {
-      ctx.fillStyle = "rgba(180,230,255,0.10)";
-      ctx.strokeStyle = "rgba(255,255,255,0.10)";
-      ctx.lineWidth = 1;
-
-      if (up !== "water") {
-        ctx.fillRect(px, py, ts, 4);
-        ctx.beginPath();
-        ctx.moveTo(px + 2, py + 3);
-        ctx.lineTo(px + ts - 2, py + 3);
-        ctx.stroke();
-      }
-      if (down !== "water") {
-        ctx.fillRect(px, py + ts - 4, ts, 4);
-        ctx.beginPath();
-        ctx.moveTo(px + 2, py + ts - 3);
-        ctx.lineTo(px + ts - 2, py + ts - 3);
-        ctx.stroke();
-      }
-      if (left !== "water") {
-        ctx.fillRect(px, py, 4, ts);
-      }
-      if (right !== "water") {
-        ctx.fillRect(px + ts - 4, py, 4, ts);
-      }
-    }
-
-    if (biome === "sand") {
-      ctx.fillStyle = "rgba(255,244,210,0.08)";
-      if (up === "water") ctx.fillRect(px, py, ts, 3);
-      if (down === "water") ctx.fillRect(px, py + ts - 3, ts, 3);
-      if (left === "water") ctx.fillRect(px, py, 3, ts);
-      if (right === "water") ctx.fillRect(px + ts - 3, py, 3, ts);
-    }
-
-    ctx.restore();
-  }
-
-  _drawRockEdgeShade(ctx, px, py, x, y, biome) {
-    if (biome !== "rock") return;
-
-    const ts = this.tileSize;
-    const up = this._biomeFromT(this._terrainN(x, y - ts));
-    const down = this._biomeFromT(this._terrainN(x, y + ts));
-    const left = this._biomeFromT(this._terrainN(x - ts, y));
-    const right = this._biomeFromT(this._terrainN(x + ts, y));
-
-    ctx.save();
-
-    if (up !== "rock") {
-      ctx.fillStyle = "rgba(255,255,255,0.07)";
-      ctx.fillRect(px, py, ts, 3);
-    }
-    if (left !== "rock") {
-      ctx.fillStyle = "rgba(255,255,255,0.04)";
-      ctx.fillRect(px, py, 3, ts);
-    }
-    if (down !== "rock") {
-      ctx.fillStyle = "rgba(0,0,0,0.10)";
-      ctx.fillRect(px, py + ts - 4, ts, 4);
-    }
-    if (right !== "rock") {
-      ctx.fillStyle = "rgba(0,0,0,0.08)";
-      ctx.fillRect(px + ts - 4, py, 4, ts);
-    }
-
-    ctx.restore();
-  }
-
-  _drawTileDecor(ctx, px, py, biome, x, y, t) {
-    if (biome === "grass") {
-      const n = hash2((x / this.tileSize) | 0, (y / this.tileSize) | 0, this.seed);
-      const gv = this._grassVariant(x, y);
-
-      if ((n & 7) === 0) this._drawGrassTuft(ctx, px, py, n, gv);
-      if ((n & 31) === 2) this._drawPebble(ctx, px, py, n);
-      if (gv > 0.68 && (n & 31) === 9) this._drawFlower(ctx, px, py, n);
-      if (gv < 0.30 && (n & 15) === 5) this._drawDryTuft(ctx, px, py, n);
-    } else if (biome === "sand") {
-      const n = hash2((x / this.tileSize) | 0, (y / this.tileSize) | 0, this.seed ^ 88);
-      const sv = this._sandVariant(x, y);
-
-      if ((n & 15) === 1) this._drawPebble(ctx, px, py, n);
-      if (sv > 0.58 && (n & 31) === 4) this._drawSandStreak(ctx, px, py, n);
-      if (sv > 0.68 && (n & 31) === 12) this._drawShell(ctx, px, py, n);
-      if (sv < 0.30 && (n & 63) === 9) this._drawDriftMark(ctx, px, py, n);
-    } else if (biome === "water") {
-      const n = hash2((x / this.tileSize) | 0, (y / this.tileSize) | 0, this.seed ^ 222);
-      if ((n & 3) === 0) this._drawRipple(ctx, px, py, n, t);
-    } else if (biome === "rock") {
-      const n = hash2((x / this.tileSize) | 0, (y / this.tileSize) | 0, this.seed ^ 444);
-      const rv = this._rockVariant(x, y);
-
-      if ((n & 7) <= 1) this._drawCrack(ctx, px, py, n, rv);
-      if ((n & 15) === 5) this._drawRockSpeck(ctx, px, py, n, rv);
-      if (rv > 0.64 && (n & 31) === 9) this._drawSmallStone(ctx, px, py, n);
-    }
-  }
-
-  _drawGrassTuft(ctx, px, py, n, gv = 0.5) {
-    const ox = 4 + (n % 14);
-    const oy = 9 + ((n >> 4) % 8);
-    const lush = gv > 0.62;
-
-    ctx.save();
-    ctx.strokeStyle = lush ? "rgba(34,110,44,0.58)" : "rgba(40,94,42,0.50)";
-    ctx.lineWidth = lush ? 1.35 : 1.25;
-    ctx.beginPath();
-    ctx.moveTo(px + ox, py + oy + 7);
-    ctx.lineTo(px + ox - 2, py + oy);
-    ctx.moveTo(px + ox, py + oy + 7);
-    ctx.lineTo(px + ox + 1, py + oy - 1);
-    ctx.moveTo(px + ox, py + oy + 7);
-    ctx.lineTo(px + ox + 3, py + oy + 1);
-    if (lush) {
-      ctx.moveTo(px + ox + 1, py + oy + 7);
-      ctx.lineTo(px + ox + 5, py + oy + 2);
-    }
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  _drawDryTuft(ctx, px, py, n) {
-    const ox = 5 + (n % 12);
-    const oy = 10 + ((n >> 3) % 7);
-
-    ctx.save();
-    ctx.strokeStyle = "rgba(146,132,74,0.42)";
-    ctx.lineWidth = 1.1;
-    ctx.beginPath();
-    ctx.moveTo(px + ox, py + oy + 5);
-    ctx.lineTo(px + ox - 2, py + oy + 1);
-    ctx.moveTo(px + ox, py + oy + 5);
-    ctx.lineTo(px + ox + 2, py + oy);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  _drawFlower(ctx, px, py, n) {
-    const ox = 6 + (n % 10);
-    const oy = 7 + ((n >> 4) % 10);
-
-    ctx.save();
-    ctx.fillStyle = "rgba(255,238,120,0.82)";
-    ctx.beginPath();
-    ctx.arc(px + ox, py + oy, 1.25, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = "rgba(255,255,255,0.72)";
-    ctx.beginPath();
-    ctx.arc(px + ox - 1.5, py + oy, 1, 0, Math.PI * 2);
-    ctx.arc(px + ox + 1.5, py + oy, 1, 0, Math.PI * 2);
-    ctx.arc(px + ox, py + oy - 1.5, 1, 0, Math.PI * 2);
-    ctx.arc(px + ox, py + oy + 1.5, 1, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  _drawPebble(ctx, px, py, n) {
-    const ox = 5 + (n % 12);
-    const oy = 5 + ((n >> 3) % 12);
-    const r = 1 + ((n >> 6) % 2);
-
-    ctx.save();
-    ctx.fillStyle = "rgba(255,255,255,0.18)";
-    ctx.beginPath();
-    ctx.arc(px + ox, py + oy, r, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = "rgba(0,0,0,0.10)";
-    ctx.beginPath();
-    ctx.arc(px + ox + 1, py + oy + 1, Math.max(1, r - 0.2), 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  _drawSandStreak(ctx, px, py, n) {
-    const ox = 3 + (n % 12);
-    const oy = 6 + ((n >> 4) % 10);
-
-    ctx.save();
-    ctx.strokeStyle = "rgba(255,241,198,0.18)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(px + ox - 2, py + oy);
-    ctx.lineTo(px + ox + 4, py + oy + 1);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  _drawShell(ctx, px, py, n) {
-    const ox = 6 + (n % 10);
-    const oy = 7 + ((n >> 4) % 10);
-
-    ctx.save();
-    ctx.fillStyle = "rgba(245,236,215,0.82)";
-    ctx.beginPath();
-    ctx.ellipse(px + ox, py + oy, 2.4, 1.7, 0.2, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.strokeStyle = "rgba(196,170,144,0.22)";
-    ctx.lineWidth = 0.8;
-    ctx.beginPath();
-    ctx.moveTo(px + ox - 1.4, py + oy);
-    ctx.lineTo(px + ox + 1.4, py + oy);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  _drawDriftMark(ctx, px, py, n) {
-    const ox = 4 + (n % 12);
-    const oy = 11 + ((n >> 5) % 6);
-
-    ctx.save();
-    ctx.strokeStyle = "rgba(154,128,92,0.18)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(px + ox - 2, py + oy);
-    ctx.lineTo(px + ox + 3, py + oy + 1);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  _drawRipple(ctx, px, py, n) {
-    const ox = 6 + (n % 12);
-    const oy = 6 + ((n >> 4) % 12);
-
-    ctx.save();
-    ctx.strokeStyle = "rgba(255,255,255,0.16)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.arc(px + ox, py + oy, 3 + ((n >> 7) % 3), 0, Math.PI * 1.7);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  _drawCrack(ctx, px, py, n, rv = 0.5) {
-    const x0 = px + 4 + (n % 8);
-    const y0 = py + 5 + ((n >> 4) % 8);
-    const alpha = 0.12 + rv * 0.06;
-
-    ctx.save();
-    ctx.strokeStyle = `rgba(0,0,0,${alpha.toFixed(3)})`;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(x0, y0);
-    ctx.lineTo(x0 + 4, y0 + 2);
-    ctx.lineTo(x0 + 8, y0 - 1);
-    if (rv > 0.60) {
-      ctx.moveTo(x0 + 4, y0 + 2);
-      ctx.lineTo(x0 + 6, y0 + 5);
-    }
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  _drawRockSpeck(ctx, px, py, n, rv) {
-    const ox = 4 + (n % 14);
-    const oy = 4 + ((n >> 5) % 14);
-
-    ctx.save();
-    ctx.fillStyle = `rgba(255,255,255,${(0.04 + rv * 0.05).toFixed(3)})`;
-    ctx.fillRect(px + ox, py + oy, 1, 1);
-    ctx.fillStyle = "rgba(0,0,0,0.08)";
-    ctx.fillRect(px + ox + 1, py + oy + 1, 1, 1);
-    ctx.restore();
-  }
-
-  _drawSmallStone(ctx, px, py, n) {
-    const ox = 6 + (n % 8);
-    const oy = 8 + ((n >> 4) % 7);
-
-    ctx.save();
-    ctx.fillStyle = "rgba(148,154,162,0.72)";
-    ctx.beginPath();
-    ctx.ellipse(px + ox, py + oy, 3, 2, 0.2, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = "rgba(255,255,255,0.10)";
-    ctx.beginPath();
-    ctx.ellipse(px + ox - 1, py + oy - 1, 2, 1, 0.2, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = "rgba(0,0,0,0.10)";
-    ctx.beginPath();
-    ctx.ellipse(px + ox + 1, py + oy + 1, 2.4, 1.4, 0.2, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.restore();
-  }
-
-  _drawAnimatedWaterOverlay(ctx, view) {
-    const time = performance.now() * 0.0014;
-    const startTX = Math.floor(view.x0 / this.tileSize) - 1;
-    const endTX = Math.floor(view.x1 / this.tileSize) + 1;
-    const startTY = Math.floor(view.y0 / this.tileSize) - 1;
-    const endTY = Math.floor(view.y1 / this.tileSize) + 1;
-
-    ctx.save();
-
-    for (let ty = startTY; ty <= endTY; ty++) {
-      for (let tx = startTX; tx <= endTX; tx++) {
-        const wx = tx * this.tileSize + this.tileSize * 0.5;
-        const wy = ty * this.tileSize + this.tileSize * 0.5;
-        const t = this._terrainN(wx, wy);
-        if (t >= 0.34) continue;
-
-        const n = hash2(tx, ty, this.seed ^ 9123);
-        const px = tx * this.tileSize;
-        const py = ty * this.tileSize;
-
-        const shimmer =
-          0.022 +
-          0.018 * Math.sin(time * 2.7 + tx * 0.55 + ty * 0.31 + (n & 7));
-
-        ctx.fillStyle = `rgba(255,255,255,${Math.max(0, shimmer).toFixed(3)})`;
-        ctx.fillRect(px, py, this.tileSize, this.tileSize);
-
-        if ((n & 3) === 0) {
-          const ox = 5 + (n % 12);
-          const oy = 6 + ((n >> 4) % 10);
-          const drift = Math.sin(time * 3.2 + (n & 15)) * 1.8;
-          const r = 3 + ((n >> 7) % 3);
-
-          ctx.strokeStyle = `rgba(255,255,255,${
-            0.10 + 0.08 * Math.sin(time * 2.4 + (n & 31))
-          })`;
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.arc(px + ox + drift, py + oy, r, 0, Math.PI * 1.65);
-          ctx.stroke();
+  _revealModeAround(wx, wy, radius, mode) {
+    const span = this._getMapSpan(mode);
+    const half = span * 0.5;
+    const cell = mode === "large" ? 72 : 48;
+    const set = mode === "large" ? this._revealedLarge : this._revealedSmall;
+
+    const x0 = Math.floor((wx - radius + half) / cell);
+    const x1 = Math.floor((wx + radius + half) / cell);
+    const y0 = Math.floor((wy - radius + half) / cell);
+    const y1 = Math.floor((wy + radius + half) / cell);
+
+    for (let gy = y0; gy <= y1; gy++) {
+      for (let gx = x0; gx <= x1; gx++) {
+        const cx = gx * cell - half + cell * 0.5;
+        const cy = gy * cell - half + cell * 0.5;
+        const dx = cx - wx;
+        const dy = cy - wy;
+        if (dx * dx + dy * dy <= radius * radius) {
+          set.add(`${gx},${gy}`);
         }
       }
     }
-
-    ctx.restore();
   }
 
-  /* ===========================
-     World / POI generation
-  =========================== */
-
-  _initPOIs() {
-    const ringR = 560;
-    const angles = [0, Math.PI * 0.5, Math.PI, Math.PI * 1.5];
-
-    for (let i = 0; i < angles.length; i++) {
-      const a = angles[i];
-      const x = this.spawn.x + Math.cos(a) * ringR;
-      const y = this.spawn.y + Math.sin(a) * ringR;
-      const p = this._findNearbyLand(x, y, 220);
-      this.waystones.push({
-        id: `ws_${i}`,
-        x: p.x,
-        y: p.y,
-      });
-    }
-
-    const campAngles = [
-      Math.PI * 0.2,
-      Math.PI * 0.72,
-      Math.PI * 1.24,
-      Math.PI * 1.72,
-    ];
-    for (let i = 0; i < campAngles.length; i++) {
-      const a = campAngles[i];
-      const x = this.spawn.x + Math.cos(a) * 860;
-      const y = this.spawn.y + Math.sin(a) * 860;
-      const p = this._findNearbyLand(x, y, 260);
-      this.camps.push({
-        id: `camp_${i}`,
-        x: p.x,
-        y: p.y,
-        r: 120,
-      });
-    }
-
-    const dockAngles = [Math.PI * 0.12, Math.PI * 1.12];
-    for (let i = 0; i < dockAngles.length; i++) {
-      const a = dockAngles[i];
-      const x = this.spawn.x + Math.cos(a) * 720;
-      const y = this.spawn.y + Math.sin(a) * 720;
-      const p = this._findShoreline(x, y, 300);
-      this.docks.push({
-        id: `dock_${i}`,
-        x: p.x,
-        y: p.y,
-      });
-    }
-
-    const sp = this._findNearbyLand(0, 0, 400);
-    this.spawn.x = sp.x;
-    this.spawn.y = sp.y;
+  isRevealed(wx, wy, mode = this.mapMode) {
+    const span = this._getMapSpan(mode);
+    const half = span * 0.5;
+    const cell = mode === "large" ? 72 : 48;
+    const gx = Math.floor((wx + half) / cell);
+    const gy = Math.floor((wy + half) / cell);
+    const set = mode === "large" ? this._revealedLarge : this._revealedSmall;
+    return set.has(`${gx},${gy}`);
   }
 
-  _findNearbyLand(x, y, maxR = 260) {
-    if (this.canWalk(x, y)) return { x, y };
-
-    for (let r = this.tileSize; r <= maxR; r += this.tileSize) {
-      for (let i = 0; i < 24; i++) {
-        const a = (i / 24) * Math.PI * 2;
-        const px = x + Math.cos(a) * r;
-        const py = y + Math.sin(a) * r;
-        if (this.canWalk(px, py)) return { x: px, y: py };
-      }
-    }
-
-    return { x, y };
+  _getMapSpan(mode = this.mapMode) {
+    // small map still shows a lot
+    if (mode === "small") return 5200;
+    // large map covers full real world
+    return this.boundsRadius * 2;
   }
 
-  _findShoreline(x, y, maxR = 300) {
-    for (let r = this.tileSize; r <= maxR; r += this.tileSize) {
-      for (let i = 0; i < 36; i++) {
-        const a = (i / 36) * Math.PI * 2;
-        const px = x + Math.cos(a) * r;
-        const py = y + Math.sin(a) * r;
+  canWalk(x, y) {
+    if (x < -this.boundsRadius || x > this.boundsRadius) return false;
+    if (y < -this.boundsRadius || y > this.boundsRadius) return false;
 
-        if (!this.canWalk(px, py)) continue;
+    const t = this._sampleTile(x, y);
+    return t !== "water";
+  }
 
-        const offsets = [
-          [this.tileSize, 0],
-          [-this.tileSize, 0],
-          [0, this.tileSize],
-          [0, -this.tileSize],
-        ];
+  draw(ctx, camera) {
+    const cx = camera?.x || 0;
+    const cy = camera?.y || 0;
+    const zoom = camera?.zoom || 1;
 
-        for (const [ox, oy] of offsets) {
-          if (this.isWater(px + ox, py + oy)) {
-            return { x: px, y: py };
+    const halfW = (this.viewW * 0.5) / zoom;
+    const halfH = (this.viewH * 0.5) / zoom;
+
+    const x0 = cx - halfW - this.tileSize * 2;
+    const y0 = cy - halfH - this.tileSize * 2;
+    const x1 = cx + halfW + this.tileSize * 2;
+    const y1 = cy + halfH + this.tileSize * 2;
+
+    const tx0 = Math.floor(x0 / this.tileSize);
+    const ty0 = Math.floor(y0 / this.tileSize);
+    const tx1 = Math.ceil(x1 / this.tileSize);
+    const ty1 = Math.ceil(y1 / this.tileSize);
+
+    for (let ty = ty0; ty <= ty1; ty++) {
+      for (let tx = tx0; tx <= tx1; tx++) {
+        const wx = tx * this.tileSize;
+        const wy = ty * this.tileSize;
+        const tile = this._sampleTile(wx + this.tileSize * 0.5, wy + this.tileSize * 0.5);
+
+        if (tile === "water") {
+          ctx.fillStyle = "rgba(45,116,196,1)";
+        } else if (tile === "sand") {
+          ctx.fillStyle = "rgba(203,184,122,1)";
+        } else if (tile === "rock") {
+          ctx.fillStyle = "rgba(120,129,140,1)";
+        } else {
+          ctx.fillStyle = "rgba(76,137,72,1)";
+        }
+
+        ctx.fillRect(wx, wy, this.tileSize + 1, this.tileSize + 1);
+
+        if (tile === "grass") {
+          const n = hash2(tx, ty, this.seed) >>> 0;
+
+          if (n % 9 === 0) {
+            ctx.strokeStyle = "rgba(92,166,84,0.75)";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(wx + 10, wy + 21);
+            ctx.lineTo(wx + 11, wy + 15);
+            ctx.moveTo(wx + 14, wy + 21);
+            ctx.lineTo(wx + 13, wy + 14);
+            ctx.stroke();
+          }
+
+          if (n % 41 === 0) {
+            ctx.fillStyle = "rgba(70,124,60,0.36)";
+            ctx.fillRect(wx + 5, wy + 6, 8, 5);
+            ctx.fillRect(wx + 13, wy + 13, 6, 4);
+          }
+        }
+
+        if (tile === "rock") {
+          const n = hash2(tx * 17, ty * 13, this.seed) >>> 0;
+          if (n % 5 === 0) {
+            ctx.fillStyle = "rgba(98,108,120,0.65)";
+            ctx.fillRect(wx + 6, wy + 6, 5, 4);
+            ctx.fillRect(wx + 13, wy + 12, 4, 4);
+          }
+        }
+
+        if (tile === "sand") {
+          const n = hash2(tx * 9, ty * 7, this.seed) >>> 0;
+          if (n % 8 === 0) {
+            ctx.fillStyle = "rgba(216,198,138,0.45)";
+            ctx.fillRect(wx + 7, wy + 8, 4, 3);
+            ctx.fillRect(wx + 14, wy + 14, 3, 2);
           }
         }
       }
     }
 
-    return this._findNearbyLand(x, y, maxR);
+    for (const w of this.waystones) this._drawWaystone(ctx, w);
+    for (const d of this.docks) this._drawDock(ctx, d);
+    for (const c of this.camps) this._drawCamp(ctx, c);
+    for (const dg of this.dungeons) this._drawDungeonEntrance(ctx, dg);
   }
 
-  /* ===========================
-     Minimap
-  =========================== */
-
-  _rebuildMinimap() {
-    const size = 220;
+  _renderMinimap() {
+    const size = 168;
     const c = document.createElement("canvas");
     c.width = size;
     c.height = size;
-    const g = c.getContext("2d");
+    const ctx = c.getContext("2d");
 
-    g.fillStyle = "rgba(8,12,16,0.98)";
-    g.fillRect(0, 0, size, size);
+    const mode = this.mapMode;
+    const span = this._getMapSpan(mode);
+    const half = span * 0.5;
+    const step = span / size;
 
-    const half = this.boundsRadius;
-    const worldSize = half * 2;
-    const step = worldSize / size;
+    for (let py = 0; py < size; py++) {
+      for (let px = 0; px < size; px++) {
+        const wx = -half + px * step;
+        const wy = -half + py * step;
 
-    for (let py = 2; py < size - 2; py++) {
-      for (let px = 2; px < size - 2; px++) {
-        const wx = this.spawn.x - half + px * step;
-        const wy = this.spawn.y - half + py * step;
-        const t = this._terrainN(wx, wy);
-        const biome = this._biomeFromT(t);
-        const col = this._miniColorFor(biome, t, wx, wy);
-        g.fillStyle = rgb(col[0], col[1], col[2]);
-        g.fillRect(px, py, 1, 1);
+        let color;
+        if (!this.isRevealed(wx, wy, mode)) {
+          color = "#0d1117";
+        } else {
+          const tile = this._sampleTile(wx, wy);
+          color =
+            tile === "water" ? "#2e6fb0" :
+            tile === "sand" ? "#ccb87b" :
+            tile === "rock" ? "#7d8792" :
+            "#4d8b4a";
+        }
+
+        ctx.fillStyle = color;
+        ctx.fillRect(px, py, 1, 1);
       }
     }
 
-    for (const camp of this.camps) {
-      const p = this._worldToMini(camp.x, camp.y, size);
-      this._drawMiniDot(g, p.x, p.y, "rgba(255,132,96,0.98)", "rgba(60,18,12,0.90)");
-    }
+    const plot = (wx, wy, color, r = 2) => {
+      if (!this.isRevealed(wx, wy, mode)) return;
+      const px = ((wx + half) / span) * size;
+      const py = ((wy + half) / span) * size;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(px, py, r, 0, Math.PI * 2);
+      ctx.fill();
+    };
 
-    for (const ws of this.waystones) {
-      const p = this._worldToMini(ws.x, ws.y, size);
-      this._drawMiniDot(g, p.x, p.y, "rgba(166,226,255,0.98)", "rgba(18,38,52,0.90)");
-    }
-
-    for (const dock of this.docks) {
-      const p = this._worldToMini(dock.x, dock.y, size);
-      this._drawMiniDot(g, p.x, p.y, "rgba(236,210,126,0.98)", "rgba(60,44,18,0.90)");
-    }
-
-    const sp = this._worldToMini(this.spawn.x, this.spawn.y, size);
-    this._drawMiniDot(g, sp.x, sp.y, "rgba(255,255,255,0.98)", "rgba(30,30,30,0.92)", 2);
-
-    g.strokeStyle = "rgba(255,255,255,0.22)";
-    g.lineWidth = 2;
-    g.strokeRect(1, 1, size - 2, size - 2);
-
-    g.strokeStyle = "rgba(120,180,255,0.18)";
-    g.lineWidth = 1;
-    g.strokeRect(3, 3, size - 6, size - 6);
+    for (const w of this.waystones) plot(w.x, w.y, "#f5dc6a", 2.8);
+    for (const d of this.docks) plot(d.x, d.y, "#79dbff", 2.5);
+    for (const cp of this.camps) plot(cp.x, cp.y, "#ff7b6a", 2.2);
+    for (const dg of this.dungeons) plot(dg.x, dg.y, "#b68cff", 3);
 
     this._minimap = c;
     this._minimapDirty = false;
-    this._minimapTimer = 0;
   }
 
-  _drawMiniDot(g, x, y, fill, stroke, r = 1.5) {
-    if (x < 3 || y < 3 || x > g.canvas.width - 4 || y > g.canvas.height - 4) return;
-
-    g.fillStyle = stroke;
-    g.fillRect(x - 2, y - 2, 5, 5);
-
-    g.fillStyle = fill;
-    g.fillRect(x - r, y - r, r * 2 + 1, r * 2 + 1);
+  _drawWaystone(ctx, w) {
+    ctx.save();
+    ctx.fillStyle = "rgba(186,174,116,1)";
+    ctx.fillRect(w.x - 8, w.y - 20, 16, 28);
+    ctx.fillStyle = "rgba(245,226,138,0.8)";
+    ctx.fillRect(w.x - 4, w.y - 16, 8, 14);
+    ctx.restore();
   }
 
-  _worldToMini(x, y, size) {
-    const half = this.boundsRadius;
-    const nx = clamp((x - (this.spawn.x - half)) / (half * 2), 0, 1);
-    const ny = clamp((y - (this.spawn.y - half)) / (half * 2), 0, 1);
-    return {
-      x: (nx * (size - 1)) | 0,
-      y: (ny * (size - 1)) | 0,
+  _drawDock(ctx, d) {
+    ctx.save();
+    ctx.fillStyle = "rgba(118,88,52,1)";
+    ctx.fillRect(d.x - 20, d.y - 6, 40, 12);
+    ctx.fillRect(d.x - 16, d.y + 4, 5, 14);
+    ctx.fillRect(d.x + 11, d.y + 4, 5, 14);
+    ctx.restore();
+  }
+
+  _drawCamp(ctx, c) {
+    ctx.save();
+    ctx.fillStyle = "rgba(118,68,52,1)";
+    ctx.beginPath();
+    ctx.moveTo(c.x, c.y - 18);
+    ctx.lineTo(c.x + 18, c.y + 12);
+    ctx.lineTo(c.x - 18, c.y + 12);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(255,188,118,0.85)";
+    ctx.beginPath();
+    ctx.arc(c.x, c.y + 10, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  _drawDungeonEntrance(ctx, d) {
+    ctx.save();
+    ctx.fillStyle = "rgba(74,54,102,1)";
+    ctx.fillRect(d.x - 18, d.y - 20, 36, 30);
+    ctx.fillStyle = "rgba(22,18,34,1)";
+    ctx.fillRect(d.x - 10, d.y - 6, 20, 16);
+    ctx.fillStyle = "rgba(184,148,255,0.9)";
+    ctx.fillRect(d.x - 4, d.y - 14, 8, 5);
+    ctx.restore();
+  }
+
+  _sampleTile(x, y) {
+    if (x < -this.boundsRadius || x > this.boundsRadius) return "water";
+    if (y < -this.boundsRadius || y > this.boundsRadius) return "water";
+
+    // larger continent fields so the world stops feeling like one tiny round island
+    const largeA = fbm((x + this.seed * 0.11) * 0.00058, (y - this.seed * 0.07) * 0.00058, 4);
+    const largeB = fbm((x - this.seed * 0.05) * 0.00105, (y + this.seed * 0.09) * 0.00105, 4);
+    const med = fbm((x + this.seed * 0.03) * 0.0030, (y + this.seed * 0.04) * 0.0030, 3);
+    const rockN = fbm((x - this.seed * 0.02) * 0.0070, (y + this.seed * 0.05) * 0.0070, 2);
+
+    const edgeX = Math.abs(x) / this.boundsRadius;
+    const edgeY = Math.abs(y) / this.boundsRadius;
+    const edgePenalty = Math.max(edgeX, edgeY) * 0.11;
+
+    const land = largeA * 0.62 + largeB * 0.30 + med * 0.18 - edgePenalty;
+
+    if (land < -0.25) return "water";
+    if (land < -0.11) return "sand";
+    if (rockN > 0.43 && land > -0.02) return "rock";
+    return "grass";
+  }
+
+  _chunkKey(cx, cy) {
+    return `${cx},${cy}`;
+  }
+
+  _queueAround(wx, wy, radiusChunks = 2) {
+    const ccx = Math.floor(wx / this.chunkSize);
+    const ccy = Math.floor(wy / this.chunkSize);
+
+    for (let cy = ccy - radiusChunks; cy <= ccy + radiusChunks; cy++) {
+      for (let cx = ccx - radiusChunks; cx <= ccx + radiusChunks; cx++) {
+        const key = this._chunkKey(cx, cy);
+        if (this._chunks.has(key) || this._queued.has(key)) continue;
+        this._queued.add(key);
+        this._buildQueue.push(key);
+      }
+    }
+  }
+
+  _buildChunk(cx, cy) {
+    const key = this._chunkKey(cx, cy);
+    this._chunks.set(key, { cx, cy });
+  }
+
+  _initPOIs() {
+    this.spawn = this._findGoodSpawn();
+
+    let wid = 1;
+
+    const waystoneRings = [520, 1250, 2050, 2950, 3850, 4700];
+    for (let ringIndex = 0; ringIndex < waystoneRings.length; ringIndex++) {
+      const ring = waystoneRings[ringIndex];
+      const count = 4 + ringIndex;
+
+      for (let i = 0; i < count; i++) {
+        const a = (i / count) * Math.PI * 2 + ringIndex * 0.17;
+        const x = Math.round(Math.cos(a) * ring);
+        const y = Math.round(Math.sin(a) * ring);
+        const p = this._findNearbyLand(x, y, 300);
+        if (p) this.waystones.push({ id: wid++, x: p.x, y: p.y });
+      }
+    }
+
+    for (let i = 0; i < 22; i++) {
+      const a = (i / 22) * Math.PI * 2 + 0.31;
+      const r = 1300 + (i % 6) * 600;
+      const x = Math.round(Math.cos(a) * r);
+      const y = Math.round(Math.sin(a) * r);
+      const p = this._findNearbyShore(x, y, 320);
+      if (p) this.docks.push({ id: i + 1, x: p.x, y: p.y });
+    }
+
+    for (let i = 0; i < 42; i++) {
+      const a = (i / 42) * Math.PI * 2 + 0.13;
+      const r = 900 + (i % 8) * 560;
+      const x = Math.round(Math.cos(a) * r);
+      const y = Math.round(Math.sin(a) * r);
+      const p = this._findNearbyLand(x, y, 340);
+      if (p) {
+        this.camps.push({
+          id: i + 1,
+          x: p.x,
+          y: p.y,
+          tier: 1 + (i % 5),
+        });
+      }
+    }
+
+    const dg = this._findNearbyLand(this.spawn.x + 420, this.spawn.y + 220, 280) || {
+      x: this.spawn.x + 360,
+      y: this.spawn.y + 220,
     };
+    this.dungeons.push({ id: 1, x: dg.x, y: dg.y, name: "Deep Ruin" });
   }
 
-  /* ===========================
-     Terrain
-  =========================== */
-
-  _terrainN(x, y) {
-    const s = 0.00135;
-    const n1 = fbm(x * s, y * s, 4, 2, 0.5, this.seed);
-    const n2 = fbm(
-      (x + 999) * s * 2.1,
-      (y - 777) * s * 2.1,
-      3,
-      2,
-      0.55,
-      this.seed ^ 1234
-    );
-    const radial = 1 - clamp(
-      Math.hypot(x - this.spawn.x, y - this.spawn.y) / (this.boundsRadius * 1.18),
-      0,
-      1
-    );
-    const t = clamp(n1 * 0.64 + n2 * 0.16 + radial * 0.20, 0, 1);
-    return t;
-  }
-
-  _grassVariant(x, y) {
-    const g = fbm(
-      (x + 211) * 0.0035,
-      (y - 157) * 0.0035,
-      3,
-      2,
-      0.55,
-      this.seed ^ 7711
-    );
-    return clamp(g, 0, 1);
-  }
-
-  _rockVariant(x, y) {
-    const r = fbm(
-      (x - 333) * 0.0042,
-      (y + 517) * 0.0042,
-      3,
-      2,
-      0.58,
-      this.seed ^ 9901
-    );
-    return clamp(r, 0, 1);
-  }
-
-  _sandVariant(x, y) {
-    const s = fbm(
-      (x + 97) * 0.0052,
-      (y - 221) * 0.0052,
-      3,
-      2,
-      0.56,
-      this.seed ^ 6611
-    );
-    return clamp(s, 0, 1);
-  }
-
-  _biomeFromT(t) {
-    if (t < 0.34) return "water";
-    if (t < 0.39) return "sand";
-    if (t < 0.83) return "grass";
-    return "rock";
-  }
-
-  _tileColorFor(biome, t, x = 0, y = 0) {
-    if (biome === "water") {
-      const deep = [22, 120, 230];
-      const mid = [36, 155, 245];
-      const shallow = [92, 205, 255];
-
-      const k = clamp(t / 0.34, 0, 1);
-      const c = lerpRgb(deep, mid, Math.min(1, k * 1.2));
-      return lerpRgb(c, shallow, Math.max(0, (k - 0.45) / 0.55));
-    }
-
-    if (biome === "sand") {
-      const sv = this._sandVariant(x, y);
-
-      const cool = [209, 191, 128];
-      const base = [224, 205, 142];
-      const warm = [236, 218, 158];
-
-      let out;
-      if (sv < 0.45) {
-        out = lerpRgb(cool, base, sv / 0.45);
-      } else {
-        out = lerpRgb(base, warm, (sv - 0.45) / 0.55);
+  _findGoodSpawn() {
+    for (let r = 0; r <= 520; r += 24) {
+      for (let i = 0; i < 24; i++) {
+        const a = (i / 24) * Math.PI * 2;
+        const x = Math.cos(a) * r;
+        const y = Math.sin(a) * r;
+        if (this._sampleTile(x, y) === "grass") {
+          return { x, y };
+        }
       }
-
-      const k = clamp((t - 0.34) / 0.05, 0, 1);
-      out = lerpRgb(out, [out[0] + 4, out[1] + 3, out[2] + 2], k * 0.16);
-
-      return out;
     }
+    return { x: 0, y: 0 };
+  }
 
-    if (biome === "grass") {
-      const gv = this._grassVariant(x, y);
-
-      const dry = [112, 150, 78];
-      const base = [84, 150, 82];
-      const lush = [72, 170, 88];
-
-      let out;
-      if (gv < 0.42) {
-        out = lerpRgb(dry, base, gv / 0.42);
-      } else {
-        out = lerpRgb(base, lush, (gv - 0.42) / 0.58);
+  _findNearbyLand(x, y, maxR = 240) {
+    for (let r = 0; r <= maxR; r += 16) {
+      for (let i = 0; i < 24; i++) {
+        const a = (i / 24) * Math.PI * 2;
+        const px = x + Math.cos(a) * r;
+        const py = y + Math.sin(a) * r;
+        const t = this._sampleTile(px, py);
+        if (t === "grass" || t === "rock" || t === "sand") {
+          return { x: px, y: py };
+        }
       }
-
-      const h = clamp((t - 0.39) / 0.44, 0, 1);
-      out = lerpRgb(out, [out[0] + 6, out[1] + 8, out[2] + 4], h * 0.18);
-
-      return out;
     }
-
-    const rv = this._rockVariant(x, y);
-    const dark = [98, 104, 112];
-    const base = [116, 122, 130];
-    const light = [142, 148, 158];
-
-    let out;
-    if (rv < 0.45) {
-      out = lerpRgb(dark, base, rv / 0.45);
-    } else {
-      out = lerpRgb(base, light, (rv - 0.45) / 0.55);
-    }
-
-    const h = clamp((t - 0.83) / 0.17, 0, 1);
-    out = lerpRgb(out, [out[0] + 8, out[1] + 8, out[2] + 10], h * 0.18);
-
-    return out;
+    return null;
   }
 
-  _miniColorFor(biome, t, x = 0, y = 0) {
-    if (biome === "water") {
-      return this._tileColorFor(biome, t, x, y);
+  _findNearbyShore(x, y, maxR = 240) {
+    for (let r = 0; r <= maxR; r += 16) {
+      for (let i = 0; i < 24; i++) {
+        const a = (i / 24) * Math.PI * 2;
+        const px = x + Math.cos(a) * r;
+        const py = y + Math.sin(a) * r;
+        const t = this._sampleTile(px, py);
+        if (t === "sand") return { x: px, y: py };
+      }
     }
-    if (biome === "sand") {
-      const sv = this._sandVariant(x, y);
-      return sv > 0.60 ? [224, 205, 144] : sv < 0.32 ? [192, 174, 112] : [208, 188, 126];
-    }
-    if (biome === "grass") {
-      const gv = this._grassVariant(x, y);
-      return gv > 0.62 ? [70, 140, 72] : gv < 0.32 ? [98, 130, 68] : [78, 136, 74];
-    }
-    return [122, 128, 138];
+    return this._findNearbyLand(x, y, maxR);
   }
-}
-
-/* ===========================
-   Small color helpers
-=========================== */
-
-function rgb(r, g, b) {
-  return `rgb(${r | 0}, ${g | 0}, ${b | 0})`;
-}
-
-function lerpRgb(a, b, t) {
-  return [
-    a[0] + (b[0] - a[0]) * t,
-    a[1] + (b[1] - a[1]) * t,
-    a[2] + (b[2] - a[2]) * t,
-  ];
 }
 ===== ./style.css =====
 html, body {
