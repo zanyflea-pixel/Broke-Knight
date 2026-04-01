@@ -1,15 +1,14 @@
 // src/world.js
-// v45 WORLD/MAP MATCH FIX (FULL FILE)
+// v43 BIG WORLD + REAL MAP SPACE + REVEAL FOG (FULL FILE)
 //
 // Goals:
-// - keep the old good blue water / green grass / rock / sand look
-// - make the REAL world much bigger
-// - make map space match real world space
-// - reveal the map as the hero walks
-// - keep compatibility with the current game/ui files
-// - keep minimap generation self-contained
+// - keep the old safe look: blue water, green grass, sand, rocks
+// - make the actual world much bigger
+// - make the minimap use the SAME world space as the playable world
+// - reveal the minimap as the hero explores
+// - stay compatible with current game.js / ui.js baseline
 
-import { hash2, fbm, RNG } from "./util.js";
+import { clamp, hash2, fbm, RNG } from "./util.js";
 
 export default class World {
   constructor(seed = 12345, opts = {}) {
@@ -25,8 +24,7 @@ export default class World {
     this.spawn = { x: 0, y: 0 };
 
     // REAL PLAYABLE WORLD HALF-SIZE
-    // This is intentionally much bigger so the player does not feel
-    // like they can walk outside the meaningful map space.
+    // old file had 1280 which was too small
     this.boundsRadius = 5200;
 
     this.camps = [];
@@ -42,19 +40,17 @@ export default class World {
     this._minimapDirty = true;
     this._minimapTimer = 0;
 
-    // kept for game/ui compatibility
-    this.mapMode = "small"; // "small" | "large"
+    // kept for compatibility with later map code
+    this.mapMode = "small";
 
-    // fog reveal sets
     this._revealedSmall = new Set();
     this._revealedLarge = new Set();
 
     this._poiRng = new RNG(hash2(this.seed, 777));
 
     this._initPOIs();
-
     this.revealAround(this.spawn.x, this.spawn.y, 260);
-    this._queueAround(this.spawn.x, this.spawn.y, 3);
+    this._queueAround(this.spawn.x, this.spawn.y, 2);
   }
 
   setViewSize(w, h) {
@@ -94,6 +90,53 @@ export default class World {
       this._renderMinimap();
     }
     return this._minimap;
+  }
+
+  revealAround(wx, wy, radius = 220) {
+    this._revealModeAround(wx, wy, radius, "small");
+    this._revealModeAround(wx, wy, radius * 1.12, "large");
+    this._minimapDirty = true;
+  }
+
+  _revealModeAround(wx, wy, radius, mode) {
+    const span = this._getMapSpan(mode);
+    const half = span * 0.5;
+    const cell = mode === "large" ? 72 : 48;
+    const set = mode === "large" ? this._revealedLarge : this._revealedSmall;
+
+    const x0 = Math.floor((wx - radius + half) / cell);
+    const x1 = Math.floor((wx + radius + half) / cell);
+    const y0 = Math.floor((wy - radius + half) / cell);
+    const y1 = Math.floor((wy + radius + half) / cell);
+
+    for (let gy = y0; gy <= y1; gy++) {
+      for (let gx = x0; gx <= x1; gx++) {
+        const cx = gx * cell - half + cell * 0.5;
+        const cy = gy * cell - half + cell * 0.5;
+        const dx = cx - wx;
+        const dy = cy - wy;
+        if (dx * dx + dy * dy <= radius * radius) {
+          set.add(`${gx},${gy}`);
+        }
+      }
+    }
+  }
+
+  isRevealed(wx, wy, mode = this.mapMode) {
+    const span = this._getMapSpan(mode);
+    const half = span * 0.5;
+    const cell = mode === "large" ? 72 : 48;
+    const gx = Math.floor((wx + half) / cell);
+    const gy = Math.floor((wy + half) / cell);
+    const set = mode === "large" ? this._revealedLarge : this._revealedSmall;
+    return set.has(`${gx},${gy}`);
+  }
+
+  _getMapSpan(mode = this.mapMode) {
+    // small map still shows a lot
+    if (mode === "small") return 5200;
+    // large map covers full real world
+    return this.boundsRadius * 2;
   }
 
   canWalk(x, y) {
@@ -185,53 +228,6 @@ export default class World {
     for (const d of this.docks) this._drawDock(ctx, d);
     for (const c of this.camps) this._drawCamp(ctx, c);
     for (const dg of this.dungeons) this._drawDungeonEntrance(ctx, dg);
-  }
-
-  revealAround(wx, wy, radius = 220) {
-    this._revealModeAround(wx, wy, radius, "small");
-    this._revealModeAround(wx, wy, radius * 1.15, "large");
-    this._minimapDirty = true;
-  }
-
-  _revealModeAround(wx, wy, radius, mode) {
-    const span = this._getMapSpan(mode);
-    const half = span * 0.5;
-    const cell = mode === "large" ? 72 : 48;
-    const set = mode === "large" ? this._revealedLarge : this._revealedSmall;
-
-    const x0 = Math.floor((wx - radius + half) / cell);
-    const x1 = Math.floor((wx + radius + half) / cell);
-    const y0 = Math.floor((wy - radius + half) / cell);
-    const y1 = Math.floor((wy + radius + half) / cell);
-
-    for (let gy = y0; gy <= y1; gy++) {
-      for (let gx = x0; gx <= x1; gx++) {
-        const cx = gx * cell - half + cell * 0.5;
-        const cy = gy * cell - half + cell * 0.5;
-        const dx = cx - wx;
-        const dy = cy - wy;
-        if (dx * dx + dy * dy <= radius * radius) {
-          set.add(`${gx},${gy}`);
-        }
-      }
-    }
-  }
-
-  isRevealed(wx, wy, mode = this.mapMode) {
-    const span = this._getMapSpan(mode);
-    const half = span * 0.5;
-    const cell = mode === "large" ? 72 : 48;
-    const gx = Math.floor((wx + half) / cell);
-    const gy = Math.floor((wy + half) / cell);
-    const set = mode === "large" ? this._revealedLarge : this._revealedSmall;
-    return set.has(`${gx},${gy}`);
-  }
-
-  _getMapSpan(mode = this.mapMode) {
-    // Small map still shows a large region.
-    // Large map MUST cover the full real world.
-    if (mode === "small") return 5200;
-    return this.boundsRadius * 2;
   }
 
   _renderMinimap() {
@@ -337,19 +333,19 @@ export default class World {
     if (x < -this.boundsRadius || x > this.boundsRadius) return "water";
     if (y < -this.boundsRadius || y > this.boundsRadius) return "water";
 
-    // continent shaping: much weaker "round island" pull than before
-    const largeA = fbm((x + this.seed * 0.11) * 0.00062, (y - this.seed * 0.07) * 0.00062, 4);
-    const largeB = fbm((x - this.seed * 0.05) * 0.00108, (y + this.seed * 0.09) * 0.00108, 4);
-    const med = fbm((x + this.seed * 0.03) * 0.0032, (y + this.seed * 0.04) * 0.0032, 3);
-    const rockN = fbm((x - this.seed * 0.02) * 0.0072, (y + this.seed * 0.05) * 0.0072, 2);
+    // larger continent fields so the world stops feeling like one tiny round island
+    const largeA = fbm((x + this.seed * 0.11) * 0.00058, (y - this.seed * 0.07) * 0.00058, 4);
+    const largeB = fbm((x - this.seed * 0.05) * 0.00105, (y + this.seed * 0.09) * 0.00105, 4);
+    const med = fbm((x + this.seed * 0.03) * 0.0030, (y + this.seed * 0.04) * 0.0030, 3);
+    const rockN = fbm((x - this.seed * 0.02) * 0.0070, (y + this.seed * 0.05) * 0.0070, 2);
 
     const edgeX = Math.abs(x) / this.boundsRadius;
     const edgeY = Math.abs(y) / this.boundsRadius;
-    const edgePenalty = Math.max(edgeX, edgeY) * 0.12;
+    const edgePenalty = Math.max(edgeX, edgeY) * 0.11;
 
     const land = largeA * 0.62 + largeB * 0.30 + med * 0.18 - edgePenalty;
 
-    if (land < -0.24) return "water";
+    if (land < -0.25) return "water";
     if (land < -0.11) return "sand";
     if (rockN > 0.43 && land > -0.02) return "rock";
     return "grass";
@@ -383,7 +379,7 @@ export default class World {
 
     let wid = 1;
 
-    const waystoneRings = [520, 1200, 1950, 2800, 3650, 4500];
+    const waystoneRings = [520, 1250, 2050, 2950, 3850, 4700];
     for (let ringIndex = 0; ringIndex < waystoneRings.length; ringIndex++) {
       const ring = waystoneRings[ringIndex];
       const count = 4 + ringIndex;
@@ -392,26 +388,26 @@ export default class World {
         const a = (i / count) * Math.PI * 2 + ringIndex * 0.17;
         const x = Math.round(Math.cos(a) * ring);
         const y = Math.round(Math.sin(a) * ring);
-        const p = this._findNearbyLand(x, y, 280);
+        const p = this._findNearbyLand(x, y, 300);
         if (p) this.waystones.push({ id: wid++, x: p.x, y: p.y });
       }
     }
 
     for (let i = 0; i < 22; i++) {
       const a = (i / 22) * Math.PI * 2 + 0.31;
-      const r = 1300 + (i % 6) * 560;
+      const r = 1300 + (i % 6) * 600;
       const x = Math.round(Math.cos(a) * r);
       const y = Math.round(Math.sin(a) * r);
-      const p = this._findNearbyShore(x, y, 300);
+      const p = this._findNearbyShore(x, y, 320);
       if (p) this.docks.push({ id: i + 1, x: p.x, y: p.y });
     }
 
     for (let i = 0; i < 42; i++) {
       const a = (i / 42) * Math.PI * 2 + 0.13;
-      const r = 900 + (i % 8) * 520;
+      const r = 900 + (i % 8) * 560;
       const x = Math.round(Math.cos(a) * r);
       const y = Math.round(Math.sin(a) * r);
-      const p = this._findNearbyLand(x, y, 320);
+      const p = this._findNearbyLand(x, y, 340);
       if (p) {
         this.camps.push({
           id: i + 1,
@@ -422,7 +418,7 @@ export default class World {
       }
     }
 
-    const dg = this._findNearbyLand(this.spawn.x + 420, this.spawn.y + 220, 260) || {
+    const dg = this._findNearbyLand(this.spawn.x + 420, this.spawn.y + 220, 280) || {
       x: this.spawn.x + 360,
       y: this.spawn.y + 220,
     };
@@ -430,7 +426,7 @@ export default class World {
   }
 
   _findGoodSpawn() {
-    for (let r = 0; r <= 500; r += 24) {
+    for (let r = 0; r <= 520; r += 24) {
       for (let i = 0; i < 24; i++) {
         const a = (i / 24) * Math.PI * 2;
         const x = Math.cos(a) * r;
