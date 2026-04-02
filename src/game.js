@@ -1,5 +1,5 @@
 // src/game.js
-// v49 DUNGEON ROOM MODIFIERS + MINIBOSS VAULTS (FULL FILE)
+// v50 DUNGEON TRAPS + RELIC ROOMS + ELITE BOSSES (FULL FILE)
 
 import World from "./world.js";
 import { clamp, lerp, dist2, norm, RNG, hash2 } from "./util.js";
@@ -22,7 +22,7 @@ export default class Game {
 
     this.input = new Input(window);
     this.ui = new UI(canvas);
-    this.save = new Save("broke-knight-save-v49");
+    this.save = new Save("broke-knight-save-v50");
 
     this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
     this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
@@ -82,6 +82,7 @@ export default class Game {
     this._spellMsgCooldown = 0;
     this._resetQueued = false;
     this._resetConfirmT = 0;
+    this._hazardTick = 0;
 
     this.aim = { x: 1, y: 0 };
 
@@ -119,6 +120,8 @@ export default class Game {
       lockedGoal: true,
 
       currentModifierText: "",
+      hazards: [],
+      relicTakenRooms: new Set(),
     };
 
     this._tryLoad();
@@ -417,6 +420,28 @@ export default class Game {
     if (this._resetConfirmT > 0) {
       this._resetConfirmT = Math.max(0, this._resetConfirmT - dt);
       if (this._resetConfirmT <= 0) this._resetConfirmT = 0;
+    }
+  }
+
+  _tickDungeonHazards(dt) {
+    if (!this.dungeon.active) return;
+
+    this._hazardTick += dt;
+    if (this._hazardTick < 0.2) return;
+    this._hazardTick = 0;
+
+    const room = this._getCurrentDungeonRoom();
+    if (!room || room.cleared) return;
+
+    for (const hz of this.dungeon.hazards) {
+      if (hz.roomId !== room.id) continue;
+      if (dist2(this.hero.x, this.hero.y, hz.x, hz.y) > hz.r * hz.r) continue;
+
+      const dmg = hz.kind === "ember" ? 2 : 3;
+      const dealt = this.hero.takeDamage?.(dmg) || dmg;
+      if (dealt > 0) {
+        this._shake(0.04, 1.6);
+      }
     }
   }
 
@@ -900,6 +925,12 @@ export default class Game {
         return;
       }
 
+      if (room?.kind === "relic" && !this.dungeon.relicTakenRooms.has(room.id) &&
+          dist2(this.hero.x, this.hero.y, room.cx, room.cy) < 84 * 84) {
+        this._takeRelicRoomReward(room);
+        return;
+      }
+
       if (this.dungeon.rewardChest && !this.dungeon.rewardTaken &&
           dist2(this.hero.x, this.hero.y, this.dungeon.rewardChest.x, this.dungeon.rewardChest.y) < 78 * 78) {
         this._openDungeonChest();
@@ -999,6 +1030,8 @@ export default class Game {
     this.dungeon.shrineUsed = false;
     this.dungeon.lockedGoal = !this.dungeon.bossFloor;
     this.dungeon.currentModifierText = "";
+    this.dungeon.hazards = [];
+    this.dungeon.relicTakenRooms = new Set();
 
     this.enemies = [];
     this.projectiles = [];
@@ -1154,11 +1187,19 @@ export default class Game {
       sideCombatRooms[i].modifier = "rage";
     }
 
-    const shrineCandidate = this.dungeon.rooms.find(r => r.kind === "reward");
+    const rewardRooms = this.dungeon.rooms.filter(r => r.kind === "reward");
+    const shrineCandidate = rewardRooms[0] || null;
     if (shrineCandidate && floor >= 2) {
       shrineCandidate.kind = "shrine";
       shrineCandidate.enemyCount = Math.max(0, shrineCandidate.enemyCount - 1);
       shrineCandidate.modifier = "sanctum";
+    }
+
+    const relicCandidate = rewardRooms[1] || null;
+    if (relicCandidate && floor >= 4) {
+      relicCandidate.kind = "relic";
+      relicCandidate.enemyCount = Math.max(1, relicCandidate.enemyCount);
+      relicCandidate.modifier = "sanctum";
     }
 
     const minibossCandidates = this.dungeon.rooms.filter(r => !r.locked && r.kind === "combat" && !r.keyRoom && r.id !== "room-0");
@@ -1185,16 +1226,22 @@ export default class Game {
       x: lastMainRoom.cx,
       y: lastMainRoom.cy,
     };
+
+    for (const room of this.dungeon.rooms) {
+      this._createRoomHazards(room);
+    }
   }
 
   _rollRoomModifier(i, rewardBias = false) {
     const roll = (hash2(this.seed, this.dungeon.floor, i, 991) >>> 0) % 100;
     if (rewardBias) return roll < 50 ? "none" : "sanctum";
-    if (roll < 42) return "none";
-    if (roll < 58) return "haste";
-    if (roll < 72) return "drag";
-    if (roll < 84) return "swarm";
-    if (roll < 93) return "drain";
+    if (roll < 34) return "none";
+    if (roll < 48) return "haste";
+    if (roll < 60) return "drag";
+    if (roll < 72) return "swarm";
+    if (roll < 82) return "drain";
+    if (roll < 91) return "spikes";
+    if (roll < 97) return "embers";
     return "rage";
   }
 
@@ -1274,6 +1321,77 @@ export default class Game {
     };
   }
 
+  _createRoomHazards(room) {
+    if (!room) return;
+    if (room.kind === "start" || room.kind === "shrine" || room.kind === "relic") return;
+
+    if (room.modifier === "spikes") {
+      const count = room.kind === "goal" ? 5 : 3;
+      for (let i = 0; i < count; i++) {
+        this.dungeon.hazards.push({
+          roomId: room.id,
+          kind: "spike",
+          x: room.x + 70 + this._rng.range(0, Math.max(10, room.w - 140)),
+          y: room.y + 70 + this._rng.range(0, Math.max(10, room.h - 140)),
+          r: 22,
+        });
+      }
+    } else if (room.modifier === "embers") {
+      const count = room.kind === "vault" ? 5 : 3;
+      for (let i = 0; i < count; i++) {
+        this.dungeon.hazards.push({
+          roomId: room.id,
+          kind: "ember",
+          x: room.x + 70 + this._rng.range(0, Math.max(10, room.w - 140)),
+          y: room.y + 70 + this._rng.range(0, Math.max(10, room.h - 140)),
+          r: 28,
+        });
+      }
+    }
+  }
+
+  _takeRelicRoomReward(room) {
+    if (!room || this.dungeon.relicTakenRooms.has(room.id)) return;
+
+    this.dungeon.relicTakenRooms.add(room.id);
+
+    const floor = this.dungeon.floor | 0;
+    const relicRoll = (hash2(this.seed, floor, room.cx | 0, 731) >>> 0) % 3;
+
+    if (relicRoll === 0) {
+      this.hero.potions.hp = (this.hero.potions.hp | 0) + 2;
+      this.hero.potions.mana = (this.hero.potions.mana | 0) + 2;
+      this._grantGold(18 + floor * 4);
+      this._msg("Relic room: supplies cache found.", 2.4);
+    } else if (relicRoll === 1) {
+      this._grantXP(18 + floor * 5);
+      this._fullRestoreHero();
+      this._msg("Relic room: ancient wisdom empowers you.", 2.4);
+    } else {
+      const slotRoll = Math.random();
+      const slot =
+        slotRoll < 0.28 ? "weapon" :
+        slotRoll < 0.50 ? "armor" :
+        slotRoll < 0.66 ? "helm" :
+        slotRoll < 0.80 ? "boots" :
+        slotRoll < 0.90 ? "ring" : "trinket";
+
+      const rarity =
+        floor >= 6
+          ? (Math.random() < 0.35 ? "epic" : "rare")
+          : (Math.random() < 0.55 ? "rare" : "uncommon");
+
+      const gearSeed = hash2(this.seed ^ 0x61aa, floor * 157 + (room.cx | 0) * 3 + (room.cy | 0));
+      const gear = makeGear(slot, Math.max(1, (this.hero.level || 1) + Math.floor(floor / 2)), rarity, gearSeed);
+      this.hero.inventory.push(gear);
+      const equipped = this._maybeAutoEquip(gear);
+      this._msg(equipped ? `Relic room: equipped ${gear.name}` : `Relic room: found ${gear.name}`, 2.4);
+    }
+
+    this._shake(0.08, 3.4);
+    this._saveSoon();
+  }
+
   _getCurrentDungeonRoom() {
     return this.dungeon.rooms[this.dungeon.currentRoomIndex] || null;
   }
@@ -1305,6 +1423,7 @@ export default class Game {
 
     if (room.kind === "reward") count = Math.max(1, count - 1);
     if (room.kind === "shrine") count = Math.max(0, count - 1);
+    if (room.kind === "relic") count = Math.max(1, count - 1);
     if (room.kind === "start") count = Math.max(2, count - 1);
     if (room.kind === "goal") count = Math.max(3, count + 1);
     if (room.kind === "key") count = Math.max(2, count + 1);
@@ -1321,6 +1440,7 @@ export default class Game {
 
       if (room.kind === "reward") kind = i % 2 === 0 ? "stalker" : "caster";
       if (room.kind === "shrine") kind = i % 2 === 0 ? "stalker" : "caster";
+      if (room.kind === "relic") kind = i % 2 === 0 ? "stalker" : "caster";
       if (room.kind === "goal") kind = i % 2 === 0 ? "brute" : "caster";
       if (room.kind === "key") kind = i % 2 === 0 ? "brute" : "stalker";
       if (room.kind === "vault") kind = i % 2 === 0 ? "brute" : "caster";
@@ -1338,6 +1458,9 @@ export default class Game {
         e.hp = e.maxHp;
       } else if (room.modifier === "drag") {
         e.maxHp = Math.round(e.maxHp * 1.10);
+        e.hp = e.maxHp;
+      } else if (room.modifier === "drain") {
+        e.maxHp = Math.round(e.maxHp * 1.08);
         e.hp = e.maxHp;
       }
 
@@ -1363,6 +1486,8 @@ export default class Game {
     if (mod === "drain") return "Mana Drain";
     if (mod === "rage") return "Blood Rage";
     if (mod === "sanctum") return "Sanctum";
+    if (mod === "spikes") return "Spike Traps";
+    if (mod === "embers") return "Burning Floor";
     return "";
   }
 
@@ -1447,6 +1572,8 @@ export default class Game {
     this.dungeon.corridors = [];
     this.dungeon.roomVisited.clear?.();
     this.dungeon.currentModifierText = "";
+    this.dungeon.hazards = [];
+    this.dungeon.relicTakenRooms = new Set();
 
     this.enemies = [];
     this.projectiles = [];
@@ -1493,6 +1620,7 @@ export default class Game {
         else if (room.kind === "key") this._msg("Key room", 1.3);
         else if (room.kind === "reward") this._msg("Reward room", 1.3);
         else if (room.kind === "shrine") this._msg("Shrine room", 1.3);
+        else if (room.kind === "relic") this._msg("Relic room", 1.3);
         else if (room.kind === "goal") this._msg("Locked goal room", 1.3);
         else this._msg("New room", 1.3);
       }
@@ -1525,6 +1653,9 @@ export default class Game {
     } else if (room.modifier === "swarm") {
       roomGold += 3;
       roomXP += 3;
+    } else if (room.modifier === "spikes" || room.modifier === "embers") {
+      roomGold += 3;
+      roomXP += 2;
     }
 
     this._grantGold(roomGold);
@@ -1589,6 +1720,7 @@ export default class Game {
           : room.kind === "goal" ? "Goal Chamber"
           : room.kind === "reward" ? "Treasure Room"
           : room.kind === "shrine" ? "Shrine Room"
+          : room.kind === "relic" ? "Relic Room"
           : room.kind === "key" ? "Key Room"
           : room.kind === "vault" ? "Vault"
           : room.kind === "start" ? "Entry Hall"
@@ -1990,6 +2122,7 @@ export default class Game {
 
     this.hero.update?.(dt);
     this._regenMana(dt);
+    this._tickDungeonHazards(dt);
 
     this._updateDungeonRoomTracking();
     this._updateZoneMessages(dt);
@@ -2076,7 +2209,37 @@ export default class Game {
     if (mod === "drain") return "rgba(30,46,58,0.22)";
     if (mod === "rage") return "rgba(72,30,30,0.22)";
     if (mod === "sanctum") return "rgba(28,58,54,0.22)";
+    if (mod === "spikes") return "rgba(70,54,54,0.18)";
+    if (mod === "embers") return "rgba(78,42,24,0.18)";
     return null;
+  }
+
+  _drawDungeonHazards(ctx) {
+    const room = this._getCurrentDungeonRoom();
+    if (!room) return;
+
+    for (const hz of this.dungeon.hazards) {
+      if (hz.roomId !== room.id) continue;
+
+      if (hz.kind === "spike") {
+        ctx.fillStyle = "rgba(160,150,160,0.90)";
+        ctx.beginPath();
+        ctx.moveTo(hz.x, hz.y - hz.r);
+        ctx.lineTo(hz.x + hz.r * 0.9, hz.y + hz.r * 0.7);
+        ctx.lineTo(hz.x - hz.r * 0.9, hz.y + hz.r * 0.7);
+        ctx.closePath();
+        ctx.fill();
+      } else if (hz.kind === "ember") {
+        ctx.fillStyle = "rgba(255,120,42,0.55)";
+        ctx.beginPath();
+        ctx.arc(hz.x, hz.y, hz.r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "rgba(255,200,80,0.75)";
+        ctx.beginPath();
+        ctx.arc(hz.x, hz.y, hz.r * 0.45, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
   }
 
   _drawDungeonFloor(ctx) {
@@ -2097,6 +2260,7 @@ export default class Game {
         room.kind === "reward" ? "rgba(30,32,40,1)" :
         room.kind === "goal" ? "rgba(32,30,42,1)" :
         room.kind === "shrine" ? "rgba(28,34,40,1)" :
+        room.kind === "relic" ? "rgba(28,38,44,1)" :
         room.kind === "key" ? "rgba(36,28,30,1)" :
         room.kind === "vault" ? "rgba(38,28,42,1)" :
         "rgba(26,24,34,1)";
@@ -2146,8 +2310,13 @@ export default class Game {
       } else if (room.kind === "vault") {
         ctx.fillStyle = "rgba(255,120,220,0.95)";
         ctx.fillRect(room.cx - 7, room.cy - 7, 14, 14);
+      } else if (room.kind === "relic") {
+        ctx.fillStyle = "rgba(140,255,200,0.95)";
+        ctx.fillRect(room.cx - 7, room.cy - 7, 14, 14);
       }
     }
+
+    this._drawDungeonHazards(ctx);
 
     if (this.dungeon.exit) {
       ctx.fillStyle = "rgba(120,88,70,1)";
