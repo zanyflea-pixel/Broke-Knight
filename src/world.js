@@ -1,12 +1,12 @@
 // src/world.js
-// v43 BIG WORLD + REAL MAP SPACE + REVEAL FOG (FULL FILE)
+// v44 SAFE WATER RETURN + BIG WORLD (FULL FILE)
 //
 // Goals:
-// - keep the old safe look: blue water, green grass, sand, rocks
-// - make the actual world much bigger
-// - make the minimap use the SAME world space as the playable world
-// - reveal the minimap as the hero explores
-// - stay compatible with current game.js / ui.js baseline
+// - keep current v43 compatibility
+// - do NOT touch dungeon/game logic
+// - bring back more visible water and shoreline
+// - keep big world / reveal fog / minimap compatibility
+// - stay low-risk
 
 import { clamp, hash2, fbm, RNG } from "./util.js";
 
@@ -23,8 +23,7 @@ export default class World {
 
     this.spawn = { x: 0, y: 0 };
 
-    // REAL PLAYABLE WORLD HALF-SIZE
-    // old file had 1280 which was too small
+    // keep the big playable world
     this.boundsRadius = 5200;
 
     this.camps = [];
@@ -40,7 +39,6 @@ export default class World {
     this._minimapDirty = true;
     this._minimapTimer = 0;
 
-    // kept for compatibility with later map code
     this.mapMode = "small";
 
     this._revealedSmall = new Set();
@@ -133,9 +131,7 @@ export default class World {
   }
 
   _getMapSpan(mode = this.mapMode) {
-    // small map still shows a lot
     if (mode === "small") return 5200;
-    // large map covers full real world
     return this.boundsRadius * 2;
   }
 
@@ -333,21 +329,36 @@ export default class World {
     if (x < -this.boundsRadius || x > this.boundsRadius) return "water";
     if (y < -this.boundsRadius || y > this.boundsRadius) return "water";
 
-    // larger continent fields so the world stops feeling like one tiny round island
+    // keep v43-style large world fields
     const largeA = fbm((x + this.seed * 0.11) * 0.00058, (y - this.seed * 0.07) * 0.00058, 4);
     const largeB = fbm((x - this.seed * 0.05) * 0.00105, (y + this.seed * 0.09) * 0.00105, 4);
     const med = fbm((x + this.seed * 0.03) * 0.0030, (y + this.seed * 0.04) * 0.0030, 3);
     const rockN = fbm((x - this.seed * 0.02) * 0.0070, (y + this.seed * 0.05) * 0.0070, 2);
 
+    // extra safe water shaping: light channels + coastline pull
+    const riverA = Math.abs(fbm((x + this.seed * 0.17) * 0.00155, (y - this.seed * 0.11) * 0.00155, 3));
+    const riverB = Math.abs(fbm((x - this.seed * 0.09) * 0.00105, (y + this.seed * 0.21) * 0.00105, 3));
+    const lakeN = fbm((x + this.seed * 0.15) * 0.00175, (y - this.seed * 0.14) * 0.00175, 3);
+
     const edgeX = Math.abs(x) / this.boundsRadius;
     const edgeY = Math.abs(y) / this.boundsRadius;
-    const edgePenalty = Math.max(edgeX, edgeY) * 0.11;
+    const edgePenalty = Math.max(edgeX, edgeY) * 0.13;
 
-    const land = largeA * 0.62 + largeB * 0.30 + med * 0.18 - edgePenalty;
+    let land = largeA * 0.60 + largeB * 0.28 + med * 0.17 - edgePenalty;
 
-    if (land < -0.25) return "water";
-    if (land < -0.11) return "sand";
-    if (rockN > 0.43 && land > -0.02) return "rock";
+    // gentle coast carving
+    if (riverA < 0.060) land -= 0.18;
+    else if (riverA < 0.090) land -= 0.08;
+
+    if (riverB < 0.040) land -= 0.14;
+    else if (riverB < 0.060) land -= 0.06;
+
+    if (lakeN < -0.46) land -= 0.16;
+    else if (lakeN < -0.38) land -= 0.08;
+
+    if (land < -0.21) return "water";
+    if (land < -0.08) return "sand";
+    if (rockN > 0.43 && land > -0.01) return "rock";
     return "grass";
   }
 
