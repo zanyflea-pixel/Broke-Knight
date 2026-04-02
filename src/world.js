@@ -1,12 +1,13 @@
 // src/world.js
-// v44 SAFE WATER RETURN + BIG WORLD (FULL FILE)
+// v47 CLEANER OVERWORLD PASS (FULL FILE)
 //
 // Goals:
-// - keep current v43 compatibility
-// - do NOT touch dungeon/game logic
-// - bring back more visible water and shoreline
-// - keep big world / reveal fog / minimap compatibility
-// - stay low-risk
+// - keep current compatibility
+// - keep big world / sailing / minimap reveal
+// - reduce clutter from the last pass
+// - keep nicer shoreline / water feel
+// - use fewer, larger details instead of lots of tiny dots
+// - do NOT touch game.js
 
 import { clamp, hash2, fbm, RNG } from "./util.js";
 
@@ -23,7 +24,6 @@ export default class World {
 
     this.spawn = { x: 0, y: 0 };
 
-    // keep the big playable world
     this.boundsRadius = 5200;
 
     this.camps = [];
@@ -165,57 +165,46 @@ export default class World {
       for (let tx = tx0; tx <= tx1; tx++) {
         const wx = tx * this.tileSize;
         const wy = ty * this.tileSize;
-        const tile = this._sampleTile(wx + this.tileSize * 0.5, wy + this.tileSize * 0.5);
+        const cxTile = wx + this.tileSize * 0.5;
+        const cyTile = wy + this.tileSize * 0.5;
+        const tile = this._sampleTile(cxTile, cyTile);
+
+        const shade = this._tileShade(cxTile, cyTile);
 
         if (tile === "water") {
-          ctx.fillStyle = "rgba(45,116,196,1)";
+          ctx.fillStyle = shade > 0.12
+            ? "rgba(62,138,214,1)"
+            : shade < -0.10
+              ? "rgba(28,88,170,1)"
+              : "rgba(42,112,196,1)";
         } else if (tile === "sand") {
-          ctx.fillStyle = "rgba(203,184,122,1)";
+          ctx.fillStyle = shade > 0.10
+            ? "rgba(219,201,138,1)"
+            : "rgba(201,182,118,1)";
         } else if (tile === "rock") {
-          ctx.fillStyle = "rgba(120,129,140,1)";
+          ctx.fillStyle = shade > 0.08
+            ? "rgba(136,146,156,1)"
+            : "rgba(112,122,132,1)";
         } else {
-          ctx.fillStyle = "rgba(76,137,72,1)";
+          ctx.fillStyle = shade > 0.12
+            ? "rgba(92,154,82,1)"
+            : shade < -0.12
+              ? "rgba(60,120,58,1)"
+              : "rgba(76,138,72,1)";
         }
 
         ctx.fillRect(wx, wy, this.tileSize + 1, this.tileSize + 1);
 
-        if (tile === "grass") {
-          const n = hash2(tx, ty, this.seed) >>> 0;
+        const n = hash2(tx, ty, this.seed) >>> 0;
 
-          if (n % 9 === 0) {
-            ctx.strokeStyle = "rgba(92,166,84,0.75)";
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(wx + 10, wy + 21);
-            ctx.lineTo(wx + 11, wy + 15);
-            ctx.moveTo(wx + 14, wy + 21);
-            ctx.lineTo(wx + 13, wy + 14);
-            ctx.stroke();
-          }
-
-          if (n % 41 === 0) {
-            ctx.fillStyle = "rgba(70,124,60,0.36)";
-            ctx.fillRect(wx + 5, wy + 6, 8, 5);
-            ctx.fillRect(wx + 13, wy + 13, 6, 4);
-          }
-        }
-
-        if (tile === "rock") {
-          const n = hash2(tx * 17, ty * 13, this.seed) >>> 0;
-          if (n % 5 === 0) {
-            ctx.fillStyle = "rgba(98,108,120,0.65)";
-            ctx.fillRect(wx + 6, wy + 6, 5, 4);
-            ctx.fillRect(wx + 13, wy + 12, 4, 4);
-          }
-        }
-
-        if (tile === "sand") {
-          const n = hash2(tx * 9, ty * 7, this.seed) >>> 0;
-          if (n % 8 === 0) {
-            ctx.fillStyle = "rgba(216,198,138,0.45)";
-            ctx.fillRect(wx + 7, wy + 8, 4, 3);
-            ctx.fillRect(wx + 14, wy + 14, 3, 2);
-          }
+        if (tile === "water") {
+          this._drawWaterDetail(ctx, wx, wy, n, cxTile, cyTile);
+        } else if (tile === "sand") {
+          this._drawSandDetail(ctx, wx, wy, n, cxTile, cyTile);
+        } else if (tile === "grass") {
+          this._drawGrassDetail(ctx, wx, wy, n, cxTile, cyTile);
+        } else if (tile === "rock") {
+          this._drawRockDetail(ctx, wx, wy, n);
         }
       }
     }
@@ -224,6 +213,122 @@ export default class World {
     for (const d of this.docks) this._drawDock(ctx, d);
     for (const c of this.camps) this._drawCamp(ctx, c);
     for (const dg of this.dungeons) this._drawDungeonEntrance(ctx, dg);
+  }
+
+  _drawWaterDetail(ctx, wx, wy, n, x, y) {
+    ctx.fillStyle = "rgba(88,176,236,0.22)";
+    if (n % 5 === 0) ctx.fillRect(wx + 4, wy + 8, 12, 2);
+    if (n % 11 === 0) ctx.fillRect(wx + 9, wy + 15, 9, 1.5);
+
+    if (this._nearSand(x, y) && n % 4 === 0) {
+      ctx.fillStyle = "rgba(236,246,255,0.26)";
+      ctx.fillRect(wx + 3, wy + 18, 14, 1.6);
+    }
+  }
+
+  _drawSandDetail(ctx, wx, wy, n, x, y) {
+    if (this._nearWater(x, y)) {
+      ctx.fillStyle = "rgba(245,233,186,0.44)";
+      if (n % 3 === 0) ctx.fillRect(wx + 3, wy + 18, 14, 1.4);
+    }
+
+    if (n % 18 === 0) this._drawReeds(ctx, wx + 6, wy + 20);
+  }
+
+  _drawGrassDetail(ctx, wx, wy, n, x, y) {
+    if (n % 7 === 0) this._drawGrassTuft(ctx, wx + 8, wy + 20);
+    if (n % 13 === 0) this._drawGrassTuft(ctx, wx + 14, wy + 21);
+
+    if (n % 31 === 0) this._drawBush(ctx, wx + 12, wy + 15);
+    if (n % 83 === 0) this._drawTree(ctx, wx + 12, wy + 11);
+
+    if (this._nearWater(x, y) && n % 16 === 0) {
+      this._drawReeds(ctx, wx + 10, wy + 20);
+    }
+  }
+
+  _drawRockDetail(ctx, wx, wy, n) {
+    ctx.fillStyle = "rgba(148,156,166,0.20)";
+    if (n % 4 === 0) ctx.fillRect(wx + 6, wy + 6, 8, 2);
+
+    ctx.fillStyle = "rgba(96,108,120,0.66)";
+    if (n % 5 === 0) ctx.fillRect(wx + 7, wy + 8, 5, 4);
+    if (n % 9 === 0) ctx.fillRect(wx + 13, wy + 13, 4, 4);
+  }
+
+  _drawGrassTuft(ctx, x, y) {
+    ctx.strokeStyle = "rgba(98,178,90,0.82)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + 1, y - 6);
+    ctx.moveTo(x + 3, y);
+    ctx.lineTo(x + 2, y - 7);
+    ctx.moveTo(x + 6, y);
+    ctx.lineTo(x + 5, y - 5);
+    ctx.stroke();
+  }
+
+  _drawBush(ctx, x, y) {
+    ctx.fillStyle = "rgba(58,112,54,0.76)";
+    ctx.beginPath();
+    ctx.arc(x - 3, y + 1, 4, 0, Math.PI * 2);
+    ctx.arc(x + 1, y - 1, 5, 0, Math.PI * 2);
+    ctx.arc(x + 5, y + 1, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  _drawTree(ctx, x, y) {
+    ctx.fillStyle = "rgba(96,66,42,0.95)";
+    ctx.fillRect(x - 1.5, y + 3, 3, 7);
+
+    ctx.fillStyle = "rgba(48,110,58,0.96)";
+    ctx.beginPath();
+    ctx.arc(x, y, 7, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(78,148,84,0.40)";
+    ctx.beginPath();
+    ctx.arc(x - 2, y - 2, 3, 0, Math.PI * 2);
+    ctx.arc(x + 3, y - 1, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  _drawReeds(ctx, x, y) {
+    ctx.strokeStyle = "rgba(138,164,88,0.82)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x, y - 7);
+    ctx.moveTo(x + 3, y);
+    ctx.lineTo(x + 4, y - 6);
+    ctx.moveTo(x + 6, y);
+    ctx.lineTo(x + 5, y - 8);
+    ctx.stroke();
+  }
+
+  _tileShade(x, y) {
+    return fbm((x + this.seed * 0.04) * 0.01, (y - this.seed * 0.03) * 0.01, 2);
+  }
+
+  _nearWater(x, y) {
+    const d = this.tileSize;
+    return (
+      this._sampleTile(x + d, y) === "water" ||
+      this._sampleTile(x - d, y) === "water" ||
+      this._sampleTile(x, y + d) === "water" ||
+      this._sampleTile(x, y - d) === "water"
+    );
+  }
+
+  _nearSand(x, y) {
+    const d = this.tileSize;
+    return (
+      this._sampleTile(x + d, y) === "sand" ||
+      this._sampleTile(x - d, y) === "sand" ||
+      this._sampleTile(x, y + d) === "sand" ||
+      this._sampleTile(x, y - d) === "sand"
+    );
   }
 
   _renderMinimap() {
@@ -329,13 +434,11 @@ export default class World {
     if (x < -this.boundsRadius || x > this.boundsRadius) return "water";
     if (y < -this.boundsRadius || y > this.boundsRadius) return "water";
 
-    // keep v43-style large world fields
     const largeA = fbm((x + this.seed * 0.11) * 0.00058, (y - this.seed * 0.07) * 0.00058, 4);
     const largeB = fbm((x - this.seed * 0.05) * 0.00105, (y + this.seed * 0.09) * 0.00105, 4);
     const med = fbm((x + this.seed * 0.03) * 0.0030, (y + this.seed * 0.04) * 0.0030, 3);
     const rockN = fbm((x - this.seed * 0.02) * 0.0070, (y + this.seed * 0.05) * 0.0070, 2);
 
-    // extra safe water shaping: light channels + coastline pull
     const riverA = Math.abs(fbm((x + this.seed * 0.17) * 0.00155, (y - this.seed * 0.11) * 0.00155, 3));
     const riverB = Math.abs(fbm((x - this.seed * 0.09) * 0.00105, (y + this.seed * 0.21) * 0.00105, 3));
     const lakeN = fbm((x + this.seed * 0.15) * 0.00175, (y - this.seed * 0.14) * 0.00175, 3);
@@ -346,7 +449,6 @@ export default class World {
 
     let land = largeA * 0.60 + largeB * 0.28 + med * 0.17 - edgePenalty;
 
-    // gentle coast carving
     if (riverA < 0.060) land -= 0.18;
     else if (riverA < 0.090) land -= 0.08;
 
