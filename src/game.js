@@ -8,6 +8,72 @@ import Input from "./input.js";
 import UI from "./ui.js";
 import Save from "./save.js";
 
+function gearVisualColor(rarity, kind = "armor") {
+  if (kind === "armor" || kind === "chest" || kind === "helm" || kind === "boots") {
+    if (rarity === "epic") return "rgba(178,118,255,0.98)";
+    if (rarity === "rare") return "rgba(112,182,255,0.98)";
+    if (rarity === "uncommon") return "rgba(126,198,136,0.98)";
+    return "rgba(124,138,160,0.98)";
+  }
+
+  if (kind === "ring" || kind === "trinket") {
+    if (rarity === "epic") return "rgba(226,170,255,0.98)";
+    if (rarity === "rare") return "rgba(156,210,255,0.98)";
+    if (rarity === "uncommon") return "rgba(180,240,180,0.98)";
+    return "rgba(232,214,164,0.98)";
+  }
+
+  if (kind === "weapon") {
+    if (rarity === "epic") return "rgba(208,164,255,1)";
+    if (rarity === "rare") return "rgba(144,204,255,1)";
+    if (rarity === "uncommon") return "rgba(186,232,196,1)";
+    return "rgba(178,188,205,1)";
+  }
+
+  return "rgba(200,200,210,1)";
+}
+
+function gearTrimColor(rarity) {
+  if (rarity === "epic") return "rgba(255,220,150,1)";
+  if (rarity === "rare") return "rgba(230,236,255,1)";
+  if (rarity === "uncommon") return "rgba(220,240,220,1)";
+  return "rgba(210,186,118,1)";
+}
+
+function gearShineColor(rarity) {
+  if (rarity === "epic") return "rgba(255,236,255,0.95)";
+  if (rarity === "rare") return "rgba(236,246,255,0.95)";
+  if (rarity === "uncommon") return "rgba(240,255,244,0.94)";
+  return "rgba(232,236,244,0.9)";
+}
+
+function gearGlowColor(rarity) {
+  if (rarity === "epic") return "rgba(220,160,255,0.95)";
+  if (rarity === "rare") return "rgba(140,210,255,0.95)";
+  if (rarity === "uncommon") return "rgba(155,235,175,0.92)";
+  return "rgba(255,220,140,0.55)";
+}
+
+function roundedRectPath(path, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  path.moveTo(x + rr, y);
+  path.lineTo(x + w - rr, y);
+  path.quadraticCurveTo(x + w, y, x + w, y + rr);
+  path.lineTo(x + w, y + h - rr);
+  path.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  path.lineTo(x + rr, y + h);
+  path.quadraticCurveTo(x, y + h, x, y + h - rr);
+  path.lineTo(x, y + rr);
+  path.quadraticCurveTo(x, y, x + rr, y);
+  path.closePath();
+}
+
+function roundedRectFill(ctx, x, y, w, h, r) {
+  const p = new Path2D();
+  roundedRectPath(p, x, y, w, h, r);
+  ctx.fill(p);
+}
+
 export default class Game {
   constructor(canvas) {
     if (!canvas) throw new Error("Game: canvas is required");
@@ -65,173 +131,280 @@ export default class Game {
     this.menu = { open: null };
 
     this.quests = this._makeQuests();
+    this.questTurnIn = null;
 
-    this.progress = {
-      discoveredWaystones: new Set(),
-      discoveredDocks: new Set(),
-      clearedCamps: new Set(),
-      eliteKills: 0,
-      currentZoneText: "",
-      currentZoneId: "",
-      zoneMsgCooldown: 0,
-      dungeonBest: 0,
-    };
+    this.msg = "";
+    this.msgT = 0;
+    this.zoneMsg = "";
+    this.zoneMsgT = 0;
+
+    this.flashT = 0;
+    this.hitStopT = 0;
 
     this._pickupMsgCooldown = 0;
-    this._levelMsgShown = this.hero.level || 1;
     this._spellMsgCooldown = 0;
-    this._resetQueued = false;
-    this._resetConfirmT = 0;
-    this._hazardTick = 0;
 
-    this.aim = { x: 1, y: 0 };
-
-    this.spells = {
-      q: { name: "Bolt", mana: 6, cd: 0.22 },
-      w: { name: "Nova", mana: 14, cd: 1.8 },
-      e: { name: "Dash", mana: 8, cd: 1.05 },
-      r: { name: "Orb", mana: 18, cd: 2.4 },
+    this.mouse = {
+      x: this.w * 0.5,
+      y: this.h * 0.5,
+      down: false,
+      worldX: this.hero.x,
+      worldY: this.hero.y,
+      moved: false,
     };
-    this.spellCd = { q: 0, w: 0, e: 0, r: 0 };
+
+    this.skillBar = [
+      { key: "q", name: "Spark", mana: 8, cd: 0.22, slot: 0 },
+      { key: "w", name: "Nova", mana: 18, cd: 1.8, slot: 1 },
+      { key: "e", name: "Dash", mana: 14, cd: 2.8, slot: 2 },
+      { key: "r", name: "Orb", mana: 22, cd: 3.4, slot: 3 },
+    ];
+
+    this.skillLoadout = ["q", "w", "e", "r"];
+    this.selectedSkillSlot = 0;
+
+    this.skillDefs = {
+      q: { key: "q", name: "Spark", mana: 8, cd: 0.22, color: "#8be9ff" },
+      w: { key: "w", name: "Nova", mana: 18, cd: 1.8, color: "#d6f5ff" },
+      e: { key: "e", name: "Dash", mana: 14, cd: 2.8, color: "#ffd36e" },
+      r: { key: "r", name: "Orb", mana: 22, cd: 3.4, color: "#c08cff" },
+    };
+
+    this.cooldowns = { q: 0, w: 0, e: 0, r: 0 };
+    this._currentSkillAim = { x: 1, y: 0 };
 
     this.dungeon = {
       active: false,
       floor: 0,
-      room: null,
-      stairsDown: null,
-      exit: null,
-      justCleared: false,
-      rewardChest: null,
-      rewardTaken: false,
-
-      layoutType: "rooms",
       rooms: [],
-      corridors: [],
       currentRoomIndex: 0,
-      clearedRooms: 0,
-      floorComplete: false,
-      roomVisited: new Set(),
-      currentRoomId: "",
-      bossFloor: false,
-
-      keys: 0,
-      neededKeys: 0,
-      shrineUsed: false,
-      lockedGoal: true,
-
-      currentModifierText: "",
-      hazards: [],
-      relicTakenRooms: new Set(),
+      seed: 0,
+      visited: new Set(),
+      roomMsgT: 0,
     };
 
-    this._tryLoad();
-    this._primeCamps();
+    this._bindMouse();
+    this._loadGame();
 
-    this.setViewSize(this.w, this.h);
-  }
+    if (!this.hero.inventory) this.hero.inventory = [];
+    if (!this.hero.equip) this.hero.equip = {};
+    if (!this.hero.potions) this.hero.potions = { hp: 2, mana: 1 };
+    if (!this.hero.lastMove) this.hero.lastMove = { x: 1, y: 0 };
+    if (!this.hero.state) this.hero.state = {};
+    if (typeof this.hero.state.sailing !== "boolean") this.hero.state.sailing = false;
+    if (typeof this.hero.state.dashT !== "number") this.hero.state.dashT = 0;
 
-  setViewSize(w, h) {
-    this.w = w | 0;
-    this.h = h | 0;
-
-    if (this.canvas) {
-      this.canvas.width = this.w;
-      this.canvas.height = this.h;
+    this.progress = this.progress || {};
+    if (!(this.progress.discoveredWaystones instanceof Set)) {
+      this.progress.discoveredWaystones = new Set();
+    }
+    if (!(this.progress.discoveredDocks instanceof Set)) {
+      this.progress.discoveredDocks = new Set();
     }
 
-    this.world?.setViewSize?.(this.w, this.h);
-    this.ui?.setViewSize?.(this.w, this.h);
+    this._rebuildCampState();
+    this._ensureWorldPopulation();
+
+    this._msg("Broke Knight ready", 1.8);
   }
 
   resize(w, h) {
-    this.setViewSize(w, h);
+    this.w = w | 0;
+    this.h = h | 0;
+    this.world?.setViewSize?.(this.w, this.h);
   }
 
-  _tryLoad() {
-    const s = this.save.load();
-    if (!s) return;
+  update(dt) {
+    dt = Math.min(this._dtClamp, Math.max(0, dt || 0));
 
-    if (Number.isFinite(s.seed) && s.seed !== 0) {
-      this.seed = s.seed | 0;
-      this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
+    if (this.hitStopT > 0) {
+      this.hitStopT = Math.max(0, this.hitStopT - dt);
+      this._tickUI(dt);
+      return;
     }
 
-    if (s.hero) {
-      Object.assign(this.hero, s.hero);
-      this._nudgeToLand();
+    this.time += dt;
+
+    this._tickUI(dt);
+    this._tickCooldowns(dt);
+    this._tickCamera(dt);
+    this._updateMouseWorld();
+
+    if (this.menu.open === "map") {
+      this._handleFastTravelInput();
+    } else {
+      this._handleMovement(dt);
+      this._handleSpells();
     }
 
-    if (Array.isArray(s.quests)) {
-      this.quests = s.quests;
+    if (this.input.wasPressed("m")) {
+      this.menu.open = this.menu.open === "map" ? null : "map";
+    }
+    if (this.input.wasPressed("i")) {
+      this.menu.open = this.menu.open === "inventory" ? null : "inventory";
+    }
+    if (this.input.wasPressed("k")) {
+      this.menu.open = this.menu.open === "skills" ? null : "skills";
+    }
+    if (this.input.wasPressed("g")) {
+      this.menu.open = this.menu.open === "god" ? null : "god";
+    }
+    if (this.input.wasPressed("Escape")) {
+      this.menu.open = null;
     }
 
-    if (s.progress && typeof s.progress === "object") {
-      this.progress.discoveredWaystones = new Set(
-        Array.isArray(s.progress.discoveredWaystones) ? s.progress.discoveredWaystones : []
-      );
-      this.progress.discoveredDocks = new Set(
-        Array.isArray(s.progress.discoveredDocks) ? s.progress.discoveredDocks : []
-      );
-      this.progress.clearedCamps = new Set(
-        Array.isArray(s.progress.clearedCamps) ? s.progress.clearedCamps : []
-      );
-      this.progress.eliteKills = Math.max(0, s.progress.eliteKills | 0);
-      this.progress.dungeonBest = Math.max(0, s.progress.dungeonBest | 0);
+    if (this.input.wasPressed("b")) {
+      this._toggleDockingOrSailing();
     }
 
-    if (s.hero?.lastMove && Number.isFinite(s.hero.lastMove.x) && Number.isFinite(s.hero.lastMove.y)) {
-      const n = norm(s.hero.lastMove.x, s.hero.lastMove.y);
-      if (n.x || n.y) this.aim = { x: n.x, y: n.y };
+    if (this.input.wasPressed("f")) {
+      this._interact();
     }
 
-    this._levelMsgShown = this.hero.level || 1;
+    this.hero.update?.(dt);
+
+    if (this.dungeon.active) {
+      this._updateDungeon(dt);
+    } else {
+      this.world.update?.(dt, this.hero);
+      this._spawnWorldEnemies(dt);
+      this._updateOverworldEnemies(dt);
+    }
+
+    this._updateProjectiles(dt);
+    this._updateLoot(dt);
+    this._updateQuestProgress(dt);
+    this._updateZoneMessages(dt);
+
+    this._autosaveT -= dt;
+    if (this._autosaveT <= 0) {
+      this._autosaveT = 8 + Math.random() * 4;
+      this._saveGame();
+    }
+
+    this.input.endFrame();
   }
 
-  _save() {
-    this.save.save({
-      seed: this.seed,
-      hero: {
-        x: this.hero.x,
-        y: this.hero.y,
-        hp: this.hero.hp,
-        mana: this.hero.mana,
-        gold: this.hero.gold,
-        level: this.hero.level,
-        xp: this.hero.xp,
-        nextXp: this.hero.nextXp,
-        potions: this.hero.potions,
-        inventory: this.hero.inventory,
-        equip: this.hero.equip,
-        state: this.hero.state,
-        lastMove: this.hero.lastMove,
-      },
-      quests: this.quests,
-      progress: {
-        discoveredWaystones: Array.from(this.progress.discoveredWaystones),
-        discoveredDocks: Array.from(this.progress.discoveredDocks),
-        clearedCamps: Array.from(this.progress.clearedCamps),
-        eliteKills: this.progress.eliteKills | 0,
-        dungeonBest: this.progress.dungeonBest | 0,
-      },
-    });
+  draw() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+
+    ctx.save();
+    ctx.clearRect(0, 0, this.w, this.h);
+
+    this._drawBackground(ctx);
+
+    ctx.translate((this.w * 0.5) | 0, (this.h * 0.5) | 0);
+    ctx.scale(this.camera.zoom, this.camera.zoom);
+    ctx.translate(
+      (-this.camera.x + this.camera.sx) | 0,
+      (-this.camera.y + this.camera.sy) | 0
+    );
+
+    this.world.draw?.(ctx, this.camera);
+
+    const vb = this._viewBoundsWorld();
+
+    for (const l of this.loot) {
+      if (!l?.alive) continue;
+      if (this._inView(l.x, l.y, vb)) l.draw?.(ctx);
+    }
+
+    for (const p of this.projectiles) {
+      if (!p?.alive) continue;
+      if (this._inView(p.x, p.y, vb)) p.draw?.(ctx);
+    }
+
+    for (const e of this.enemies) {
+      if (!e?.alive) continue;
+      if (this._inView(e.x, e.y, vb)) e.draw?.(ctx);
+    }
+
+    this.hero.draw?.(ctx);
+
+    if (this.dungeon.active) {
+      this._drawDungeonOverlayWorld(ctx);
+    }
+
+    ctx.restore();
+
+    this.ui.draw?.(ctx, this);
+    this._drawOverlayText(ctx);
   }
 
-  _saveSoon() {
-    this._autosaveT = 0;
-    this._save();
+  _drawBackground(ctx) {
+    const g = ctx.createLinearGradient(0, 0, 0, this.h);
+    g.addColorStop(0, "#0c1320");
+    g.addColorStop(0.35, "#102033");
+    g.addColorStop(0.7, "#14273b");
+    g.addColorStop(1, "#0a111b");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, this.w, this.h);
+
+    ctx.fillStyle = "rgba(255,255,255,0.025)";
+    for (let i = 0; i < 6; i++) {
+      const y = ((i + 1) * this.h) / 7;
+      ctx.fillRect(0, y, this.w, 1);
+    }
   }
 
-  _msg(text, t = 2.2) {
-    this.ui?.setMsg?.(text, t);
+  _drawOverlayText(ctx) {
+    if (this.msgT > 0 && this.msg) {
+      ctx.save();
+      ctx.font = "bold 18px Arial";
+      ctx.textAlign = "center";
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.strokeStyle = "rgba(0,0,0,0.45)";
+      ctx.lineWidth = 4;
+      ctx.strokeText(this.msg, this.w * 0.5, this.h - 28);
+      ctx.fillText(this.msg, this.w * 0.5, this.h - 28);
+      ctx.restore();
+    }
+
+    if (this.zoneMsgT > 0 && this.zoneMsg) {
+      ctx.save();
+      ctx.font = "bold 20px Arial";
+      ctx.textAlign = "center";
+      ctx.fillStyle = "rgba(232,238,252,0.92)";
+      ctx.strokeStyle = "rgba(0,0,0,0.55)";
+      ctx.lineWidth = 5;
+      ctx.strokeText(this.zoneMsg, this.w * 0.5, 34);
+      ctx.fillText(this.zoneMsg, this.w * 0.5, 34);
+      ctx.restore();
+    }
   }
 
-  _shake(t = 0.08, mag = 3) {
-    this.camera.shakeT = Math.max(this.camera.shakeT, t);
-    this.camera.shakeMag = Math.max(this.camera.shakeMag, mag);
+  _tickUI(dt) {
+    this.msgT = Math.max(0, this.msgT - dt);
+    this.zoneMsgT = Math.max(0, this.zoneMsgT - dt);
+    this.flashT = Math.max(0, this.flashT - dt);
+    this._pickupMsgCooldown = Math.max(0, this._pickupMsgCooldown - dt);
+    this._spellMsgCooldown = Math.max(0, this._spellMsgCooldown - dt);
+    if (this.dungeon.roomMsgT > 0) this.dungeon.roomMsgT -= dt;
   }
 
-  _withinRadius(x, y, r) {
-    return dist2(x, y, this.camera.x, this.camera.y) <= r * r;
+  _tickCooldowns(dt) {
+    for (const k of Object.keys(this.cooldowns)) {
+      this.cooldowns[k] = Math.max(0, this.cooldowns[k] - dt);
+    }
+  }
+
+  _tickCamera(dt) {
+    const followX = this.hero.x;
+    const followY = this.hero.y;
+
+    this.camera.x = lerp(this.camera.x, followX, 1 - Math.exp(-dt * 10));
+    this.camera.y = lerp(this.camera.y, followY, 1 - Math.exp(-dt * 10));
+
+    if (this.camera.shakeT > 0) {
+      this.camera.shakeT = Math.max(0, this.camera.shakeT - dt);
+      const m = this.camera.shakeMag * (this.camera.shakeT > 0 ? 1 : 0);
+      this.camera.sx = (Math.random() * 2 - 1) * m;
+      this.camera.sy = (Math.random() * 2 - 1) * m;
+    } else {
+      this.camera.sx = lerp(this.camera.sx, 0, 1 - Math.exp(-dt * 18));
+      this.camera.sy = lerp(this.camera.sy, 0, 1 - Math.exp(-dt * 18));
+    }
   }
 
   _viewBoundsWorld() {
@@ -279,12 +452,6 @@ export default class Game {
     this.hero.giveXP?.(Math.max(0, n | 0));
   }
 
-  _fullRestoreHero() {
-    const st = this.hero.getStats?.() || { maxHp: this.hero.maxHp || 100, maxMana: this.hero.maxMana || 60 };
-    this.hero.hp = st.maxHp;
-    this.hero.mana = st.maxMana;
-  }
-
   _coolMsg(text, t = 1.6) {
     if (this._pickupMsgCooldown > 0) return;
     this._pickupMsgCooldown = 0.45;
@@ -323,356 +490,136 @@ export default class Game {
     }
 
     return false;
-  }
-
-  _equipInventoryIndex(index) {
-    const bag = this.hero.inventory || [];
-    const idx = index | 0;
-    if (idx < 0 || idx >= bag.length) return false;
-
-    const item = bag[idx];
-    if (!item || !item.slot) {
-      this._msg("That item cannot be equipped.", 1.6);
-      return false;
-    }
-
-    const slot = item.slot;
-    const oldEquipped = this.hero.equip?.[slot] || null;
-
-    bag.splice(idx, 1);
-
-    if (!this.hero.equip) this.hero.equip = {};
-    this.hero.equip[slot] = item;
-
-    if (oldEquipped) {
-      bag.push(oldEquipped);
-      this._msg(`Equipped ${item.name} (${slot})`, 1.8);
-    } else {
-      this._msg(`Equipped ${item.name}`, 1.8);
-    }
-
-    this._saveSoon();
-    return true;
-  }
-
-  _handleInventoryHotkeys() {
-    if (this.menu.open !== "inventory") return;
-
-    if (this.input.wasPressed("1")) this._equipInventoryIndex(0);
-    else if (this.input.wasPressed("2")) this._equipInventoryIndex(1);
-    else if (this.input.wasPressed("3")) this._equipInventoryIndex(2);
-    else if (this.input.wasPressed("4")) this._equipInventoryIndex(3);
-    else if (this.input.wasPressed("5")) this._equipInventoryIndex(4);
-    else if (this.input.wasPressed("6")) this._equipInventoryIndex(5);
-    else if (this.input.wasPressed("7")) this._equipInventoryIndex(6);
-    else if (this.input.wasPressed("8")) this._equipInventoryIndex(7);
-    else if (this.input.wasPressed("9")) this._equipInventoryIndex(8);
-    else if (this.input.wasPressed("0")) this._equipInventoryIndex(9);
-  }
-
-  _pickupNearbyLootBonus() {
-    const pickupR = this.dungeon.active ? 34 : 26;
+  }  _pickupNearbyLootBonus() {
     for (const l of this.loot) {
       if (!l.alive) continue;
-      if (dist2(this.hero.x, this.hero.y, l.x, l.y) < pickupR * pickupR) {
+      if (dist2(this.hero.x, this.hero.y, l.x, l.y) < 26 * 26) {
         const kind = l.kind;
         const data = l.data || {};
+        l.alive = false;
 
         if (kind === "gold") {
-          const amt = Math.max(1, data.amount | 0);
-          this.hero.gold += amt;
-          this._coolMsg(`+${amt} Gold`);
-        } else if (kind === "potion") {
-          const type = data.potionType || "hp";
-          const amt = Math.max(1, data.amount | 0);
-          this.hero.potions[type] = (this.hero.potions[type] | 0) + amt;
-          this._coolMsg(type === "mana" ? "Mana potion found" : "HP potion found");
-        } else if (kind === "gear" && data.gear) {
-          this.hero.inventory.push(data.gear);
-          const equipped = this._maybeAutoEquip(data.gear);
-          this._coolMsg(equipped ? `Equipped: ${data.gear.name}` : `Found: ${data.gear.name}`, 1.8);
+          this._grantGold(data.amount || 5);
+          this._coolMsg("+Gold");
         }
 
-        l.alive = false;
+        if (kind === "gear") {
+          const eq = this._maybeAutoEquip(data);
+          this._coolMsg(eq ? "Equipped gear" : "Picked gear");
+        }
       }
     }
+
+    this.loot = this.loot.filter(l => l.alive !== false);
   }
 
-  _regenMana(dt) {
-    const st = this.hero.getStats?.() || { maxMana: 60 };
-    if (this.hero.mana >= st.maxMana) return;
+  _updateProjectiles(dt) {
+    for (const p of this.projectiles) {
+      if (!p.alive) continue;
 
-    let base = this.dungeon.active ? 5.2 : (this.hero.state?.sailing ? 3.0 : 4.5);
-    const room = this._getCurrentDungeonRoom();
-    if (this.dungeon.active && room?.modifier === "drain") base *= 0.55;
-    if (this.dungeon.active && room?.modifier === "sanctum") base *= 1.35;
+      p.update?.(dt);
 
-    this.hero.mana = Math.min(st.maxMana, this.hero.mana + base * dt);
-  }
+      if (p.friendly) {
+        for (const e of this.enemies) {
+          if (!e.alive) continue;
+          if (dist2(p.x, p.y, e.x, e.y) < (p.hitRadius || 18) ** 2) {
+            e.takeDamage?.(p.dmg || 4);
+            p.alive = false;
 
-  _tickSpellCooldowns(dt) {
-    for (const k of Object.keys(this.spellCd)) {
-      this.spellCd[k] = Math.max(0, this.spellCd[k] - dt);
-    }
-  }
-
-  _tickResetConfirm(dt) {
-    if (this._resetConfirmT > 0) {
-      this._resetConfirmT = Math.max(0, this._resetConfirmT - dt);
-      if (this._resetConfirmT <= 0) this._resetConfirmT = 0;
-    }
-  }
-
-  _tickDungeonHazards(dt) {
-    if (!this.dungeon.active) return;
-
-    this._hazardTick += dt;
-    if (this._hazardTick < 0.2) return;
-    this._hazardTick = 0;
-
-    const room = this._getCurrentDungeonRoom();
-    if (!room || room.cleared) return;
-
-    for (const hz of this.dungeon.hazards) {
-      if (hz.roomId !== room.id) continue;
-      if (dist2(this.hero.x, this.hero.y, hz.x, hz.y) > hz.r * hz.r) continue;
-
-      const dmg = hz.kind === "ember" ? 2 : 3;
-      const dealt = this.hero.takeDamage?.(dmg) || dmg;
-      if (dealt > 0) {
-        this._shake(0.04, 1.6);
+            if (!e.alive) {
+              this._dropLoot(e.x, e.y, e.level || 1);
+              this._grantXP(4);
+            }
+            break;
+          }
+        }
       }
     }
+
+    this.projectiles = this.projectiles.filter(p => p.alive !== false);
   }
 
-  _canCastSpell(key) {
-    const def = this.spells[key];
-    if (!def) return false;
-    if ((this.spellCd[key] || 0) > 0) {
-      this._spellMsg(`${def.name} cooling down`, 0.8);
-      return false;
-    }
-    if ((this.hero.mana || 0) < def.mana) {
-      this._spellMsg("Not enough mana", 0.9);
-      return false;
-    }
-    return true;
-  }
-
-  _startSpell(key) {
-    const def = this.spells[key];
-    this.hero.mana -= def.mana;
-    this.spellCd[key] = def.cd;
-  }
-
-  _liveArrowAim() {
-    const left = this.input.isDown("ArrowLeft");
-    const right = this.input.isDown("ArrowRight");
-    const up = this.input.isDown("ArrowUp");
-    const down = this.input.isDown("ArrowDown");
-
-    let ax = 0;
-    let ay = 0;
-    if (left) ax -= 1;
-    if (right) ax += 1;
-    if (up) ay -= 1;
-    if (down) ay += 1;
-
-    if (ax !== 0 || ay !== 0) return norm(ax, ay);
-    return null;
-  }
-
-  _currentAim() {
-    const live = this._liveArrowAim();
-    if (live) return live;
-
-    const saved = norm(this.aim.x || 0, this.aim.y || 0);
-    if (saved.x || saved.y) return saved;
-
-    const lm = this.hero.lastMove || { x: 1, y: 0 };
-    const fallback = norm(lm.x || 0, lm.y || 0);
-    if (fallback.x || fallback.y) return fallback;
-
-    return { x: 1, y: 0 };
-  }
-
-  getSpellState() {
-    return {
-      q: { ...this.spells.q, cdLeft: this.spellCd.q || 0 },
-      w: { ...this.spells.w, cdLeft: this.spellCd.w || 0 },
-      e: { ...this.spells.e, cdLeft: this.spellCd.e || 0 },
-      r: { ...this.spells.r, cdLeft: this.spellCd.r || 0 },
-    };
-  }
-
-  _onEnemyDefeated(enemy) {
-    const baseXP = enemy.xpValue?.() || 6;
-    this.hero.giveXP?.(baseXP);
-    this._questAddProgress("q_kill_5", 1);
-
-    if (enemy.elite) {
-      this.progress.eliteKills += 1;
-      const bonusXP = 6 + enemy.tier * 2;
-      const bonusGold = 8 + enemy.tier * 3;
-      this._grantXP(bonusXP);
-      this._grantGold(bonusGold);
-      this._msg(`Elite defeated! (+${baseXP + bonusXP} XP, +${bonusGold} Gold)`, 2.6);
-      this._shake(0.08, 3.2);
-      this._saveSoon();
+  _dropLoot(x, y, lvl) {
+    if (Math.random() < 0.7) {
+      this.loot.push(
+        new Loot(x, y, "gold", { amount: 4 + Math.floor(Math.random() * 6) })
+      );
     }
 
-    if (this.dungeon.active) {
-      this._grantGold(2 + (this.dungeon.floor | 0));
-      this._grantXP(1 + Math.floor(this.dungeon.floor * 0.5));
-    }
-
-    this._dropLoot(enemy.x, enemy.y, enemy.tier || 1, enemy.kind, !!enemy.elite);
-  }
-
-  _makeQuests() {
-    return [
-      { id: "q_kill_5", name: "Thin the Camps", desc: "Defeat 5 enemies.", goal: 5, prog: 0, done: false, xp: 25, gold: 25 },
-      { id: "q_find_way", name: "Touch the Waystone", desc: "Find and touch a waystone.", goal: 1, prog: 0, done: false, xp: 40, gold: 40 },
-      { id: "q_sail", name: "Test the Waters", desc: "Use a dock and sail.", goal: 1, prog: 0, done: false, xp: 55, gold: 60 },
-    ];
-  }
-
-  _questAddProgress(id, amt = 1) {
-    const q = this.quests.find(v => v.id === id);
-    if (!q || q.done) return;
-
-    q.prog = Math.min(q.goal, (q.prog | 0) + (amt | 0));
-    if (q.prog >= q.goal) {
-      q.done = true;
-      this.hero.giveXP?.(q.xp || 0);
-      this.hero.gold += q.gold || 0;
-      this._msg(`Quest complete: ${q.name} (+${q.xp} XP, +${q.gold} Gold)`, 3.2);
-      this._saveSoon();
+    if (Math.random() < 0.28) {
+      this.loot.push(new Loot(x, y, "gear", makeGear("weapon", lvl)));
     }
   }
 
-  _primeCamps() {
-    const camps = this.world?.camps || [];
-    for (const c of camps) {
-      this._campState.set(c.id, {
-        nextAt: 0,
-        wasAliveLastCheck: false,
-        announcedNearby: false,
-        clearedOnce: this.progress.clearedCamps.has(c.id),
-      });
-    }
-  }
-
-  _campAliveCount(campId) {
-    let alive = 0;
-    for (const e of this.enemies) {
-      if (e.alive && e.home && e.home.id === campId) alive++;
-    }
-    return alive;
-  }
-
-  _spawnFromCamps(dt) {
-    if (this.dungeon.active) return;
-    if (this.enemies.length >= this.perf.maxEnemies) return;
+  _spawnWorldEnemies(dt) {
+    if (this.enemies.length > this.perf.maxEnemies) return;
 
     this._spawnTimer += dt;
-    if (this._spawnTimer < 0.18) return;
+    if (this._spawnTimer < 0.35) return;
     this._spawnTimer = 0;
 
-    const camps = this.world?.camps || [];
-    const t = this.time;
+    const r = this.perf.spawnRadius;
+    const a = Math.random() * Math.PI * 2;
+    const x = this.hero.x + Math.cos(a) * r;
+    const y = this.hero.y + Math.sin(a) * r;
 
-    for (const c of camps) {
-      if (this.enemies.length >= this.perf.maxEnemies) break;
-      if (!this._withinRadius(c.x, c.y, this.perf.spawnRadius)) continue;
+    if (!this.world.canWalk(x, y)) return;
 
-      const st = this._campState.get(c.id) || {
-        nextAt: 0,
-        wasAliveLastCheck: false,
-        announcedNearby: false,
-        clearedOnce: this.progress.clearedCamps.has(c.id),
-      };
+    // avoid spawning right next to water edges
+    if (!this.world.canWalk(x + 20, y)) return;
+    if (!this.world.canWalk(x - 20, y)) return;
+    if (!this.world.canWalk(x, y + 20)) return;
+    if (!this.world.canWalk(x, y - 20)) return;
 
-      const alive = this._campAliveCount(c.id);
+    this.enemies.push(new Enemy(x, y, this.hero.level));
+  }
 
-      if (alive === 0 && st.wasAliveLastCheck) {
-        if (!st.clearedOnce) {
-          st.clearedOnce = true;
-          this.progress.clearedCamps.add(c.id);
+  _updateOverworldEnemies(dt) {
+    for (const e of this.enemies) {
+      if (!e.alive) continue;
 
-          const xp = 8 + c.tier * 4;
-          const gold = 12 + c.tier * 4;
-          this._grantGold(gold);
-          this._grantXP(xp);
+      e.update?.(dt, this.hero, this.world);
 
-          this._spawnCampRewardBurst(c);
-          this._msg(`Camp cleared! Reward cache found. (+${xp} XP, +${gold} Gold)`, 3.2);
-          this._saveSoon();
-        } else {
-          this._msg("Camp cleared again.", 2);
-        }
+      if (dist2(e.x, e.y, this.hero.x, this.hero.y) < 22 * 22) {
+        this.hero.takeDamage?.(e.dmg || 3);
+        this._shake(0.08, 3);
       }
+    }
 
-      st.wasAliveLastCheck = alive > 0;
+    this.enemies = this.enemies.filter(e => e.alive !== false);
+  }
 
-      if (alive === 0 && t >= (st.nextAt || 0)) {
-        const pack = 3 + (c.tier || 1);
-        for (let i = 0; i < pack; i++) {
-          if (this.enemies.length >= this.perf.maxEnemies) break;
+  _updateLoot(dt) {
+    this._pickupNearbyLootBonus();
+  }
 
-          const ang = (i / pack) * Math.PI * 2;
-          const r = 40 + (i % 3) * 18;
-          const ex = c.x + Math.cos(ang) * r;
-          const ey = c.y + Math.sin(ang) * r;
-          const kind = ["blob", "stalker", "brute", "caster"][(c.id + i) % 4];
+  _updateZoneMessages(dt) {
+    if (this.dungeon.active) {
+      this.zoneMsg = `Dungeon Floor ${this.dungeon.floor}`;
+      this.zoneMsgT = 1.5;
+      return;
+    }
 
-          const e = new Enemy(ex, ey, c.tier || 1, kind, hash2(this.seed, c.id * 100 + i));
-          e.home = { x: c.x, y: c.y, id: c.id };
-          this.enemies.push(e);
-        }
-
-        st.nextAt = t + this._campRespawn;
-        st.wasAliveLastCheck = true;
+    for (const dg of this.world?.dungeons || []) {
+      if (dist2(this.hero.x, this.hero.y, dg.x, dg.y) < 150 * 150) {
+        this.zoneMsg = "Dungeon Entrance";
+        this.zoneMsgT = 1.4;
+        return;
       }
+    }
 
-      this._campState.set(c.id, st);
+    for (const d of this.world?.docks || []) {
+      if (dist2(this.hero.x, this.hero.y, d.x, d.y) < 150 * 150) {
+        this.zoneMsg = "Dock";
+        this.zoneMsgT = 1.4;
+        return;
+      }
     }
   }
 
-  _spawnCampRewardBurst(camp) {
-    if (!camp) return;
-    if (this.loot.length >= this.perf.maxLoot - 4) return;
-
-    const cx = camp.x;
-    const cy = camp.y;
-    const tier = Math.max(1, camp.tier | 0);
-
-    this.loot.push(new Loot(cx - 14, cy - 8, "gold", { amount: 10 + tier * 4 }));
-    this.loot.push(new Loot(cx + 14, cy - 4, "gold", { amount: 8 + tier * 3 }));
-    this.loot.push(new Loot(cx - 8, cy + 10, "potion", {
-      potionType: Math.random() < 0.5 ? "hp" : "mana",
-      amount: 1,
-    }));
-
-    const slotRoll = Math.random();
-    const slot =
-      slotRoll < 0.28 ? "weapon" :
-      slotRoll < 0.50 ? "armor" :
-      slotRoll < 0.66 ? "helm" :
-      slotRoll < 0.80 ? "boots" :
-      slotRoll < 0.90 ? "ring" : "trinket";
-
-    const rarity =
-      tier >= 3
-        ? (Math.random() < 0.30 ? "epic" : "rare")
-        : (Math.random() < 0.55 ? "rare" : "uncommon");
-
-    const gearSeed = hash2(this.seed ^ 0x7788, (camp.id | 0) * 97 + tier * 11);
-    const gear = makeGear(slot, Math.max(1, this.hero.level || 1), rarity, gearSeed);
-    this.loot.push(new Loot(cx + 2, cy + 16, "gear", { gear }));
-
-    this._shake(0.10, 4.5);
-  }
+  // =============================
+  // FAST TRAVEL (FIXED + ADDED)
+  // =============================
 
   _getDiscoveredWaystones() {
     const all = Array.isArray(this.world?.waystones) ? this.world.waystones.slice() : [];
@@ -710,7 +657,35 @@ export default class Game {
 
     this._msg(`Fast traveled to Waystone ${index + 1}`, 2.2);
     this._shake(0.12, 4);
-    this._saveSoon();
+    this._saveSoon?.();
+  }
+
+  _teleportToDungeonEntrance() {
+    if (this.dungeon.active) return;
+
+    if (this.hero.state?.sailing) {
+      this._msg("Cannot fast travel while sailing.", 2);
+      return;
+    }
+
+    const dg = Array.isArray(this.world?.dungeons) ? this.world.dungeons[0] : null;
+    if (!dg) {
+      this._msg("No dungeon entrance found.", 2);
+      return;
+    }
+
+    this.hero.x = dg.x;
+    this.hero.y = dg.y + 54;
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+    this.hero.state.dashT = 0;
+
+    this.menu.open = null;
+    this.ui?.closeAll?.();
+
+    this._msg("Teleported to dungeon entrance", 2.2);
+    this._shake(0.14, 5);
+    this._saveSoon?.();
   }
 
   _handleFastTravelInput() {
@@ -723,6 +698,11 @@ export default class Game {
       }
     }
 
+    if (this.input.wasPressed("x")) {
+      this._teleportToDungeonEntrance();
+      return;
+    }
+
     if (this.input.wasPressed("1")) this._teleportToWaystone(0);
     else if (this.input.wasPressed("2")) this._teleportToWaystone(1);
     else if (this.input.wasPressed("3")) this._teleportToWaystone(2);
@@ -732,53 +712,9 @@ export default class Game {
     else if (this.input.wasPressed("7")) this._teleportToWaystone(6);
     else if (this.input.wasPressed("8")) this._teleportToWaystone(7);
     else if (this.input.wasPressed("9")) this._teleportToWaystone(8);
-  }
-
-  _hardResetRun() {
-    if (this._resetQueued) return;
-    this._resetQueued = true;
-
-    this._msg("Save cleared. Restarting new game...", 1.2);
-
-    try {
-      this.save?.clear?.();
-    } catch (_) {}
-
-    setTimeout(() => {
-      if (typeof window !== "undefined" && window.location) {
-        window.location.reload();
-      }
-    }, 120);
-  }
-
-  _handleResetHotkey() {
-    if (this.menu.open !== "options") {
-      this._resetConfirmT = 0;
-      return;
-    }
-
-    if (!this.input.wasPressed("Delete")) return;
-
-    if (this._resetConfirmT > 0) {
-      this._resetConfirmT = 0;
-      this._hardResetRun();
-      return;
-    }
-
-    this._resetConfirmT = 1.5;
-    this._msg("Press Delete again to erase save.", 1.5);
-  }
-
-  _handleMenus() {
-    if (this.input.wasPressed("i")) this.menu.open = this.menu.open === "inventory" ? null : "inventory";
-    if (this.input.wasPressed("j")) this.menu.open = this.menu.open === "quests" ? null : "quests";
-    if (this.input.wasPressed("m")) this.menu.open = this.menu.open === "map" ? null : "map";
-    if (this.input.wasPressed("o")) this.menu.open = this.menu.open === "options" ? null : "options";
-    if (this.input.wasPressed("Escape")) this.menu.open = null;
-
-    if (this.menu.open) this.ui.open(this.menu.open);
-    else this.ui.closeAll();
-  }
+  }  // =============================
+  // MOVEMENT (FIXED + TERRAIN SPEED)
+  // =============================
 
   _handleMovement(dt) {
     const left = this.input.isDown("ArrowLeft");
@@ -800,9 +736,20 @@ export default class Game {
       this.hero.lastMove = { x: n.x, y: n.y };
 
       let speed = this.hero.state?.sailing ? 190 : 150;
-      const room = this._getCurrentDungeonRoom();
+
+      // SAFE ROOM ACCESS (FIXES YOUR CRASH)
+      const room =
+        this._getCurrentDungeonRoom?.() ||
+        this._getRoom?.() ||
+        null;
+
       if (this.dungeon.active && room?.modifier === "haste") speed *= 1.18;
       if (this.dungeon.active && room?.modifier === "drag") speed *= 0.82;
+
+      // TERRAIN SPEED (ROADS FAST / FOREST SLOW)
+      if (!this.dungeon.active && !this.hero.state?.sailing && this.world?.getMoveModifier) {
+        speed *= this.world.getMoveModifier(this.hero.x, this.hero.y);
+      }
 
       this.hero.vx = n.x * speed;
       this.hero.vy = n.y * speed;
@@ -810,7 +757,7 @@ export default class Game {
       const nx = this.hero.x + this.hero.vx * dt;
       const ny = this.hero.y + this.hero.vy * dt;
 
-      if (this.dungeon.active) {
+      if (this.dungeon.active && this._moveHeroDungeon) {
         this._moveHeroDungeon(nx, ny);
       } else if (this.hero.state?.sailing) {
         this.hero.x = nx;
@@ -824,1604 +771,406 @@ export default class Game {
       this.hero.vy = 0;
     }
 
+    // POTIONS
     if (this.input.wasPressed("1")) {
       if (this.hero.usePotion?.("hp")) {
         this._msg("Used HP potion");
-        this._saveSoon();
+        this._saveSoon?.();
       }
     }
     if (this.input.wasPressed("2")) {
       if (this.hero.usePotion?.("mana")) {
         this._msg("Used Mana potion");
-        this._saveSoon();
+        this._saveSoon?.();
       }
     }
   }
 
-  _moveHeroDungeon(nx, ny) {
-    const pad = 18;
-    const room = this._getCurrentDungeonRoom();
-    if (!room) {
-      this.hero.x = nx;
-      this.hero.y = ny;
-      return;
-    }
-
-    const inRoomNow = this._pointInDungeonRoom(this.hero.x, this.hero.y, room, pad);
-    const inRoomNext = this._pointInDungeonRoom(nx, ny, room, pad);
-
-    if (inRoomNow && inRoomNext) {
-      this.hero.x = nx;
-      this.hero.y = ny;
-      return;
-    }
-
-    const corridor = this._getReachableCorridor(nx, ny, pad);
-    if (corridor) {
-      this.hero.x = clamp(nx, corridor.x + pad, corridor.x + corridor.w - pad);
-      this.hero.y = clamp(ny, corridor.y + pad, corridor.y + corridor.h - pad);
-      return;
-    }
-
-    const otherRoom = this._getReachableRoom(nx, ny, pad);
-    if (otherRoom) {
-      if (otherRoom.locked && !this._canEnterLockedRoom(otherRoom)) {
-        return;
-      }
-      this.hero.x = clamp(nx, otherRoom.x + pad, otherRoom.x + otherRoom.w - pad);
-      this.hero.y = clamp(ny, otherRoom.y + pad, otherRoom.y + otherRoom.h - pad);
-      return;
-    }
-
-    this.hero.x = clamp(this.hero.x, room.x + pad, room.x + room.w - pad);
-    this.hero.y = clamp(this.hero.y, room.y + pad, room.y + room.h - pad);
-  }
-
-  _pointInDungeonRoom(px, py, room, pad = 0) {
-    return px >= room.x + pad &&
-      px <= room.x + room.w - pad &&
-      py >= room.y + pad &&
-      py <= room.y + room.h - pad;
-  }
-
-  _pointInRect(px, py, rect, pad = 0) {
-    return px >= rect.x + pad &&
-      px <= rect.x + rect.w - pad &&
-      py >= rect.y + pad &&
-      py <= rect.y + rect.h - pad;
-  }
-
-  _getReachableRoom(px, py, pad = 0) {
-    for (const room of this.dungeon.rooms) {
-      if (this._pointInDungeonRoom(px, py, room, pad)) {
-        return room;
-      }
-    }
-    return null;
-  }
-
-  _getReachableCorridor(px, py, pad = 0) {
-    for (const c of this.dungeon.corridors) {
-      if (this._pointInRect(px, py, c, pad)) return c;
-    }
-    return null;
-  }
-
-  _canEnterLockedRoom(room) {
-    if (!room?.locked) return true;
-    if (this.dungeon.bossFloor) return true;
-    return this.dungeon.keys >= this.dungeon.neededKeys;
-  }
-
-  _handleInteract() {
-    if (!this.input.wasPressed("f")) return;
-
-    if (this.dungeon.active) {
-      const room = this._getCurrentDungeonRoom();
-
-      if (room?.kind === "shrine" && !this.dungeon.shrineUsed &&
-          dist2(this.hero.x, this.hero.y, room.cx, room.cy) < 84 * 84) {
-        this._useDungeonShrine();
-        return;
-      }
-
-      if (room?.kind === "relic" && !this.dungeon.relicTakenRooms.has(room.id) &&
-          dist2(this.hero.x, this.hero.y, room.cx, room.cy) < 84 * 84) {
-        this._takeRelicRoomReward(room);
-        return;
-      }
-
-      if (this.dungeon.rewardChest && !this.dungeon.rewardTaken &&
-          dist2(this.hero.x, this.hero.y, this.dungeon.rewardChest.x, this.dungeon.rewardChest.y) < 78 * 78) {
-        this._openDungeonChest();
-        return;
-      }
-
-      if (this.dungeon.floorComplete &&
-          this.dungeon.stairsDown &&
-          dist2(this.hero.x, this.hero.y, this.dungeon.stairsDown.x, this.dungeon.stairsDown.y) < 70 * 70) {
-        this._enterDungeonFloor(this.dungeon.floor + 1);
-        return;
-      }
-
-      if (this.dungeon.exit &&
-          dist2(this.hero.x, this.hero.y, this.dungeon.exit.x, this.dungeon.exit.y) < 70 * 70) {
-        this._leaveDungeon();
-        return;
-      }
-
-      return;
-    }
-
-    for (const dg of this.world?.dungeons || []) {
-      if (dist2(this.hero.x, this.hero.y, dg.x, dg.y) < 90 * 90) {
-        this._enterDungeonFloor(1);
-        return;
-      }
-    }
-
-    for (const d of this.world?.docks || []) {
-      if (dist2(this.hero.x, this.hero.y, d.x, d.y) < 70 * 70) {
-        const firstDock = !this.progress.discoveredDocks.has(d.id);
-        this.progress.discoveredDocks.add(d.id);
-
-        this.hero.state.sailing = !this.hero.state.sailing;
-
-        if (firstDock) {
-          this._grantGold(10);
-          this.hero.potions.hp = (this.hero.potions.hp | 0) + 2;
-          this.hero.potions.mana = (this.hero.potions.mana | 0) + 1;
-          this._msg(this.hero.state.sailing ? "New dock found. Sailing: ON (+10 Gold)" : "New dock found (+10 Gold)", 2.6);
-        } else {
-          this._msg(this.hero.state.sailing ? "Sailing: ON" : "Sailing: OFF");
-        }
-
-        this._questAddProgress("q_sail", 1);
-        this._saveSoon();
-        return;
-      }
-    }
-
-    for (const w of this.world?.waystones || []) {
-      if (dist2(this.hero.x, this.hero.y, w.x, w.y) < 80 * 80) {
-        const first = !this.progress.discoveredWaystones.has(w.id);
-        this.progress.discoveredWaystones.add(w.id);
-
-        this._fullRestoreHero();
-
-        if (first) {
-          this._grantXP(20);
-          this._grantGold(15);
-          this._msg("Waystone awakened! Full restore. (+20 XP, +15 Gold)", 3);
-        } else {
-          this._msg("Waystone restored your strength.", 2.2);
-        }
-
-        this._questAddProgress("q_find_way", 1);
-        this._saveSoon();
-        return;
-      }
-    }
-
-    this._msg("Nothing to interact with here.");
-  }
-
-  _isBossFloor(floor) {
-    return floor > 0 && floor % 5 === 0;
-  }
-
-  _enterDungeonFloor(floor) {
-    this.dungeon.active = true;
-    this.dungeon.floor = Math.max(1, floor | 0);
-    this.dungeon.justCleared = false;
-    this.dungeon.rewardChest = null;
-    this.dungeon.rewardTaken = false;
-    this.dungeon.rooms = [];
-    this.dungeon.corridors = [];
-    this.dungeon.currentRoomIndex = 0;
-    this.dungeon.clearedRooms = 0;
-    this.dungeon.floorComplete = false;
-    this.dungeon.roomVisited = new Set();
-    this.dungeon.currentRoomId = "";
-    this.dungeon.bossFloor = this._isBossFloor(this.dungeon.floor);
-    this.dungeon.layoutType = this.dungeon.bossFloor ? "boss" : "crawl";
-    this.dungeon.keys = 0;
-    this.dungeon.neededKeys = this.dungeon.bossFloor ? 0 : Math.min(3, 1 + Math.floor(this.dungeon.floor / 3));
-    this.dungeon.shrineUsed = false;
-    this.dungeon.lockedGoal = !this.dungeon.bossFloor;
-    this.dungeon.currentModifierText = "";
-    this.dungeon.hazards = [];
-    this.dungeon.relicTakenRooms = new Set();
-
-    this.enemies = [];
-    this.projectiles = [];
-    this.loot = [];
-
-    if (this.dungeon.bossFloor) {
-      this._buildBossDungeonFloor();
-    } else {
-      this._buildCrawlerDungeonFloor();
-    }
-
-    this.hero.state.sailing = false;
-    this.hero.vx = 0;
-    this.hero.vy = 0;
-
-    const startRoom = this._getCurrentDungeonRoom();
-    if (startRoom) {
-      this.hero.x = startRoom.cx;
-      this.hero.y = startRoom.cy;
-    } else {
-      this.hero.x = 0;
-      this.hero.y = 0;
-    }
-
-    this._spawnCurrentDungeonRoomEnemies(true);
-
-    this._msg(
-      this.dungeon.bossFloor
-        ? `Boss floor ${this.dungeon.floor}`
-        : `Entered dungeon floor ${this.dungeon.floor}`,
-      2.4
-    );
-
-    this.progress.dungeonBest = Math.max(this.progress.dungeonBest | 0, this.dungeon.floor | 0);
-    this._saveSoon();
-  }
-
-  _buildBossDungeonFloor() {
-    const floor = this.dungeon.floor | 0;
-    const roomW = 760 + floor * 8;
-    const roomH = 500 + floor * 6;
-
-    const room = {
-      id: "boss-0",
-      x: -roomW * 0.5,
-      y: -roomH * 0.5,
-      w: roomW,
-      h: roomH,
-      cx: 0,
-      cy: 0,
-      cleared: false,
-      visited: true,
-      spawned: false,
-      kind: "boss",
-      enemyCount: 1 + Math.floor(floor / 5),
-      locked: false,
-      keyRoom: false,
-      modifier: floor >= 10 ? "rage" : "none",
-      miniboss: true,
-    };
-
-    this.dungeon.rooms.push(room);
-    this.dungeon.currentRoomIndex = 0;
-    this.dungeon.room = room;
-
-    this.dungeon.exit = { x: room.cx, y: room.y + room.h - 58 };
-    this.dungeon.stairsDown = { x: room.cx, y: room.y + 58 };
-  }
-
-  _buildCrawlerDungeonFloor() {
-    const floor = this.dungeon.floor | 0;
-    const mainRoomCount = Math.min(8, 4 + floor);
-    const sizeBase = 220 + Math.min(90, floor * 8);
-
-    const start = {
-      id: "room-0",
-      x: -sizeBase * 0.5,
-      y: -sizeBase * 0.5,
-      w: sizeBase,
-      h: sizeBase,
-      cx: 0,
-      cy: 0,
-      cleared: false,
-      visited: true,
-      spawned: false,
-      kind: "start",
-      enemyCount: Math.max(2, 2 + Math.floor(floor * 0.7)),
-      locked: false,
-      keyRoom: false,
-      modifier: "none",
-      miniboss: false,
-    };
-
-    start.cx = start.x + start.w * 0.5;
-    start.cy = start.y + start.h * 0.5;
-    this.dungeon.rooms.push(start);
-
-    let current = start;
-
-    for (let i = 1; i < mainRoomCount; i++) {
-      const dir = this._pickDungeonDirection(i);
-      const w = sizeBase + this._rng.range(-40, 90);
-      const h = sizeBase + this._rng.range(-50, 80);
-      const gap = 120 + this._rng.range(0, 40);
-
-      let nx = current.x;
-      let ny = current.y;
-
-      if (dir === "right") nx = current.x + current.w + gap;
-      else if (dir === "left") nx = current.x - w - gap;
-      else if (dir === "down") ny = current.y + current.h + gap;
-      else ny = current.y - h - gap;
-
-      const isGoal = i === mainRoomCount - 1;
-      const room = {
-        id: `room-${i}`,
-        x: nx,
-        y: ny,
-        w,
-        h,
-        cx: nx + w * 0.5,
-        cy: ny + h * 0.5,
-        cleared: false,
-        visited: false,
-        spawned: false,
-        kind: isGoal ? "goal" : "combat",
-        enemyCount: Math.max(2, 2 + Math.floor(floor * 0.65) + (i % 3)),
-        locked: isGoal,
-        keyRoom: false,
-        modifier: isGoal ? "rage" : this._rollRoomModifier(i, false),
-        miniboss: false,
-      };
-
-      const corridor = this._makeCorridorBetweenRooms(current, room);
-      this.dungeon.rooms.push(room);
-      this.dungeon.corridors.push(corridor);
-
-      if (i >= 1 && Math.random() < 0.55) {
-        const sideRoom = this._makeSideRoom(room, i);
-        if (sideRoom) {
-          this.dungeon.rooms.push(sideRoom.room);
-          this.dungeon.corridors.push(sideRoom.corridor);
-        }
-      }
-
-      current = room;
-    }
-
-    const sideCombatRooms = this.dungeon.rooms.filter(r => r.id.startsWith("side-") && r.kind === "combat");
-    for (let i = 0; i < Math.min(this.dungeon.neededKeys, sideCombatRooms.length); i++) {
-      sideCombatRooms[i].keyRoom = true;
-      sideCombatRooms[i].kind = "key";
-      sideCombatRooms[i].modifier = "rage";
-    }
-
-    const rewardRooms = this.dungeon.rooms.filter(r => r.kind === "reward");
-    const shrineCandidate = rewardRooms[0] || null;
-    if (shrineCandidate && floor >= 2) {
-      shrineCandidate.kind = "shrine";
-      shrineCandidate.enemyCount = Math.max(0, shrineCandidate.enemyCount - 1);
-      shrineCandidate.modifier = "sanctum";
-    }
-
-    const relicCandidate = rewardRooms[1] || null;
-    if (relicCandidate && floor >= 4) {
-      relicCandidate.kind = "relic";
-      relicCandidate.enemyCount = Math.max(1, relicCandidate.enemyCount);
-      relicCandidate.modifier = "sanctum";
-    }
-
-    const minibossCandidates = this.dungeon.rooms.filter(r => !r.locked && r.kind === "combat" && !r.keyRoom && r.id !== "room-0");
-    if (minibossCandidates.length && floor >= 3) {
-      const mb = minibossCandidates[(hash2(floor, this.seed, 555) >>> 0) % minibossCandidates.length];
-      mb.kind = "vault";
-      mb.miniboss = true;
-      mb.modifier = "rage";
-      mb.enemyCount = Math.max(mb.enemyCount, 3 + Math.floor(floor / 2));
-    }
-
-    this.dungeon.currentRoomIndex = 0;
-    this.dungeon.room = this.dungeon.rooms[0];
-
-    const firstRoom = this.dungeon.rooms[0];
-    const lastMainRoom = this.dungeon.rooms.find(r => r.id === `room-${mainRoomCount - 1}`) || current;
-
-    this.dungeon.exit = {
-      x: firstRoom.cx,
-      y: firstRoom.y + firstRoom.h - 56,
-    };
-
-    this.dungeon.stairsDown = {
-      x: lastMainRoom.cx,
-      y: lastMainRoom.cy,
-    };
-
-    for (const room of this.dungeon.rooms) {
-      this._createRoomHazards(room);
-    }
-  }
-
-  _rollRoomModifier(i, rewardBias = false) {
-    const roll = (hash2(this.seed, this.dungeon.floor, i, 991) >>> 0) % 100;
-    if (rewardBias) return roll < 50 ? "none" : "sanctum";
-    if (roll < 34) return "none";
-    if (roll < 48) return "haste";
-    if (roll < 60) return "drag";
-    if (roll < 72) return "swarm";
-    if (roll < 82) return "drain";
-    if (roll < 91) return "spikes";
-    if (roll < 97) return "embers";
-    return "rage";
-  }
-
-  _pickDungeonDirection(i) {
-    const roll = (hash2(this.seed, this.dungeon.floor, i) >>> 0) % 100;
-    if (roll < 28) return "right";
-    if (roll < 52) return "down";
-    if (roll < 76) return "left";
-    return "up";
-  }
-
-  _makeCorridorBetweenRooms(a, b) {
-    const corridorW = 64;
-
-    if (Math.abs(a.cx - b.cx) > Math.abs(a.cy - b.cy)) {
-      const x1 = Math.min(a.cx, b.cx);
-      const x2 = Math.max(a.cx, b.cx);
-      return {
-        x: x1,
-        y: a.cy - corridorW * 0.5,
-        w: x2 - x1,
-        h: corridorW,
-      };
-    }
-
-    const y1 = Math.min(a.cy, b.cy);
-    const y2 = Math.max(a.cy, b.cy);
-    return {
-      x: a.cx - corridorW * 0.5,
-      y: y1,
-      w: corridorW,
-      h: y2 - y1,
-    };
-  }
-
-  _makeSideRoom(fromRoom, i) {
-    if (!fromRoom) return null;
-
-    const w = 180 + this._rng.range(0, 90);
-    const h = 170 + this._rng.range(0, 80);
-    const dir = (i % 2 === 0) ? "right" : "left";
-    const gap = 110 + this._rng.range(0, 30);
-
-    let x = fromRoom.x;
-    let y = fromRoom.y + this._rng.range(-40, 40);
-
-    if (dir === "right") x = fromRoom.x + fromRoom.w + gap;
-    else x = fromRoom.x - w - gap;
-
-    const kindRoll = Math.random();
-    const kind = kindRoll < 0.25 ? "reward" : "combat";
-
-    const room = {
-      id: `side-${i}-${(hash2(i, this.dungeon.floor) >>> 0) % 9999}`,
-      x,
-      y,
-      w,
-      h,
-      cx: x + w * 0.5,
-      cy: y + h * 0.5,
-      cleared: false,
-      visited: false,
-      spawned: false,
-      kind,
-      enemyCount: kind === "reward"
-        ? Math.max(1, 1 + Math.floor(this.dungeon.floor * 0.35))
-        : Math.max(1, 1 + Math.floor(this.dungeon.floor * 0.55)),
-      locked: false,
-      keyRoom: false,
-      modifier: this._rollRoomModifier(i, kind === "reward"),
-      miniboss: false,
-    };
-
-    return {
-      room,
-      corridor: this._makeCorridorBetweenRooms(fromRoom, room),
-    };
-  }
-
-  _createRoomHazards(room) {
-    if (!room) return;
-    if (room.kind === "start" || room.kind === "shrine" || room.kind === "relic") return;
-
-    if (room.modifier === "spikes") {
-      const count = room.kind === "goal" ? 5 : 3;
-      for (let i = 0; i < count; i++) {
-        this.dungeon.hazards.push({
-          roomId: room.id,
-          kind: "spike",
-          x: room.x + 70 + this._rng.range(0, Math.max(10, room.w - 140)),
-          y: room.y + 70 + this._rng.range(0, Math.max(10, room.h - 140)),
-          r: 22,
-        });
-      }
-    } else if (room.modifier === "embers") {
-      const count = room.kind === "vault" ? 5 : 3;
-      for (let i = 0; i < count; i++) {
-        this.dungeon.hazards.push({
-          roomId: room.id,
-          kind: "ember",
-          x: room.x + 70 + this._rng.range(0, Math.max(10, room.w - 140)),
-          y: room.y + 70 + this._rng.range(0, Math.max(10, room.h - 140)),
-          r: 28,
-        });
-      }
-    }
-  }
-
-  _takeRelicRoomReward(room) {
-    if (!room || this.dungeon.relicTakenRooms.has(room.id)) return;
-
-    this.dungeon.relicTakenRooms.add(room.id);
-
-    const floor = this.dungeon.floor | 0;
-    const relicRoll = (hash2(this.seed, floor, room.cx | 0, 731) >>> 0) % 3;
-
-    if (relicRoll === 0) {
-      this.hero.potions.hp = (this.hero.potions.hp | 0) + 2;
-      this.hero.potions.mana = (this.hero.potions.mana | 0) + 2;
-      this._grantGold(18 + floor * 4);
-      this._msg("Relic room: supplies cache found.", 2.4);
-    } else if (relicRoll === 1) {
-      this._grantXP(18 + floor * 5);
-      this._fullRestoreHero();
-      this._msg("Relic room: ancient wisdom empowers you.", 2.4);
-    } else {
-      const slotRoll = Math.random();
-      const slot =
-        slotRoll < 0.28 ? "weapon" :
-        slotRoll < 0.50 ? "armor" :
-        slotRoll < 0.66 ? "helm" :
-        slotRoll < 0.80 ? "boots" :
-        slotRoll < 0.90 ? "ring" : "trinket";
-
-      const rarity =
-        floor >= 6
-          ? (Math.random() < 0.35 ? "epic" : "rare")
-          : (Math.random() < 0.55 ? "rare" : "uncommon");
-
-      const gearSeed = hash2(this.seed ^ 0x61aa, floor * 157 + (room.cx | 0) * 3 + (room.cy | 0));
-      const gear = makeGear(slot, Math.max(1, (this.hero.level || 1) + Math.floor(floor / 2)), rarity, gearSeed);
-      this.hero.inventory.push(gear);
-      const equipped = this._maybeAutoEquip(gear);
-      this._msg(equipped ? `Relic room: equipped ${gear.name}` : `Relic room: found ${gear.name}`, 2.4);
-    }
-
-    this._shake(0.08, 3.4);
-    this._saveSoon();
-  }
-
-  _getCurrentDungeonRoom() {
-    return this.dungeon.rooms[this.dungeon.currentRoomIndex] || null;
-  }
-
-  _findDungeonRoomIndexContaining(px, py) {
-    for (let i = 0; i < this.dungeon.rooms.length; i++) {
-      const r = this.dungeon.rooms[i];
-      if (this._pointInDungeonRoom(px, py, r, 0)) return i;
-    }
-    return -1;
-  }
-
-  _spawnCurrentDungeonRoomEnemies(force = false) {
-    if (!this.dungeon.active) return;
-
-    const room = this._getCurrentDungeonRoom();
-    if (!room) return;
-    if (room.spawned && !force) return;
-    if (room.cleared && !force) return;
-
-    this.enemies = [];
-    room.spawned = true;
-    room.visited = true;
-    this.dungeon.roomVisited.add(room.id);
-    this.dungeon.currentModifierText = this._modifierName(room.modifier);
-
-    const floor = this.dungeon.floor | 0;
-    let count = room.enemyCount || 0;
-
-    if (room.kind === "reward") count = Math.max(1, count - 1);
-    if (room.kind === "shrine") count = Math.max(0, count - 1);
-    if (room.kind === "relic") count = Math.max(1, count - 1);
-    if (room.kind === "start") count = Math.max(2, count - 1);
-    if (room.kind === "goal") count = Math.max(3, count + 1);
-    if (room.kind === "key") count = Math.max(2, count + 1);
-    if (room.kind === "vault") count = Math.max(3, count + 1);
-    if (room.modifier === "swarm") count += 2 + Math.floor(floor / 4);
-    if (this.dungeon.bossFloor) count = Math.max(1, 1 + Math.floor(floor / 4));
-
-    for (let i = 0; i < count; i++) {
-      const ex = room.x + 56 + this._rng.range(0, Math.max(16, room.w - 112));
-      const ey = room.y + 56 + this._rng.range(0, Math.max(16, room.h - 112));
-
-      const tier = Math.min(18, 1 + Math.floor(floor * 0.9) + (i % 3));
-      let kind = ["blob", "stalker", "brute", "caster"][i % 4];
-
-      if (room.kind === "reward") kind = i % 2 === 0 ? "stalker" : "caster";
-      if (room.kind === "shrine") kind = i % 2 === 0 ? "stalker" : "caster";
-      if (room.kind === "relic") kind = i % 2 === 0 ? "stalker" : "caster";
-      if (room.kind === "goal") kind = i % 2 === 0 ? "brute" : "caster";
-      if (room.kind === "key") kind = i % 2 === 0 ? "brute" : "stalker";
-      if (room.kind === "vault") kind = i % 2 === 0 ? "brute" : "caster";
-      if (this.dungeon.bossFloor) kind = i % 2 === 0 ? "brute" : "caster";
-
-      const e = new Enemy(ex, ey, tier, kind, hash2(this.seed, floor * 100 + i + this.dungeon.currentRoomIndex * 17));
-      e.home = { x: room.cx, y: room.cy, id: room.id };
-
-      if (room.modifier === "rage") {
-        e.maxHp = Math.round(e.maxHp * 1.18);
-        e.hp = e.maxHp;
-        e.touchDps *= 1.22;
-      } else if (room.modifier === "swarm") {
-        e.maxHp = Math.round(e.maxHp * 0.82);
-        e.hp = e.maxHp;
-      } else if (room.modifier === "drag") {
-        e.maxHp = Math.round(e.maxHp * 1.10);
-        e.hp = e.maxHp;
-      } else if (room.modifier === "drain") {
-        e.maxHp = Math.round(e.maxHp * 1.08);
-        e.hp = e.maxHp;
-      }
-
-      if (this.dungeon.bossFloor) {
-        e.elite = true;
-        e.maxHp = Math.round(e.maxHp * 1.45);
-        e.hp = e.maxHp;
-        e.touchDps *= 1.22;
-      } else if ((room.kind === "goal" || room.kind === "key" || room.kind === "vault") && i === count - 1 && floor >= 3) {
-        e.elite = true;
-        e.maxHp = Math.round(e.maxHp * (room.kind === "vault" ? 1.45 : 1.25));
-        e.hp = e.maxHp;
-      }
-
-      this.enemies.push(e);
-    }
-  }
-
-  _modifierName(mod) {
-    if (mod === "haste") return "Swift Winds";
-    if (mod === "drag") return "Heavy Air";
-    if (mod === "swarm") return "Swarm";
-    if (mod === "drain") return "Mana Drain";
-    if (mod === "rage") return "Blood Rage";
-    if (mod === "sanctum") return "Sanctum";
-    if (mod === "spikes") return "Spike Traps";
-    if (mod === "embers") return "Burning Floor";
-    return "";
-  }
-
-  _spawnDungeonRewardChest() {
-    if (!this.dungeon.active || this.dungeon.rewardChest) return;
-
-    const room = this._getCurrentDungeonRoom();
-    const x = room ? room.cx : 0;
-    const y = room ? room.cy : 0;
-
-    this.dungeon.rewardChest = { x, y };
-    this.dungeon.rewardTaken = false;
-  }
-
-  _openDungeonChest() {
-    if (!this.dungeon.rewardChest || this.dungeon.rewardTaken) return;
-
-    const floor = this.dungeon.floor | 0;
-    const room = this._getCurrentDungeonRoom();
-    let gold = 18 + floor * 10;
-    let xp = 14 + floor * 7;
-
-    if (room?.kind === "vault") {
-      gold += 18 + floor * 4;
-      xp += 10 + floor * 2;
-    }
-
-    this._grantGold(gold);
-    this._grantXP(xp);
-
-    this.hero.potions.hp = (this.hero.potions.hp | 0) + (floor >= 4 ? 1 : 0);
-    this.hero.potions.mana = (this.hero.potions.mana | 0) + 1;
-
-    if (this.loot.length < this.perf.maxLoot - 3) {
-      this.loot.push(new Loot(this.dungeon.rewardChest.x - 18, this.dungeon.rewardChest.y + 10, "gold", { amount: 8 + floor * 2 }));
-      this.loot.push(new Loot(this.dungeon.rewardChest.x + 18, this.dungeon.rewardChest.y + 10, "gold", { amount: 6 + floor * 2 }));
-    }
-
-    if (Math.random() < Math.min(0.9, 0.30 + floor * 0.06)) {
-      const slotRoll = Math.random();
-      const slot =
-        slotRoll < 0.28 ? "weapon" :
-        slotRoll < 0.50 ? "armor" :
-        slotRoll < 0.66 ? "helm" :
-        slotRoll < 0.80 ? "boots" :
-        slotRoll < 0.90 ? "ring" : "trinket";
-
-      const rarity =
-        floor >= 8
-          ? (Math.random() < 0.40 ? "epic" : "rare")
-          : (Math.random() < 0.58 ? "rare" : "uncommon");
-
-      const gearSeed = hash2(this.seed ^ 0x9911, floor * 211 + (this.hero.level || 1) * 17);
-      const gear = makeGear(slot, Math.max(1, (this.hero.level || 1) + Math.floor(floor / 2)), rarity, gearSeed);
-      this.hero.inventory.push(gear);
-      const equipped = this._maybeAutoEquip(gear);
-      this._msg(equipped ? `Dungeon chest! Equipped ${gear.name}` : `Dungeon chest! Found ${gear.name}`, 2.8);
-    } else {
-      this._msg(`Dungeon chest opened! (+${xp} XP, +${gold} Gold)`, 2.8);
-    }
-
-    this.dungeon.rewardTaken = true;
-    this._shake(0.12, 5);
-    this._saveSoon();
-  }
-
-  _useDungeonShrine() {
-    if (this.dungeon.shrineUsed) return;
-    this.dungeon.shrineUsed = true;
-    this._fullRestoreHero();
-    this.hero.potions.mana = (this.hero.potions.mana | 0) + 1;
-    this._msg("Shrine blessed you. Full restore + 1 mana potion.", 2.2);
-    this._shake(0.08, 3.5);
-    this._saveSoon();
-  }
-
-  _leaveDungeon() {
-    this.dungeon.active = false;
-    this.dungeon.rewardChest = null;
-    this.dungeon.rewardTaken = false;
-    this.dungeon.rooms = [];
-    this.dungeon.corridors = [];
-    this.dungeon.roomVisited.clear?.();
-    this.dungeon.currentModifierText = "";
-    this.dungeon.hazards = [];
-    this.dungeon.relicTakenRooms = new Set();
-
-    this.enemies = [];
-    this.projectiles = [];
-    this.loot = [];
-
-    const dg = this.world.dungeons?.[0];
-    if (dg) {
-      this.hero.x = dg.x + 42;
-      this.hero.y = dg.y + 18;
-    } else {
-      this.hero.x = this.world.spawn.x;
-      this.hero.y = this.world.spawn.y;
-    }
-
-    this._msg(`Escaped the dungeon. Best floor: ${this.progress.dungeonBest}`, 2.8);
-    this._saveSoon();
-  }
-
-  _updateDungeonRoomTracking() {
-    if (!this.dungeon.active) return;
-
-    const idx = this._findDungeonRoomIndexContaining(this.hero.x, this.hero.y);
-    if (idx < 0) return;
-
-    if (idx !== this.dungeon.currentRoomIndex) {
-      const nextRoom = this.dungeon.rooms[idx];
-      if (nextRoom?.locked && !this._canEnterLockedRoom(nextRoom)) {
-        return;
-      }
-
-      this.dungeon.currentRoomIndex = idx;
-      this.dungeon.room = this.dungeon.rooms[idx];
-      const room = this.dungeon.room;
-      room.visited = true;
-      this.dungeon.roomVisited.add(room.id);
-      this.dungeon.currentModifierText = this._modifierName(room.modifier);
-
-      if (!room.cleared) {
-        this.enemies = [];
-        this.projectiles = [];
-        this._spawnCurrentDungeonRoomEnemies(false);
-
-        if (room.kind === "vault") this._msg("Miniboss vault", 1.3);
-        else if (room.kind === "key") this._msg("Key room", 1.3);
-        else if (room.kind === "reward") this._msg("Reward room", 1.3);
-        else if (room.kind === "shrine") this._msg("Shrine room", 1.3);
-        else if (room.kind === "relic") this._msg("Relic room", 1.3);
-        else if (room.kind === "goal") this._msg("Locked goal room", 1.3);
-        else this._msg("New room", 1.3);
-      }
-    }
-  }
-
-  _updateDungeonClear() {
-    if (!this.dungeon.active) return;
-
-    const room = this._getCurrentDungeonRoom();
-    if (!room || room.cleared) return;
-
-    const alive = this.enemies.some(e => e.alive);
-    if (alive) return;
-
-    room.cleared = true;
-    this.dungeon.clearedRooms += 1;
-
-    const floor = this.dungeon.floor | 0;
-    let roomGold = 5 + floor * 2 + (room.kind === "reward" ? 6 : 0);
-    let roomXP = 4 + floor * 2 + (room.kind === "goal" ? 4 : 0);
-
-    if (room.kind === "vault") {
-      roomGold += 14 + floor * 3;
-      roomXP += 10 + floor * 2;
-    }
-    if (room.modifier === "rage") {
-      roomGold += 4;
-      roomXP += 4;
-    } else if (room.modifier === "swarm") {
-      roomGold += 3;
-      roomXP += 3;
-    } else if (room.modifier === "spikes" || room.modifier === "embers") {
-      roomGold += 3;
-      roomXP += 2;
-    }
-
-    this._grantGold(roomGold);
-    this._grantXP(roomXP);
-
-    if (room.keyRoom) {
-      this.dungeon.keys += 1;
-      this._msg(`Key found! ${this.dungeon.keys}/${this.dungeon.neededKeys}`, 2.0);
-    } else if ((room.kind === "reward" || room.kind === "vault") && this.loot.length < this.perf.maxLoot - 2) {
-      this.loot.push(new Loot(room.cx - 8, room.cy + 4, "gold", { amount: 7 + floor * 2 }));
-      this.loot.push(new Loot(room.cx + 8, room.cy + 6, "potion", {
-        potionType: Math.random() < 0.5 ? "hp" : "mana",
-        amount: 1,
-      }));
-    }
-
-    const requiredDone = this.dungeon.bossFloor
-      ? true
-      : this.dungeon.keys >= this.dungeon.neededKeys;
-
-    const goalRoom = this.dungeon.rooms.find(r => r.kind === "goal") || null;
-    const goalDone = !goalRoom || goalRoom.cleared;
-
-    if (requiredDone && goalDone) {
-      const unclearedCombat = this.dungeon.rooms.some(r =>
-        !r.cleared && (r.kind === "combat" || r.kind === "key" || r.kind === "goal" || r.kind === "vault")
-      );
-
-      if (!unclearedCombat) {
-        this.dungeon.floorComplete = true;
-        this.dungeon.justCleared = true;
-        this.hero.potions.mana = (this.hero.potions.mana | 0) + (floor >= 3 ? 1 : 0);
-        this._spawnDungeonRewardChest();
-        this._msg(`Floor ${floor} cleared! Chest unlocked.`, 3.0);
-        this._shake(0.16, 5);
-        this._saveSoon();
-        return;
-      }
-    }
-
-    if (!this.dungeon.bossFloor && this.dungeon.keys < this.dungeon.neededKeys) {
-      this._msg(`Room cleared! Find more keys: ${this.dungeon.keys}/${this.dungeon.neededKeys}`, 1.9);
-    } else {
-      const remaining = this.dungeon.rooms.filter(r =>
-        !r.cleared && (r.kind === "combat" || r.kind === "key" || r.kind === "goal" || r.kind === "vault")
-      ).length;
-      this._msg(`Room cleared! ${remaining} room${remaining === 1 ? "" : "s"} left.`, 1.9);
-    }
-
-    this._shake(0.08, 3.2);
-  }
-
-  _updateZoneMessages(dt) {
-    if (this.progress.zoneMsgCooldown > 0) {
-      this.progress.zoneMsgCooldown -= dt;
-    }
-
-    if (this.dungeon.active) {
-      const room = this._getCurrentDungeonRoom();
-      const roomName = room
-        ? (room.kind === "boss" ? "Boss Chamber"
-          : room.kind === "goal" ? "Goal Chamber"
-          : room.kind === "reward" ? "Treasure Room"
-          : room.kind === "shrine" ? "Shrine Room"
-          : room.kind === "relic" ? "Relic Room"
-          : room.kind === "key" ? "Key Room"
-          : room.kind === "vault" ? "Vault"
-          : room.kind === "start" ? "Entry Hall"
-          : "Dungeon Room")
-        : "Dungeon";
-
-      const mod = room?.modifier ? this._modifierName(room.modifier) : "";
-      const zoneText = mod ? `Floor ${this.dungeon.floor} — ${roomName} (${mod})` : `Floor ${this.dungeon.floor} — ${roomName}`;
-      const zoneId = `dungeon-${this.dungeon.floor}-${this.dungeon.currentRoomIndex}`;
-
-      if (zoneId !== this.progress.currentZoneId && this.progress.zoneMsgCooldown <= 0) {
-        this.progress.currentZoneId = zoneId;
-        this.progress.currentZoneText = zoneText;
-        this.progress.zoneMsgCooldown = 1.6;
-        this._msg(zoneText, 1.5);
-      }
-      return;
-    }
-
-    let zoneText = "";
-    let zoneId = "";
-
-    for (const w of this.world?.waystones || []) {
-      if (dist2(this.hero.x, this.hero.y, w.x, w.y) < 150 * 150) {
-        zoneText = "Ancient Waystone";
-        zoneId = `way-${w.id}`;
-        break;
-      }
-    }
-
-    if (!zoneText) {
-      for (const d of this.world?.docks || []) {
-        if (dist2(this.hero.x, this.hero.y, d.x, d.y) < 150 * 150) {
-          zoneText = "Old Dock";
-          zoneId = `dock-${d.id}`;
-          break;
-        }
-      }
-    }
-
-    if (!zoneText) {
-      for (const dg of this.world?.dungeons || []) {
-        if (dist2(this.hero.x, this.hero.y, dg.x, dg.y) < 150 * 150) {
-          zoneText = "Dungeon Entrance";
-          zoneId = `dungeon-entrance-${dg.id}`;
-          break;
-        }
-      }
-    }
-
-    if (!zoneText) {
-      for (const c of this.world?.camps || []) {
-        if (dist2(this.hero.x, this.hero.y, c.x, c.y) < 170 * 170) {
-          zoneText = `Camp Tier ${c.tier}`;
-          zoneId = `camp-${c.id}`;
-          break;
-        }
-      }
-    }
-
-    if (zoneId && zoneId !== this.progress.currentZoneId && this.progress.zoneMsgCooldown <= 0) {
-      this.progress.currentZoneId = zoneId;
-      this.progress.currentZoneText = zoneText;
-      this.progress.zoneMsgCooldown = 2.4;
-      this._msg(zoneText, 1.8);
-    } else if (!zoneId) {
-      this.progress.currentZoneId = "";
-      this.progress.currentZoneText = "";
-    }
-  }
+  // =============================
+  // SPELLS
+  // =============================
 
   _handleSpells() {
-    const aim = this._currentAim();
+    const aim = this._getAim();
 
-    if (this.input.wasPressed("q")) this._castBolt(aim.x, aim.y);
+    if (this.input.wasPressed("q")) this._castSpark(aim.x, aim.y);
     if (this.input.wasPressed("w")) this._castNova();
     if (this.input.wasPressed("e")) this._castDash(aim.x, aim.y);
     if (this.input.wasPressed("r")) this._castOrb(aim.x, aim.y);
   }
 
-  _castBolt(dx, dy) {
-    if (!this._canCastSpell("q")) return;
-    this._startSpell("q");
-
-    const st = this.hero.getStats?.() || { dmg: 8, crit: 0.05, critMult: 1.7 };
-    const room = this._getCurrentDungeonRoom();
-    const shots = [{ dx, dy }];
-
-    if ((this.hero.level || 1) >= 5 || room?.modifier === "haste") {
-      const spread = 0.16;
-      shots.push({ dx: dx - dy * spread, dy: dy + dx * spread });
-      shots.push({ dx: dx + dy * spread, dy: dy - dx * spread });
+  _getAim() {
+    const m = this.mouse;
+    if (m?.moved) {
+      const dx = m.worldX - this.hero.x;
+      const dy = m.worldY - this.hero.y;
+      const n = norm(dx, dy);
+      return { x: n.x || 1, y: n.y || 0 };
     }
 
-    for (const s of shots) {
-      const n = norm(s.dx, s.dy);
-      const p = new Projectile(
-        this.hero.x + n.x * 12,
-        this.hero.y + n.y * 12 - 6,
-        n.x * (room?.modifier === "haste" ? 585 : 520),
-        n.y * (room?.modifier === "haste" ? 585 : 520),
-        Math.round(st.dmg * 0.85),
-        1.15,
-        this.hero.level || 1,
-        { color: "rgba(145,215,255,0.95)", radius: 6, type: "bolt", hitRadius: 18 }
-      );
-      p.meta.crit = st.crit;
-      p.meta.critMult = st.critMult;
-      this.projectiles.push(p);
-    }
+    const last = this.hero.lastMove || { x: 1, y: 0 };
+    const n = norm(last.x, last.y);
+    return { x: n.x || 1, y: n.y || 0 };
+  }
 
-    this._shake(0.05, 2);
+  _castSpark(dx, dy) {
+    if (this.cooldowns.q > 0) return;
+
+    const dmg = this.hero.getStats?.().dmg || 8;
+
+    this.projectiles.push(
+      new Projectile(
+        this.hero.x + dx * 16,
+        this.hero.y + dy * 16,
+        dx * 320,
+        dy * 320,
+        dmg,
+        1.0,
+        this.hero.level,
+        { friendly: true, color: "#8be9ff" }
+      )
+    );
+
+    this.cooldowns.q = 0.22;
+    this._spellMsg("Spark");
   }
 
   _castNova() {
-    if (!this._canCastSpell("w")) return;
-    this._startSpell("w");
+    if (this.cooldowns.w > 0) return;
 
-    const st = this.hero.getStats?.() || { dmg: 8 };
-    const p = new Projectile(
-      this.hero.x,
-      this.hero.y - 6,
-      0,
-      0,
-      Math.round(st.dmg * 0.65),
-      0.55,
-      this.hero.level || 1,
-      { color: "rgba(200,240,255,0.95)", radius: 10, type: "nova", hitRadius: 120 }
+    const dmg = this.hero.getStats?.().dmg || 8;
+
+    this.projectiles.push(
+      new Projectile(
+        this.hero.x,
+        this.hero.y,
+        0,
+        0,
+        dmg,
+        0.2,
+        this.hero.level,
+        { friendly: true, nova: true }
+      )
     );
-    p.meta.nova = true;
-    this.projectiles.push(p);
 
-    const room = this._getCurrentDungeonRoom();
-    const radius = room?.modifier === "sanctum" ? 106 : 92;
-    for (const e of this.enemies) {
-      if (!e.alive) continue;
-      if (dist2(this.hero.x, this.hero.y, e.x, e.y) <= radius * radius) {
-        const dmg = Math.round(st.dmg * 0.55);
-        e.takeDamage?.(dmg);
-        const n = norm(e.x - this.hero.x, e.y - this.hero.y);
-        e.x += n.x * 14;
-        e.y += n.y * 14;
-        if (!e.alive) this._onEnemyDefeated(e);
-      }
-    }
-
-    this._shake(0.10, 3.2);
+    this.cooldowns.w = 1.8;
+    this._spellMsg("Nova");
   }
 
   _castDash(dx, dy) {
-    if (!this._canCastSpell("e")) return;
-    this._startSpell("e");
+    if (this.cooldowns.e > 0) return;
 
-    if (this.hero.state.dashT > 0) return;
-    this.hero.state.dashT = 0.35;
-
-    const room = this._getCurrentDungeonRoom();
-    const dist = room?.modifier === "haste" ? 168 : 138;
+    const dist = 80;
     const nx = this.hero.x + dx * dist;
     const ny = this.hero.y + dy * dist;
 
-    if (this.dungeon.active) {
-      this.hero.x = nx;
-      this.hero.y = ny;
-      this._moveHeroDungeon(this.hero.x, this.hero.y);
-    } else if (this.hero.state?.sailing) {
-      this.hero.x = nx;
-      this.hero.y = ny;
-    } else {
-      let x = this.hero.x;
-      let y = this.hero.y;
-      const steps = 12;
-      for (let i = 0; i < steps; i++) {
-        const t = (i + 1) / steps;
-        const px = lerp(this.hero.x, nx, t);
-        const py = lerp(this.hero.y, ny, t);
-        if (this.world.canWalk(px, py)) {
-          x = px;
-          y = py;
-        } else {
-          break;
-        }
-      }
-      this.hero.x = x;
-      this.hero.y = y;
-    }
+    if (this.world.canWalk(nx, this.hero.y)) this.hero.x = nx;
+    if (this.world.canWalk(this.hero.x, ny)) this.hero.y = ny;
 
-    const st = this.hero.getStats?.() || { dmg: 8 };
-    const burstR = 56;
-    for (const e of this.enemies) {
-      if (!e.alive) continue;
-      if (dist2(this.hero.x, this.hero.y, e.x, e.y) <= burstR * burstR) {
-        e.takeDamage?.(Math.round(st.dmg * 0.7));
-        if (!e.alive) this._onEnemyDefeated(e);
-      }
-    }
-
-    this._shake(0.08, 2.8);
+    this.cooldowns.e = 2.8;
+    this._shake(0.1, 4);
+    this._spellMsg("Dash");
   }
 
   _castOrb(dx, dy) {
-    if (!this._canCastSpell("r")) return;
-    this._startSpell("r");
+    if (this.cooldowns.r > 0) return;
 
-    const st = this.hero.getStats?.() || { dmg: 8 };
-    const shots = [{ dx, dy }];
+    const dmg = this.hero.getStats?.().dmg || 8;
 
-    if ((this.hero.level || 1) >= 7) {
-      const spread = 0.22;
-      shots.push({ dx: dx - dy * spread, dy: dy + dx * spread });
-      shots.push({ dx: dx + dy * spread, dy: dy - dx * spread });
+    this.projectiles.push(
+      new Projectile(
+        this.hero.x + dx * 18,
+        this.hero.y + dy * 18,
+        dx * 180,
+        dy * 180,
+        dmg * 1.4,
+        1.8,
+        this.hero.level,
+        { friendly: true, color: "#c08cff" }
+      )
+    );
+
+    this.cooldowns.r = 3.4;
+    this._spellMsg("Orb");
+  }  // =============================
+  // WORLD INTERACTION / DUNGEON
+  // =============================
+
+  _toggleDockingOrSailing() {
+    const dock = (this.world?.docks || []).find(
+      d => dist2(this.hero.x, this.hero.y, d.x, d.y) < 90 * 90
+    );
+
+    if (!dock) {
+      this._msg("No dock nearby");
+      return;
     }
 
-    for (const s of shots) {
-      const n = norm(s.dx, s.dy);
-      const p = new Projectile(
-        this.hero.x + n.x * 12,
-        this.hero.y + n.y * 12 - 6,
-        n.x * 320,
-        n.y * 320,
-        Math.round(st.dmg * 1.05),
-        1.55,
-        this.hero.level || 1,
-        { color: "rgba(190,160,255,0.95)", radius: 8, type: "orb", hitRadius: 22, pierce: true }
+    this.hero.state.sailing = !this.hero.state.sailing;
+
+    if (this.hero.state.sailing) {
+      this._msg("Sailing");
+    } else {
+      this._msg("Docked");
+      this._nudgeToLand();
+    }
+  }
+
+  _interact() {
+    for (const dg of this.world?.dungeons || []) {
+      if (dist2(this.hero.x, this.hero.y, dg.x, dg.y) < 90 * 90) {
+        this._enterDungeon(dg);
+        return;
+      }
+    }
+  }
+
+  _enterDungeon(dg) {
+    this.dungeon.active = true;
+    this.dungeon.floor = 1;
+    this.dungeon.rooms = this._buildDungeon();
+    this.dungeon.currentRoomIndex = 0;
+
+    const room = this._getRoom();
+    this.hero.x = room.x;
+    this.hero.y = room.y;
+
+    this.enemies = [];
+    this.projectiles = [];
+    this.loot = [];
+
+    this._spawnDungeonEnemies(room);
+    this._msg("Entered Dungeon");
+  }
+
+  _buildDungeon() {
+    const rooms = [];
+
+    for (let i = 0; i < 5; i++) {
+      rooms.push({
+        x: i * 500,
+        y: 0,
+        w: 400,
+        h: 240,
+        boss: i === 4,
+      });
+    }
+
+    return rooms;
+  }
+
+  _getRoom() {
+    return this.dungeon.rooms[this.dungeon.currentRoomIndex];
+  }
+
+  _getCurrentDungeonRoom() {
+    if (!this.dungeon?.active) return null;
+    return this.dungeon.rooms?.[this.dungeon.currentRoomIndex] || null;
+  }
+
+  _spawnDungeonEnemies(room) {
+    this.enemies = [];
+
+    const count = room.boss ? 1 : 5;
+
+    for (let i = 0; i < count; i++) {
+      const ex = room.x + Math.random() * 200 - 100;
+      const ey = room.y + Math.random() * 120 - 60;
+
+      this.enemies.push(
+        new Enemy(ex, ey, this.hero.level + (room.boss ? 2 : 0))
       );
-      p.meta.pierce = true;
-      this.projectiles.push(p);
-    }
-
-    this._shake(0.06, 2.3);
-  }
-
-  _updateProjectiles(dt) {
-    const r = this.perf.projectileUpdateRadius;
-
-    for (const p of this.projectiles) {
-      if (!p.alive) continue;
-      if (!this._withinRadius(p.x, p.y, r) && !this.dungeon.active) continue;
-
-      p.update?.(dt, this.world);
-      if (!p.alive) continue;
-
-      if (p.meta?.onHitHero || p.friendly === false) {
-        if (dist2(p.x, p.y, this.hero.x, this.hero.y) < (p.hitRadius || 18) ** 2) {
-          const dealt = this.hero.takeDamage?.(p.dmg) || p.dmg;
-          this._msg(`-${Math.round(dealt)} HP`, 1.1);
-          p.alive = false;
-          this._shake(0.08, 3);
-        }
-        continue;
-      }
-
-      const hr2 = (p.hitRadius || 18) ** 2;
-      for (const e of this.enemies) {
-        if (!e.alive) continue;
-        const id = e._id || (e._id = `${Math.random()}`);
-        if (p._hitSet && p._hitSet.has(id)) continue;
-
-        if (dist2(p.x, p.y, e.x, e.y) < hr2) {
-          let dmg = p.dmg;
-          const crit = p.meta?.crit || 0;
-          const critMult = p.meta?.critMult || 1.7;
-          if (Math.random() < crit) dmg = Math.round(dmg * critMult);
-
-          e.takeDamage?.(dmg);
-          if (!p._hitSet) p._hitSet = new Set();
-          p._hitSet.add(id);
-          this._shake(0.04, 1.8);
-
-          if (!p.meta?.pierce) p.alive = false;
-
-          if (!e.alive) this._onEnemyDefeated(e);
-          break;
-        }
-      }
     }
   }
 
-  _dropLoot(x, y, tier = 1, kind = "", elite = false) {
-    if (this.loot.length >= this.perf.maxLoot) return;
-
-    if (elite) {
-      if (Math.random() < 0.5) {
-        this.loot.push(new Loot(x, y, "gold", { amount: 10 + ((tier * 4) | 0) }));
-      }
-      const slotRoll = Math.random();
-      const slot =
-        slotRoll < 0.30 ? "weapon" :
-        slotRoll < 0.52 ? "armor" :
-        slotRoll < 0.66 ? "helm" :
-        slotRoll < 0.78 ? "boots" :
-        slotRoll < 0.90 ? "ring" : "trinket";
-
-      const gearSeed = hash2(this.seed ^ 0x55aa, ((x | 0) * 31 + (y | 0) * 17));
-      const g = makeGear(slot, (this.hero.level || 1) + 1, null, gearSeed);
-      this.loot.push(new Loot(x, y, "gear", { gear: g }));
-      return;
-    }
-
-    const r = Math.random();
-
-    if (kind === "brute" && r < 0.75) {
-      this.loot.push(new Loot(x, y, "gold", { amount: 6 + ((tier * 3) | 0) }));
-      return;
-    }
-
-    if (kind === "caster" && r < 0.55) {
-      this.loot.push(new Loot(x, y, "potion", {
-        potionType: Math.random() < 0.35 ? "hp" : "mana",
-        amount: 1,
-      }));
-      return;
-    }
-
-    if (r < 0.55) {
-      this.loot.push(new Loot(x, y, "gold", { amount: 3 + ((tier * 2) | 0) }));
-      return;
-    }
-
-    if (r < 0.78) {
-      this.loot.push(new Loot(x, y, "potion", {
-        potionType: Math.random() < 0.55 ? "hp" : "mana",
-        amount: 1,
-      }));
-      return;
-    }
-
-    const slotRoll = Math.random();
-    const slot =
-      slotRoll < 0.38 ? "weapon" :
-      slotRoll < 0.58 ? "armor" :
-      slotRoll < 0.70 ? "helm" :
-      slotRoll < 0.80 ? "boots" :
-      slotRoll < 0.90 ? "ring" : "trinket";
-
-    const gearSeed = hash2(this.seed, ((x | 0) * 31 + (y | 0) * 17));
-    const g = makeGear(slot, this.hero.level || 1, null, gearSeed);
-    this.loot.push(new Loot(x, y, "gear", { gear: g }));
-  }
-
-  _cleanupFarEntities() {
-    if (this.dungeon.active) return;
-
-    const enemyKeepR2 = (this.perf.enemyUpdateRadius + 900) ** 2;
-    const lootKeepR2 = (this.perf.lootUpdateRadius + 900) ** 2;
-    const projKeepR2 = (this.perf.projectileUpdateRadius + 900) ** 2;
-    const cx = this.camera.x;
-    const cy = this.camera.y;
-
-    this.enemies = this.enemies.filter(e => {
-      if (!e.alive) return false;
-      if (e.home) return true;
-      return dist2(e.x, e.y, cx, cy) <= enemyKeepR2;
-    });
-
-    this.loot = this.loot.filter(l => {
-      if (!l.alive) return false;
-      return dist2(l.x, l.y, cx, cy) <= lootKeepR2;
-    });
-
-    this.projectiles = this.projectiles.filter(p => {
-      if (!p.alive) return false;
-      return dist2(p.x, p.y, cx, cy) <= projKeepR2;
-    });
-  }
-
-  update(dt) {
-    dt = clamp(dt, 0, this._dtClamp);
-    this.time += dt;
-
-    if (this._pickupMsgCooldown > 0) this._pickupMsgCooldown = Math.max(0, this._pickupMsgCooldown - dt);
-    if (this._spellMsgCooldown > 0) this._spellMsgCooldown = Math.max(0, this._spellMsgCooldown - dt);
-
-    this._tickSpellCooldowns(dt);
-    this._tickResetConfirm(dt);
-
-    this._handleMenus();
-    this._handleFastTravelInput();
-    this._handleInventoryHotkeys();
-    this._handleResetHotkey();
-
-    if (!this.dungeon.active) {
-      this.world?.update?.(dt, this.hero);
-    }
-
-    const blockMove =
-      this.menu.open === "inventory" ||
-      this.menu.open === "options" ||
-      this.menu.open === "map";
-
-    if (!blockMove) this._handleMovement(dt);
-    else {
-      this.hero.vx = 0;
-      this.hero.vy = 0;
-    }
-
-    if (!blockMove) this._handleInteract();
-    if (!blockMove) this._handleSpells();
-
-    this.hero.update?.(dt);
-    this._regenMana(dt);
-    this._tickDungeonHazards(dt);
-
-    this._updateDungeonRoomTracking();
-    this._updateZoneMessages(dt);
-
-    if (!this.dungeon.active) this._spawnFromCamps(dt);
-
-    const enemyR = this.perf.enemyUpdateRadius;
+  _updateDungeon(dt) {
     for (const e of this.enemies) {
       if (!e.alive) continue;
-      if (!this.dungeon.active && !this._withinRadius(e.x, e.y, enemyR)) continue;
-      e.update?.(dt, this.hero, this.world, this);
+
+      const dx = this.hero.x - e.x;
+      const dy = this.hero.y - e.y;
+      const n = norm(dx, dy);
+
+      e.x += n.x * 60 * dt;
+      e.y += n.y * 60 * dt;
     }
 
-    this._updateProjectiles(dt);
-
-    const lootR = this.perf.lootUpdateRadius;
-    for (const l of this.loot) {
-      if (!l.alive) continue;
-      if (!this.dungeon.active && !this._withinRadius(l.x, l.y, lootR)) continue;
-      l.update?.(dt, this.hero);
-    }
-
-    this._pickupNearbyLootBonus();
-    this._updateDungeonClear();
-
-    if ((this.hero.level || 1) > this._levelMsgShown) {
-      this._levelMsgShown = this.hero.level || 1;
-      this._msg(`Level up! You are now level ${this.hero.level}.`, 2.8);
-      this.hero.potions.hp = (this.hero.potions.hp | 0) + 1;
-      this._saveSoon();
-    }
-
-    this._updateCamera(dt);
-    this.ui?.update?.(dt, this);
-
-    this.perf.cleanupTimer += dt;
-    if (this.perf.cleanupTimer >= this.perf.cleanupEvery) {
-      this.perf.cleanupTimer = 0;
-      this._cleanupFarEntities();
-    }
-
-    this.enemies = this.enemies.filter(e => e.alive);
-    this.projectiles = this.projectiles.filter(p => p.alive);
-    this.loot = this.loot.filter(l => l.alive);
-
-    this.input.endFrame();
-
-    this._autosaveT += dt;
-    if (this._autosaveT >= 5) {
-      this._autosaveT = 0;
-      this._save();
+    if (!this.enemies.some(e => e.alive)) {
+      this._nextRoom();
     }
   }
 
-  _updateCamera(dt) {
-    const cam = this.camera;
-
-    cam.x = lerp(cam.x, this.hero.x, 1 - Math.pow(0.0005, dt));
-    cam.y = lerp(cam.y, this.hero.y, 1 - Math.pow(0.0005, dt));
-
-    if (cam.shakeT > 0) {
-      cam.shakeT -= dt;
-      const k = clamp(cam.shakeT / 0.12, 0, 1);
-      const mag = cam.shakeMag * k;
-      cam.sx = (Math.random() - 0.5) * 2 * mag;
-      cam.sy = (Math.random() - 0.5) * 2 * mag;
-      if (cam.shakeT <= 0) {
-        cam.sx = 0;
-        cam.sy = 0;
-        cam.shakeMag = 0;
-      }
-    } else {
-      cam.sx = 0;
-      cam.sy = 0;
-    }
-
-    cam.zoom = lerp(cam.zoom, this.dungeon.active ? 1.04 : 1.0, 1 - Math.pow(0.001, dt));
-  }
-
-  _modifierFill(mod) {
-    if (mod === "haste") return "rgba(42,52,68,0.22)";
-    if (mod === "drag") return "rgba(58,44,36,0.20)";
-    if (mod === "swarm") return "rgba(52,36,52,0.18)";
-    if (mod === "drain") return "rgba(30,46,58,0.22)";
-    if (mod === "rage") return "rgba(72,30,30,0.22)";
-    if (mod === "sanctum") return "rgba(28,58,54,0.22)";
-    if (mod === "spikes") return "rgba(70,54,54,0.18)";
-    if (mod === "embers") return "rgba(78,42,24,0.18)";
-    return null;
-  }
-
-  _drawDungeonHazards(ctx) {
-    const room = this._getCurrentDungeonRoom();
+  _moveHeroDungeon(nx, ny) {
+    const room = this._getCurrentDungeonRoom?.() || this._getRoom?.();
     if (!room) return;
 
-    for (const hz of this.dungeon.hazards) {
-      if (hz.roomId !== room.id) continue;
+    const halfW = (room.w || 400) * 0.5 - 20;
+    const halfH = (room.h || 240) * 0.5 - 20;
 
-      if (hz.kind === "spike") {
-        ctx.fillStyle = "rgba(160,150,160,0.90)";
-        ctx.beginPath();
-        ctx.moveTo(hz.x, hz.y - hz.r);
-        ctx.lineTo(hz.x + hz.r * 0.9, hz.y + hz.r * 0.7);
-        ctx.lineTo(hz.x - hz.r * 0.9, hz.y + hz.r * 0.7);
-        ctx.closePath();
-        ctx.fill();
-      } else if (hz.kind === "ember") {
-        ctx.fillStyle = "rgba(255,120,42,0.55)";
-        ctx.beginPath();
-        ctx.arc(hz.x, hz.y, hz.r, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = "rgba(255,200,80,0.75)";
-        ctx.beginPath();
-        ctx.arc(hz.x, hz.y, hz.r * 0.45, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
+    this.hero.x = clamp(nx, room.x - halfW, room.x + halfW);
+    this.hero.y = clamp(ny, room.y - halfH, room.y + halfH);
   }
 
-  _drawDungeonFloor(ctx) {
-    for (const c of this.dungeon.corridors) {
-      ctx.fillStyle = "rgba(34,32,44,1)";
-      ctx.fillRect(c.x, c.y, c.w, c.h);
+  _nextRoom() {
+    this.dungeon.currentRoomIndex++;
 
-      ctx.strokeStyle = "rgba(76,72,96,0.9)";
-      ctx.lineWidth = 6;
-      ctx.strokeRect(c.x, c.y, c.w, c.h);
+    if (this.dungeon.currentRoomIndex >= this.dungeon.rooms.length) {
+      this._exitDungeon();
+      return;
     }
 
-    for (const room of this.dungeon.rooms) {
-      const isCurrent = room === this._getCurrentDungeonRoom();
-      const visited = room.visited;
-      const tone =
-        room.kind === "boss" ? "rgba(34,28,42,1)" :
-        room.kind === "reward" ? "rgba(30,32,40,1)" :
-        room.kind === "goal" ? "rgba(32,30,42,1)" :
-        room.kind === "shrine" ? "rgba(28,34,40,1)" :
-        room.kind === "relic" ? "rgba(28,38,44,1)" :
-        room.kind === "key" ? "rgba(36,28,30,1)" :
-        room.kind === "vault" ? "rgba(38,28,42,1)" :
-        "rgba(26,24,34,1)";
+    const room = this._getRoom();
+    this.hero.x = room.x;
+    this.hero.y = room.y;
 
-      ctx.fillStyle = visited ? tone : "rgba(18,18,22,1)";
-      ctx.fillRect(room.x, room.y, room.w, room.h);
+    this._spawnDungeonEnemies(room);
+  }
 
-      const modFill = this._modifierFill(room.modifier);
-      if (visited && modFill) {
-        ctx.fillStyle = modFill;
-        ctx.fillRect(room.x + 6, room.y + 6, room.w - 12, room.h - 12);
+  _exitDungeon() {
+    this.dungeon.active = false;
+
+    const dg = this.world?.dungeons?.[0];
+    if (dg) {
+      this.hero.x = dg.x;
+      this.hero.y = dg.y + 50;
+    }
+
+    this._msg("Exited Dungeon");
+  }
+
+  _drawDungeonOverlayWorld(ctx) {
+    const room = this._getCurrentDungeonRoom?.() || this._getRoom?.();
+    if (!this.dungeon.active || !room) return;
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(180,120,255,0.30)";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(room.x - room.w * 0.5, room.y - room.h * 0.5, room.w, room.h);
+    ctx.restore();
+  }
+
+  // =============================
+  // MOUSE / MESSAGES / QUESTS / SAVE
+  // =============================
+
+  _updateMouseWorld() {
+    const rect = this.canvas.getBoundingClientRect();
+    const mx = this.mouse.x;
+    const my = this.mouse.y;
+
+    const sx = mx - rect.left;
+    const sy = my - rect.top;
+
+    const wx = (sx - this.w * 0.5) / this.camera.zoom + this.camera.x;
+    const wy = (sy - this.h * 0.5) / this.camera.zoom + this.camera.y;
+
+    this.mouse.worldX = wx;
+    this.mouse.worldY = wy;
+  }
+
+  _bindMouse() {
+    this.canvas.addEventListener("mousemove", e => {
+      this.mouse.x = e.clientX;
+      this.mouse.y = e.clientY;
+      this.mouse.moved = true;
+    });
+
+    this.canvas.addEventListener("mousedown", () => {
+      this.mouse.down = true;
+    });
+
+    this.canvas.addEventListener("mouseup", () => {
+      this.mouse.down = false;
+    });
+  }
+
+  _msg(text, t = 1.4) {
+    this.msg = text;
+    this.msgT = t;
+  }
+
+  _shake(t, mag) {
+    this.camera.shakeT = t;
+    this.camera.shakeMag = mag;
+  }
+
+  _makeQuests() {
+    return [
+      { id: "waystone", name: "Awaken a Waystone", done: false },
+      { id: "dock", name: "Find a Dock", done: false },
+      { id: "dungeon", name: "Enter a Dungeon", done: false },
+    ];
+  }
+
+  _updateQuestProgress() {
+    if (!this.quests) return;
+
+    for (const q of this.quests) {
+      if (q.done) continue;
+
+      if (q.id === "dungeon" && this.dungeon.active) {
+        q.done = true;
+        this._msg("Quest Complete: Enter a Dungeon", 2);
       }
 
-      ctx.strokeStyle = room.cleared
-        ? "rgba(92,128,96,1)"
-        : isCurrent
-          ? "rgba(130,124,170,1)"
-          : room.locked
-            ? "rgba(170,100,100,1)"
-            : "rgba(90,84,108,1)";
-      ctx.lineWidth = 10;
-      ctx.strokeRect(room.x, room.y, room.w, room.h);
-
-      if (visited) {
-        for (let x = room.x + 14; x < room.x + room.w - 14; x += 40) {
-          for (let y = room.y + 14; y < room.y + room.h - 14; y += 40) {
-            ctx.fillStyle = ((Math.floor((x + y) / 40) % 2) === 0)
-              ? "rgba(44,40,56,1)"
-              : "rgba(38,35,48,1)";
-            ctx.fillRect(x, y, 36, 36);
+      if (q.id === "dock") {
+        for (const d of this.world?.docks || []) {
+          if (dist2(this.hero.x, this.hero.y, d.x, d.y) < 120 * 120) {
+            q.done = true;
+            this._msg("Quest Complete: Found Dock", 2);
+            break;
           }
         }
       }
 
-      if (room.kind === "reward") {
-        ctx.fillStyle = "rgba(220,188,86,0.90)";
-        ctx.fillRect(room.cx - 8, room.cy - 8, 16, 16);
-      } else if (room.kind === "goal") {
-        ctx.fillStyle = "rgba(164,132,255,0.90)";
-        ctx.fillRect(room.cx - 8, room.cy - 8, 16, 16);
-      } else if (room.kind === "key") {
-        ctx.fillStyle = "rgba(255,188,108,0.95)";
-        ctx.fillRect(room.cx - 6, room.cy - 6, 12, 12);
-      } else if (room.kind === "shrine") {
-        ctx.fillStyle = "rgba(120,220,255,0.95)";
-        ctx.fillRect(room.cx - 6, room.cy - 6, 12, 12);
-      } else if (room.kind === "vault") {
-        ctx.fillStyle = "rgba(255,120,220,0.95)";
-        ctx.fillRect(room.cx - 7, room.cy - 7, 14, 14);
-      } else if (room.kind === "relic") {
-        ctx.fillStyle = "rgba(140,255,200,0.95)";
-        ctx.fillRect(room.cx - 7, room.cy - 7, 14, 14);
+      if (q.id === "waystone") {
+        for (const w of this.world?.waystones || []) {
+          if (dist2(this.hero.x, this.hero.y, w.x, w.y) < 120 * 120) {
+            q.done = true;
+            this._msg("Quest Complete: Waystone", 2);
+            break;
+          }
+        }
       }
-    }
-
-    this._drawDungeonHazards(ctx);
-
-    if (this.dungeon.exit) {
-      ctx.fillStyle = "rgba(120,88,70,1)";
-      ctx.fillRect(this.dungeon.exit.x - 16, this.dungeon.exit.y - 14, 32, 20);
-    }
-
-    if (this.dungeon.stairsDown) {
-      ctx.fillStyle = this.dungeon.floorComplete ? "rgba(188,158,255,1)" : "rgba(88,76,112,1)";
-      ctx.fillRect(this.dungeon.stairsDown.x - 18, this.dungeon.stairsDown.y - 14, 36, 24);
-      ctx.fillStyle = "rgba(32,28,42,1)";
-      ctx.fillRect(this.dungeon.stairsDown.x - 10, this.dungeon.stairsDown.y - 6, 20, 10);
-    }
-
-    if (this.dungeon.rewardChest) {
-      const c = this.dungeon.rewardChest;
-      ctx.fillStyle = this.dungeon.rewardTaken ? "rgba(110,86,54,1)" : "rgba(164,118,58,1)";
-      ctx.fillRect(c.x - 16, c.y - 10, 32, 20);
-      ctx.fillStyle = "rgba(212,182,86,1)";
-      ctx.fillRect(c.x - 12, c.y - 6, 24, 7);
-      ctx.fillStyle = "rgba(88,62,28,1)";
-      ctx.fillRect(c.x - 4, c.y - 2, 8, 4);
     }
   }
 
-  draw() {
-    const ctx = this.ctx;
-    if (!ctx) return;
+  _saveSoon() {
+    this._autosaveT = 0.25;
+  }
 
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = this.dungeon.active ? "rgb(14,12,18)" : "rgb(18,22,30)";
-    ctx.fillRect(0, 0, this.w, this.h);
-    ctx.restore();
+  _saveGame() {
+    try {
+      this.save.write({
+        hero: this.hero,
+        worldSeed: this.seed,
+      });
+    } catch (e) {}
+  }
 
-    const cam = this.camera;
-    const z = cam.zoom;
-    const sx = cam.sx || 0;
-    const sy = cam.sy || 0;
+  _loadGame() {
+    try {
+      const data = this.save.read();
+      if (!data) return;
 
-    ctx.save();
-    ctx.setTransform(
-      z, 0,
-      0, z,
-      (this.w * 0.5) - cam.x * z + sx,
-      (this.h * 0.5) - cam.y * z + sy
-    );
-
-    const vb = this._viewBoundsWorld();
-
-    if (this.dungeon.active) {
-      this._drawDungeonFloor(ctx);
-    } else {
-      this.world?.draw?.(ctx, { x: cam.x, y: cam.y, w: this.w, h: this.h, zoom: z });
-    }
-
-    for (const l of this.loot) {
-      if (!l.alive) continue;
-      if (!this.dungeon.active && !this._inView(l.x, l.y, vb)) continue;
-      l.draw?.(ctx, this.time);
-    }
-
-    for (const e of this.enemies) {
-      if (!e.alive) continue;
-      if (!this.dungeon.active && !this._inView(e.x, e.y, vb)) continue;
-      e.draw?.(ctx, this.time);
-    }
-
-    this.hero?.draw?.(ctx, this.time);
-
-    for (const p of this.projectiles) {
-      if (!p.alive) continue;
-      if (!this.dungeon.active && !this._inView(p.x, p.y, vb)) continue;
-      p.draw?.(ctx, this.time);
-    }
-
-    ctx.restore();
-
-    this.ui?.draw?.(ctx, this);
-
-    if (this.dungeon.active) {
-      ctx.save();
-      ctx.fillStyle = "rgba(220,210,255,0.9)";
-      ctx.font = "bold 14px Arial";
-      ctx.textAlign = "center";
-
-      const topText = this.dungeon.bossFloor
-        ? `Boss Floor ${this.dungeon.floor}`
-        : `Dungeon Floor ${this.dungeon.floor} — Keys ${this.dungeon.keys}/${this.dungeon.neededKeys}`;
-      ctx.fillText(topText, this.w * 0.5, 24);
-
-      if (this.dungeon.currentModifierText) {
-        ctx.fillStyle = "rgba(255,220,180,0.95)";
-        ctx.fillText(this.dungeon.currentModifierText, this.w * 0.5, 44);
-      } else if (this.dungeon.floorComplete) {
-        ctx.fillStyle = "rgba(188,255,188,0.94)";
-        ctx.fillText("Floor clear — open the chest, then press F at the purple stairs to go deeper or F at the south gate to leave", this.w * 0.5, 44);
-      } else if (!this.dungeon.bossFloor && this.dungeon.keys < this.dungeon.neededKeys) {
-        ctx.fillStyle = "rgba(255,220,180,0.92)";
-        ctx.fillText("Explore side rooms, clear key rooms, and unlock the goal chamber", this.w * 0.5, 44);
-      } else {
-        ctx.fillStyle = "rgba(255,220,180,0.92)";
-        ctx.fillText("You have enough keys — find and clear the goal chamber", this.w * 0.5, 44);
+      if (data.hero) {
+        Object.assign(this.hero, data.hero);
       }
+    } catch (e) {}
+  }
 
-      ctx.restore();
+  _rebuildCampState() {
+    this._campState = new Map();
+  }
+
+  _ensureWorldPopulation() {
+    for (let i = 0; i < 20; i++) {
+      const x = this.hero.x + (Math.random() * 800 - 400);
+      const y = this.hero.y + (Math.random() * 800 - 400);
+
+      if (this.world.canWalk(x, y)) {
+        this.enemies.push(new Enemy(x, y, this.hero.level));
+      }
     }
   }
 }
