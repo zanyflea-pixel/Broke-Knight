@@ -1,14 +1,5 @@
 // src/main.js
-// v38 BOOT + FOCUS + RESUME HARDENING PASS (FULL FILE)
-// Purpose:
-// - keep boot flow simple
-// - improve resize behavior
-// - improve canvas sharpness on high-DPI screens
-// - clamp frame spikes after tab switches / lag
-// - keep keyboard focus on canvas
-// - block browser interactions that interfere with gameplay
-// - avoid duplicate RAF loops on page restore / reload edge cases
-// - avoid touching core gameplay logic in game.js
+// v39 BOOT + FPS + RESUME + LAG HARDENING PASS (FULL FILE)
 
 import Game from "./game.js";
 
@@ -25,6 +16,7 @@ if (!ctx) {
 let game = null;
 let rafId = 0;
 let booted = false;
+let running = false;
 let lastTime = performance.now();
 let accumulator = 0;
 
@@ -81,31 +73,67 @@ function resizeCanvas() {
   }
 }
 
-function ensureFocus() {
-  if (document.activeElement !== canvas) {
+function focusCanvas() {
+  try {
+    canvas.focus({ preventScroll: true });
+  } catch {
     try {
-      canvas.focus({ preventScroll: true });
-    } catch (_) {
       canvas.focus();
-    }
+    } catch {}
   }
 }
 
-function resetTiming() {
-  lastTime = performance.now();
-  accumulator = 0;
-}
-
-function stopLoop() {
+function cancelLoop() {
   if (rafId) {
     cancelAnimationFrame(rafId);
     rafId = 0;
   }
+  running = false;
+}
+
+function render() {
+  if (!game) return;
+
+  ctx.save();
+  ctx.setTransform(getDPR(), 0, 0, getDPR(), 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.restore();
+
+  game.draw?.();
+}
+
+function loop(now) {
+  if (!running) return;
+
+  rafId = requestAnimationFrame(loop);
+
+  let frame = (now - lastTime) / 1000;
+  lastTime = now;
+
+  if (!Number.isFinite(frame) || frame < 0) frame = STEP;
+  frame = Math.min(MAX_FRAME, frame);
+
+  accumulator += frame;
+
+  let steps = 0;
+  while (accumulator >= STEP && steps < MAX_STEPS) {
+    game?.update?.(STEP);
+    accumulator -= STEP;
+    steps++;
+  }
+
+  if (steps === MAX_STEPS) {
+    accumulator = 0;
+  }
+
+  render();
 }
 
 function startLoop() {
-  if (rafId) return;
-  resetTiming();
+  cancelLoop();
+  lastTime = performance.now();
+  accumulator = 0;
+  running = true;
   rafId = requestAnimationFrame(loop);
 }
 
@@ -115,144 +143,75 @@ function boot() {
 
   resizeCanvas();
 
-  game = new Game(canvas, ctx);
+  game = new Game(canvas);
 
-  if (game?.resize) {
-    game.resize(window.innerWidth | 0, window.innerHeight | 0);
-  } else if (game?.setViewSize) {
-    game.setViewSize(window.innerWidth | 0, window.innerHeight | 0);
-  }
-
-  ensureFocus();
-  startLoop();
-}
-
-function update(dt) {
-  if (!game) return;
-
-  if (typeof game.update === "function") {
-    game.update(dt);
-  } else if (typeof game.tick === "function") {
-    game.tick(dt);
-  } else if (typeof game.step === "function") {
-    game.step(dt);
-  }
-}
-
-function render() {
-  if (!game) return;
-
-  const w = canvas.clientWidth || window.innerWidth || 960;
-  const h = canvas.clientHeight || window.innerHeight || 540;
-
-  ctx.clearRect(0, 0, w, h);
-
-  if (typeof game.draw === "function") {
-    game.draw();
-  } else if (typeof game.render === "function") {
-    game.render();
-  }
-}
-
-function loop(now) {
-  let frame = (now - lastTime) / 1000;
-  lastTime = now;
-
-  frame = Math.min(MAX_FRAME, Math.max(0, frame));
-  accumulator += frame;
-
-  let steps = 0;
-  while (accumulator >= STEP && steps < MAX_STEPS) {
-    update(STEP);
-    accumulator -= STEP;
-    steps++;
-  }
-
-  render();
-  rafId = requestAnimationFrame(loop);
-}
-
-function onResize() {
   resizeCanvas();
-  ensureFocus();
-}
-
-function onVisibilityChange() {
-  if (document.hidden) {
-    resetTiming();
-    return;
-  }
-
-  resetTiming();
-  ensureFocus();
-}
-
-function onPageShow() {
-  resetTiming();
-  ensureFocus();
+  focusCanvas();
   startLoop();
 }
 
-function onPointerDown() {
-  ensureFocus();
-}
+function hardResume() {
+  if (!booted || !game) return;
 
-function onMouseDown(e) {
-  ensureFocus();
+  resizeCanvas();
+  focusCanvas();
 
-  if (e.button === 1) {
-    e.preventDefault();
+  lastTime = performance.now();
+  accumulator = 0;
+
+  if (!running) {
+    startLoop();
   }
 }
 
-function onContextMenu(e) {
-  e.preventDefault();
-}
+window.addEventListener("resize", () => {
+  resizeCanvas();
+});
 
-function onDragStart(e) {
-  e.preventDefault();
-}
+window.addEventListener("orientationchange", () => {
+  setTimeout(() => {
+    resizeCanvas();
+    hardResume();
+  }, 60);
+});
 
-function onSelectStart(e) {
-  e.preventDefault();
-}
+window.addEventListener("focus", () => {
+  hardResume();
+});
 
-function onKeyDown(e) {
-  const block = [
+window.addEventListener("pageshow", () => {
+  hardResume();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    cancelLoop();
+  } else {
+    hardResume();
+  }
+});
+
+canvas.addEventListener("mousedown", () => {
+  focusCanvas();
+});
+
+canvas.addEventListener("touchstart", () => {
+  focusCanvas();
+}, { passive: true });
+
+window.addEventListener("keydown", e => {
+  const blocked = [
     "ArrowUp",
     "ArrowDown",
     "ArrowLeft",
     "ArrowRight",
     " ",
+    "Spacebar"
   ];
 
-  if (block.includes(e.key)) {
+  if (blocked.includes(e.key)) {
     e.preventDefault();
   }
-
-  ensureFocus();
-}
-
-function onBlurWindow() {
-  resetTiming();
-}
-
-function onBeforeUnload() {
-  stopLoop();
-}
-
-window.addEventListener("resize", onResize, { passive: true });
-window.addEventListener("orientationchange", onResize, { passive: true });
-window.addEventListener("visibilitychange", onVisibilityChange);
-window.addEventListener("pageshow", onPageShow);
-window.addEventListener("pointerdown", onPointerDown);
-window.addEventListener("mousedown", onMouseDown);
-window.addEventListener("keydown", onKeyDown, { passive: false });
-window.addEventListener("blur", onBlurWindow);
-window.addEventListener("beforeunload", onBeforeUnload);
-
-canvas.addEventListener("contextmenu", onContextMenu);
-canvas.addEventListener("dragstart", onDragStart);
-canvas.addEventListener("selectstart", onSelectStart);
+}, { passive: false });
 
 boot();
