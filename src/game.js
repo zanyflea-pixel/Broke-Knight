@@ -1,4 +1,3 @@
-// src/game.js
 // v50 DUNGEON TRAPS + RELIC ROOMS + ELITE BOSSES (FULL FILE)
 
 import World from "./world.js";
@@ -229,28 +228,13 @@ export default class Game {
     this._tickCooldowns(dt);
     this._tickCamera(dt);
     this._updateMouseWorld();
+    this._handleMenus();
 
     if (this.menu.open === "map") {
       this._handleFastTravelInput();
     } else {
       this._handleMovement(dt);
       this._handleSpells();
-    }
-
-    if (this.input.wasPressed("m")) {
-      this.menu.open = this.menu.open === "map" ? null : "map";
-    }
-    if (this.input.wasPressed("i")) {
-      this.menu.open = this.menu.open === "inventory" ? null : "inventory";
-    }
-    if (this.input.wasPressed("k")) {
-      this.menu.open = this.menu.open === "skills" ? null : "skills";
-    }
-    if (this.input.wasPressed("g")) {
-      this.menu.open = this.menu.open === "god" ? null : "god";
-    }
-    if (this.input.wasPressed("Escape")) {
-      this.menu.open = null;
     }
 
     if (this.input.wasPressed("b")) {
@@ -564,8 +548,6 @@ export default class Game {
     const y = this.hero.y + Math.sin(a) * r;
 
     if (!this.world.canWalk(x, y)) return;
-
-    // avoid spawning right next to water edges
     if (!this.world.canWalk(x + 20, y)) return;
     if (!this.world.canWalk(x - 20, y)) return;
     if (!this.world.canWalk(x, y + 20)) return;
@@ -617,9 +599,16 @@ export default class Game {
     }
   }
 
-  // =============================
-  // FAST TRAVEL (FIXED + ADDED)
-  // =============================
+  _handleMenus() {
+    if (this.input.wasPressed("i")) this.menu.open = this.menu.open === "inventory" ? null : "inventory";
+    if (this.input.wasPressed("j")) this.menu.open = this.menu.open === "quests" ? null : "quests";
+    if (this.input.wasPressed("m")) this.menu.open = this.menu.open === "map" ? null : "map";
+    if (this.input.wasPressed("o")) this.menu.open = this.menu.open === "options" ? null : "options";
+    if (this.input.wasPressed("Escape")) this.menu.open = null;
+
+    if (this.menu.open) this.ui.open?.(this.menu.open);
+    else this.ui.closeAll?.();
+  }
 
   _getDiscoveredWaystones() {
     const all = Array.isArray(this.world?.waystones) ? this.world.waystones.slice() : [];
@@ -657,7 +646,7 @@ export default class Game {
 
     this._msg(`Fast traveled to Waystone ${index + 1}`, 2.2);
     this._shake(0.12, 4);
-    this._saveSoon?.();
+    this._saveSoon();
   }
 
   _teleportToDungeonEntrance() {
@@ -685,7 +674,7 @@ export default class Game {
 
     this._msg("Teleported to dungeon entrance", 2.2);
     this._shake(0.14, 5);
-    this._saveSoon?.();
+    this._saveSoon();
   }
 
   _handleFastTravelInput() {
@@ -712,11 +701,7 @@ export default class Game {
     else if (this.input.wasPressed("7")) this._teleportToWaystone(6);
     else if (this.input.wasPressed("8")) this._teleportToWaystone(7);
     else if (this.input.wasPressed("9")) this._teleportToWaystone(8);
-  }  // =============================
-  // MOVEMENT (FIXED + TERRAIN SPEED)
-  // =============================
-
-  _handleMovement(dt) {
+  }  _handleMovement(dt) {
     const left = this.input.isDown("ArrowLeft");
     const right = this.input.isDown("ArrowRight");
     const up = this.input.isDown("ArrowUp");
@@ -732,12 +717,11 @@ export default class Game {
     if (ax || ay) {
       const n = norm(ax, ay);
 
-      this.aim = { x: n.x, y: n.y };
+      this._currentSkillAim = { x: n.x, y: n.y };
       this.hero.lastMove = { x: n.x, y: n.y };
 
       let speed = this.hero.state?.sailing ? 190 : 150;
 
-      // SAFE ROOM ACCESS (FIXES YOUR CRASH)
       const room =
         this._getCurrentDungeonRoom?.() ||
         this._getRoom?.() ||
@@ -746,7 +730,6 @@ export default class Game {
       if (this.dungeon.active && room?.modifier === "haste") speed *= 1.18;
       if (this.dungeon.active && room?.modifier === "drag") speed *= 0.82;
 
-      // TERRAIN SPEED (ROADS FAST / FOREST SLOW)
       if (!this.dungeon.active && !this.hero.state?.sailing && this.world?.getMoveModifier) {
         speed *= this.world.getMoveModifier(this.hero.x, this.hero.y);
       }
@@ -771,24 +754,20 @@ export default class Game {
       this.hero.vy = 0;
     }
 
-    // POTIONS
     if (this.input.wasPressed("1")) {
       if (this.hero.usePotion?.("hp")) {
         this._msg("Used HP potion");
-        this._saveSoon?.();
+        this._saveSoon();
       }
     }
+
     if (this.input.wasPressed("2")) {
       if (this.hero.usePotion?.("mana")) {
         this._msg("Used Mana potion");
-        this._saveSoon?.();
+        this._saveSoon();
       }
     }
   }
-
-  // =============================
-  // SPELLS
-  // =============================
 
   _handleSpells() {
     const aim = this._getAim();
@@ -816,6 +795,12 @@ export default class Game {
   _castSpark(dx, dy) {
     if (this.cooldowns.q > 0) return;
 
+    const def = this.skillDefs.q;
+    if (!this.hero.spendMana?.(def.mana)) {
+      this._spellMsg("No mana");
+      return;
+    }
+
     const dmg = this.hero.getStats?.().dmg || 8;
 
     this.projectiles.push(
@@ -827,16 +812,22 @@ export default class Game {
         dmg,
         1.0,
         this.hero.level,
-        { friendly: true, color: "#8be9ff" }
+        { friendly: true, color: "#8be9ff", type: "spark", radius: 5, hitRadius: 18 }
       )
     );
 
-    this.cooldowns.q = 0.22;
+    this.cooldowns.q = def.cd;
     this._spellMsg("Spark");
   }
 
   _castNova() {
     if (this.cooldowns.w > 0) return;
+
+    const def = this.skillDefs.w;
+    if (!this.hero.spendMana?.(def.mana)) {
+      this._spellMsg("No mana");
+      return;
+    }
 
     const dmg = this.hero.getStats?.().dmg || 8;
 
@@ -849,31 +840,48 @@ export default class Game {
         dmg,
         0.2,
         this.hero.level,
-        { friendly: true, nova: true }
+        { friendly: true, nova: true, radius: 12, hitRadius: 76, color: "#d6f5ff" }
       )
     );
 
-    this.cooldowns.w = 1.8;
+    this.cooldowns.w = def.cd;
     this._spellMsg("Nova");
   }
 
   _castDash(dx, dy) {
     if (this.cooldowns.e > 0) return;
 
+    const def = this.skillDefs.e;
+    if (!this.hero.spendMana?.(def.mana)) {
+      this._spellMsg("No mana");
+      return;
+    }
+
     const dist = 80;
     const nx = this.hero.x + dx * dist;
     const ny = this.hero.y + dy * dist;
 
-    if (this.world.canWalk(nx, this.hero.y)) this.hero.x = nx;
-    if (this.world.canWalk(this.hero.x, ny)) this.hero.y = ny;
+    if (this.dungeon.active && this._moveHeroDungeon) {
+      this._moveHeroDungeon(nx, ny);
+    } else {
+      if (this.world.canWalk(nx, this.hero.y)) this.hero.x = nx;
+      if (this.world.canWalk(this.hero.x, ny)) this.hero.y = ny;
+    }
 
-    this.cooldowns.e = 2.8;
+    this.hero.state.dashT = 0.12;
+    this.cooldowns.e = def.cd;
     this._shake(0.1, 4);
     this._spellMsg("Dash");
   }
 
   _castOrb(dx, dy) {
     if (this.cooldowns.r > 0) return;
+
+    const def = this.skillDefs.r;
+    if (!this.hero.spendMana?.(def.mana)) {
+      this._spellMsg("No mana");
+      return;
+    }
 
     const dmg = this.hero.getStats?.().dmg || 8;
 
@@ -886,15 +894,13 @@ export default class Game {
         dmg * 1.4,
         1.8,
         this.hero.level,
-        { friendly: true, color: "#c08cff" }
+        { friendly: true, color: "#c08cff", type: "orb", radius: 8, hitRadius: 24 }
       )
     );
 
-    this.cooldowns.r = 3.4;
+    this.cooldowns.r = def.cd;
     this._spellMsg("Orb");
-  }  // =============================
-  // WORLD INTERACTION / DUNGEON
-  // =============================
+  }
 
   _toggleDockingOrSailing() {
     const dock = (this.world?.docks || []).find(
@@ -917,6 +923,24 @@ export default class Game {
   }
 
   _interact() {
+    for (const w of this.world?.waystones || []) {
+      if (dist2(this.hero.x, this.hero.y, w.x, w.y) < 90 * 90) {
+        this.progress.discoveredWaystones?.add?.(w.id);
+        this._msg(`Waystone ${w.id} awakened`, 1.6);
+        this._saveSoon();
+        return;
+      }
+    }
+
+    for (const d of this.world?.docks || []) {
+      if (dist2(this.hero.x, this.hero.y, d.x, d.y) < 90 * 90) {
+        this.progress.discoveredDocks?.add?.(d.id);
+        this._msg("Dock discovered", 1.2);
+        this._saveSoon();
+        return;
+      }
+    }
+
     for (const dg of this.world?.dungeons || []) {
       if (dist2(this.hero.x, this.hero.y, dg.x, dg.y) < 90 * 90) {
         this._enterDungeon(dg);
@@ -953,13 +977,12 @@ export default class Game {
         w: 400,
         h: 240,
         boss: i === 4,
+        modifier: i === 1 ? "haste" : i === 2 ? "drag" : "normal",
       });
     }
 
     return rooms;
-  }
-
-  _getRoom() {
+  }  _getRoom() {
     return this.dungeon.rooms[this.dungeon.currentRoomIndex];
   }
 
@@ -1048,10 +1071,6 @@ export default class Game {
     ctx.strokeRect(room.x - room.w * 0.5, room.y - room.h * 0.5, room.w, room.h);
     ctx.restore();
   }
-
-  // =============================
-  // MOUSE / MESSAGES / QUESTS / SAVE
-  // =============================
 
   _updateMouseWorld() {
     const rect = this.canvas.getBoundingClientRect();
