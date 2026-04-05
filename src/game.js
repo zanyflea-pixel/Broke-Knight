@@ -1,4 +1,9 @@
-// v50 DUNGEON TRAPS + RELIC ROOMS + ELITE BOSSES (FULL FILE)
+// src/game.js
+// v51 BUGFIX PASS (FULL FILE)
+// - keep current aiming system
+// - fix dungeon rendering so it is not just a box in the overworld
+// - reduce lag / enemy spam
+// - keep map / menus / waystones / docks working
 
 import World from "./world.js";
 import { clamp, lerp, dist2, norm, RNG, hash2 } from "./util.js";
@@ -6,52 +11,6 @@ import { Hero, Enemy, Projectile, Loot, makeGear } from "./entities.js";
 import Input from "./input.js";
 import UI from "./ui.js";
 import Save from "./save.js";
-
-function gearVisualColor(rarity, kind = "armor") {
-  if (kind === "armor" || kind === "chest" || kind === "helm" || kind === "boots") {
-    if (rarity === "epic") return "rgba(178,118,255,0.98)";
-    if (rarity === "rare") return "rgba(112,182,255,0.98)";
-    if (rarity === "uncommon") return "rgba(126,198,136,0.98)";
-    return "rgba(124,138,160,0.98)";
-  }
-
-  if (kind === "ring" || kind === "trinket") {
-    if (rarity === "epic") return "rgba(226,170,255,0.98)";
-    if (rarity === "rare") return "rgba(156,210,255,0.98)";
-    if (rarity === "uncommon") return "rgba(180,240,180,0.98)";
-    return "rgba(232,214,164,0.98)";
-  }
-
-  if (kind === "weapon") {
-    if (rarity === "epic") return "rgba(208,164,255,1)";
-    if (rarity === "rare") return "rgba(144,204,255,1)";
-    if (rarity === "uncommon") return "rgba(186,232,196,1)";
-    return "rgba(178,188,205,1)";
-  }
-
-  return "rgba(200,200,210,1)";
-}
-
-function gearTrimColor(rarity) {
-  if (rarity === "epic") return "rgba(255,220,150,1)";
-  if (rarity === "rare") return "rgba(230,236,255,1)";
-  if (rarity === "uncommon") return "rgba(220,240,220,1)";
-  return "rgba(210,186,118,1)";
-}
-
-function gearShineColor(rarity) {
-  if (rarity === "epic") return "rgba(255,236,255,0.95)";
-  if (rarity === "rare") return "rgba(236,246,255,0.95)";
-  if (rarity === "uncommon") return "rgba(240,255,244,0.94)";
-  return "rgba(232,236,244,0.9)";
-}
-
-function gearGlowColor(rarity) {
-  if (rarity === "epic") return "rgba(220,160,255,0.95)";
-  if (rarity === "rare") return "rgba(140,210,255,0.95)";
-  if (rarity === "uncommon") return "rgba(155,235,175,0.92)";
-  return "rgba(255,220,140,0.55)";
-}
 
 function roundedRectPath(path, x, y, w, h, r) {
   const rr = Math.min(r, w / 2, h / 2);
@@ -87,7 +46,7 @@ export default class Game {
 
     this.input = new Input(window);
     this.ui = new UI(canvas);
-    this.save = new Save("broke-knight-save-v50");
+    this.save = new Save("broke-knight-save-v51");
 
     this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
     this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
@@ -107,13 +66,13 @@ export default class Game {
     };
 
     this.perf = {
-      enemyUpdateRadius: 1500,
-      lootUpdateRadius: 900,
-      projectileUpdateRadius: 1700,
-      spawnRadius: 1400,
+      enemyUpdateRadius: 1150,
+      lootUpdateRadius: 800,
+      projectileUpdateRadius: 1400,
+      spawnRadius: 1050,
       drawPad: 180,
-      maxEnemies: 110,
-      maxLoot: 140,
+      maxEnemies: 52,
+      maxLoot: 120,
       cleanupTimer: 0,
       cleanupEvery: 0.35,
     };
@@ -170,7 +129,6 @@ export default class Game {
     };
 
     this.cooldowns = { q: 0, w: 0, e: 0, r: 0 };
-    this._currentSkillAim = { x: 1, y: 0 };
 
     this.dungeon = {
       active: false,
@@ -182,6 +140,14 @@ export default class Game {
       roomMsgT: 0,
     };
 
+    this.progress = this.progress || {};
+    if (!(this.progress.discoveredWaystones instanceof Set)) {
+      this.progress.discoveredWaystones = new Set();
+    }
+    if (!(this.progress.discoveredDocks instanceof Set)) {
+      this.progress.discoveredDocks = new Set();
+    }
+
     this._bindMouse();
     this._loadGame();
 
@@ -192,14 +158,6 @@ export default class Game {
     if (!this.hero.state) this.hero.state = {};
     if (typeof this.hero.state.sailing !== "boolean") this.hero.state.sailing = false;
     if (typeof this.hero.state.dashT !== "number") this.hero.state.dashT = 0;
-
-    this.progress = this.progress || {};
-    if (!(this.progress.discoveredWaystones instanceof Set)) {
-      this.progress.discoveredWaystones = new Set();
-    }
-    if (!(this.progress.discoveredDocks instanceof Set)) {
-      this.progress.discoveredDocks = new Set();
-    }
 
     this._rebuildCampState();
     this._ensureWorldPopulation();
@@ -260,6 +218,12 @@ export default class Game {
     this._updateQuestProgress(dt);
     this._updateZoneMessages(dt);
 
+    this.perf.cleanupTimer += dt;
+    if (this.perf.cleanupTimer >= this.perf.cleanupEvery) {
+      this.perf.cleanupTimer = 0;
+      this._cleanupFarEntities();
+    }
+
     this._autosaveT -= dt;
     if (this._autosaveT <= 0) {
       this._autosaveT = 8 + Math.random() * 4;
@@ -285,28 +249,50 @@ export default class Game {
       (-this.camera.y + this.camera.sy) | 0
     );
 
-    this.world.draw?.(ctx, this.camera);
+    if (this.dungeon.active) {
+      this._drawDungeonWorld(ctx);
+    } else {
+      this.world.draw?.(ctx, this.camera);
 
-    const vb = this._viewBoundsWorld();
+      const vb = this._viewBoundsWorld();
 
-    for (const l of this.loot) {
-      if (!l?.alive) continue;
-      if (this._inView(l.x, l.y, vb)) l.draw?.(ctx);
+      for (const l of this.loot) {
+        if (!l?.alive) continue;
+        if (this._inView(l.x, l.y, vb)) l.draw?.(ctx);
+      }
+
+      for (const p of this.projectiles) {
+        if (!p?.alive) continue;
+        if (this._inView(p.x, p.y, vb)) p.draw?.(ctx);
+      }
+
+      for (const e of this.enemies) {
+        if (!e?.alive) continue;
+        if (this._inView(e.x, e.y, vb)) e.draw?.(ctx);
+      }
+
+      this.hero.draw?.(ctx);
     }
-
-    for (const p of this.projectiles) {
-      if (!p?.alive) continue;
-      if (this._inView(p.x, p.y, vb)) p.draw?.(ctx);
-    }
-
-    for (const e of this.enemies) {
-      if (!e?.alive) continue;
-      if (this._inView(e.x, e.y, vb)) e.draw?.(ctx);
-    }
-
-    this.hero.draw?.(ctx);
 
     if (this.dungeon.active) {
+      const vb = this._viewBoundsWorld();
+
+      for (const l of this.loot) {
+        if (!l?.alive) continue;
+        if (this._inView(l.x, l.y, vb)) l.draw?.(ctx);
+      }
+
+      for (const p of this.projectiles) {
+        if (!p?.alive) continue;
+        if (this._inView(p.x, p.y, vb)) p.draw?.(ctx);
+      }
+
+      for (const e of this.enemies) {
+        if (!e?.alive) continue;
+        if (this._inView(e.x, e.y, vb)) e.draw?.(ctx);
+      }
+
+      this.hero.draw?.(ctx);
       this._drawDungeonOverlayWorld(ctx);
     }
 
@@ -409,26 +395,41 @@ export default class Game {
     return x >= vb.x0 && x <= vb.x1 && y >= vb.y0 && y <= vb.y1;
   }
 
-  _nudgeToLand() {
-    if (this.world?.canWalk?.(this.hero.x, this.hero.y)) return;
+  _drawDungeonWorld(ctx) {
+    const room = this._getCurrentDungeonRoom?.() || this._getRoom?.();
+    if (!room) return;
 
-    const sx = this.hero.x;
-    const sy = this.hero.y;
-    for (let r = 0; r <= 600; r += 24) {
-      for (let i = 0; i < 12; i++) {
-        const a = (i / 12) * Math.PI * 2;
-        const x = sx + Math.cos(a) * r;
-        const y = sy + Math.sin(a) * r;
-        if (this.world.canWalk(x, y)) {
-          this.hero.x = x;
-          this.hero.y = y;
-          return;
+    const x0 = room.x - room.w * 0.5;
+    const y0 = room.y - room.h * 0.5;
+
+    ctx.fillStyle = "rgba(28,28,38,1)";
+    ctx.fillRect(x0, y0, room.w, room.h);
+
+    const cell = 24;
+    for (let y = 0; y < room.h; y += cell) {
+      for (let x = 0; x < room.w; x += cell) {
+        const wx = x0 + x;
+        const wy = y0 + y;
+        const n = hash2((wx / cell) | 0, (wy / cell) | 0, this.dungeon.floor | 0) >>> 0;
+
+        ctx.fillStyle = n % 2 === 0
+          ? "rgba(46,46,58,1)"
+          : "rgba(40,40,50,1)";
+        ctx.fillRect(wx, wy, cell + 1, cell + 1);
+
+        if (n % 9 === 0) {
+          ctx.fillStyle = "rgba(62,62,76,0.45)";
+          ctx.fillRect(wx + 6, wy + 6, 6, 6);
         }
       }
     }
-  }
 
-  _grantGold(n) {
+    ctx.fillStyle = "rgba(64,54,40,1)";
+    ctx.fillRect(x0 - 18, y0 - 18, room.w + 36, 18);
+    ctx.fillRect(x0 - 18, y0 + room.h, room.w + 36, 18);
+    ctx.fillRect(x0 - 18, y0, 18, room.h);
+    ctx.fillRect(x0 + room.w, y0, 18, room.h);
+  }  _grantGold(n) {
     this.hero.gold += Math.max(0, n | 0);
   }
 
@@ -474,7 +475,9 @@ export default class Game {
     }
 
     return false;
-  }  _pickupNearbyLootBonus() {
+  }
+
+  _pickupNearbyLootBonus() {
     for (const l of this.loot) {
       if (!l.alive) continue;
       if (dist2(this.hero.x, this.hero.y, l.x, l.y) < 26 * 26) {
@@ -498,21 +501,40 @@ export default class Game {
   }
 
   _updateProjectiles(dt) {
+    const nearR2 = this.perf.projectileUpdateRadius * this.perf.projectileUpdateRadius;
+
     for (const p of this.projectiles) {
       if (!p.alive) continue;
 
-      p.update?.(dt);
+      const pdx = p.x - this.hero.x;
+      const pdy = p.y - this.hero.y;
+      if (pdx * pdx + pdy * pdy > nearR2) {
+        p.life -= dt * 2;
+        if (p.life <= 0) p.alive = false;
+        continue;
+      }
+
+      p.update?.(dt, this.dungeon.active ? null : this.world);
+
+      if (p.meta?.onHitHero) {
+        if (dist2(p.x, p.y, this.hero.x, this.hero.y) < (p.hitRadius || 16) ** 2) {
+          this.hero.takeDamage?.(p.dmg || 4);
+          p.alive = false;
+          this._shake(0.06, 2);
+          continue;
+        }
+      }
 
       if (p.friendly) {
         for (const e of this.enemies) {
           if (!e.alive) continue;
           if (dist2(p.x, p.y, e.x, e.y) < (p.hitRadius || 18) ** 2) {
             e.takeDamage?.(p.dmg || 4);
-            p.alive = false;
+            if (!p.meta?.pierce) p.alive = false;
 
             if (!e.alive) {
-              this._dropLoot(e.x, e.y, e.level || 1);
-              this._grantXP(4);
+              this._dropLoot(e.x, e.y, e.tier || e.level || 1);
+              this._grantXP(e.xpValue?.() || 4);
             }
             break;
           }
@@ -524,22 +546,27 @@ export default class Game {
   }
 
   _dropLoot(x, y, lvl) {
-    if (Math.random() < 0.7) {
+    if (Math.random() < 0.72) {
       this.loot.push(
-        new Loot(x, y, "gold", { amount: 4 + Math.floor(Math.random() * 6) })
+        new Loot(x, y, "gold", { amount: 4 + Math.floor(Math.random() * 6) + (lvl | 0) })
       );
     }
 
-    if (Math.random() < 0.28) {
-      this.loot.push(new Loot(x, y, "gear", makeGear("weapon", lvl)));
+    if (Math.random() < 0.18) {
+      this.loot.push(new Loot(x, y, "gear", makeGear("weapon", lvl, null, hash2(x | 0, y | 0, lvl | 0))));
+    }
+
+    if (Math.random() < 0.10) {
+      this.loot.push(new Loot(x, y, "potion", { potionType: Math.random() < 0.5 ? "hp" : "mana" }));
     }
   }
 
   _spawnWorldEnemies(dt) {
-    if (this.enemies.length > this.perf.maxEnemies) return;
+    if (this.enemies.length >= this.perf.maxEnemies) return;
+    if (this.hero.state?.sailing) return;
 
     this._spawnTimer += dt;
-    if (this._spawnTimer < 0.35) return;
+    if (this._spawnTimer < 0.55) return;
     this._spawnTimer = 0;
 
     const r = this.perf.spawnRadius;
@@ -553,29 +580,51 @@ export default class Game {
     if (!this.world.canWalk(x, y + 20)) return;
     if (!this.world.canWalk(x, y - 20)) return;
 
-    this.enemies.push(new Enemy(x, y, this.hero.level));
+    if (dist2(x, y, this.hero.x, this.hero.y) < 420 * 420) return;
+
+    const roll = Math.random();
+    const kind =
+      roll < 0.18 ? "brute" :
+      roll < 0.33 ? "stalker" :
+      roll < 0.43 ? "caster" :
+      "blob";
+
+    const e = new Enemy(x, y, this.hero.level, kind, hash2(x | 0, y | 0, this.time | 0));
+    e.home = { x, y };
+    this.enemies.push(e);
   }
 
   _updateOverworldEnemies(dt) {
+    const nearR2 = this.perf.enemyUpdateRadius * this.perf.enemyUpdateRadius;
+
     for (const e of this.enemies) {
       if (!e.alive) continue;
 
-      e.update?.(dt, this.hero, this.world);
+      const dx = e.x - this.hero.x;
+      const dy = e.y - this.hero.y;
+      if (dx * dx + dy * dy > nearR2) continue;
 
-      if (dist2(e.x, e.y, this.hero.x, this.hero.y) < 22 * 22) {
-        this.hero.takeDamage?.(e.dmg || 3);
-        this._shake(0.08, 3);
+      e.update?.(dt, this.hero, this.world, this);
+
+      if (e.kind !== "caster" && dist2(e.x, e.y, this.hero.x, this.hero.y) < (e.radius + 10) ** 2) {
+        this.hero.takeDamage?.((e.touchDps || 3) * dt);
+        this._shake(0.04, 1.5);
       }
     }
 
     this.enemies = this.enemies.filter(e => e.alive !== false);
   }
 
-  _updateLoot(dt) {
+  _updateLoot() {
+    for (const l of this.loot) {
+      if (!l.alive) continue;
+      l.update?.(1 / 60, this.hero);
+    }
     this._pickupNearbyLootBonus();
+    this.loot = this.loot.filter(l => l.alive !== false);
   }
 
-  _updateZoneMessages(dt) {
+  _updateZoneMessages() {
     if (this.dungeon.active) {
       this.zoneMsg = `Dungeon Floor ${this.dungeon.floor}`;
       this.zoneMsgT = 1.5;
@@ -585,7 +634,7 @@ export default class Game {
     for (const dg of this.world?.dungeons || []) {
       if (dist2(this.hero.x, this.hero.y, dg.x, dg.y) < 150 * 150) {
         this.zoneMsg = "Dungeon Entrance";
-        this.zoneMsgT = 1.4;
+        this.zoneMsgT = 1.1;
         return;
       }
     }
@@ -593,7 +642,7 @@ export default class Game {
     for (const d of this.world?.docks || []) {
       if (dist2(this.hero.x, this.hero.y, d.x, d.y) < 150 * 150) {
         this.zoneMsg = "Dock";
-        this.zoneMsgT = 1.4;
+        this.zoneMsgT = 1.1;
         return;
       }
     }
@@ -601,9 +650,9 @@ export default class Game {
 
   _handleMenus() {
     if (this.input.wasPressed("i")) this.menu.open = this.menu.open === "inventory" ? null : "inventory";
-    if (this.input.wasPressed("j")) this.menu.open = this.menu.open === "quests" ? null : "quests";
+    if (this.input.wasPressed("k")) this.menu.open = this.menu.open === "skills" ? null : "skills";
+    if (this.input.wasPressed("g")) this.menu.open = this.menu.open === "god" ? null : "god";
     if (this.input.wasPressed("m")) this.menu.open = this.menu.open === "map" ? null : "map";
-    if (this.input.wasPressed("o")) this.menu.open = this.menu.open === "options" ? null : "options";
     if (this.input.wasPressed("Escape")) this.menu.open = null;
 
     if (this.menu.open) this.ui.open?.(this.menu.open);
@@ -621,7 +670,6 @@ export default class Game {
     if (this.dungeon.active) return;
 
     const ways = this._getDiscoveredWaystones();
-
     if (!ways.length) {
       this._msg("No awakened waystones yet.", 2);
       return;
@@ -717,18 +765,9 @@ export default class Game {
     if (ax || ay) {
       const n = norm(ax, ay);
 
-      this._currentSkillAim = { x: n.x, y: n.y };
       this.hero.lastMove = { x: n.x, y: n.y };
 
       let speed = this.hero.state?.sailing ? 190 : 150;
-
-      const room =
-        this._getCurrentDungeonRoom?.() ||
-        this._getRoom?.() ||
-        null;
-
-      if (this.dungeon.active && room?.modifier === "haste") speed *= 1.18;
-      if (this.dungeon.active && room?.modifier === "drag") speed *= 0.82;
 
       if (!this.dungeon.active && !this.hero.state?.sailing && this.world?.getMoveModifier) {
         speed *= this.world.getMoveModifier(this.hero.x, this.hero.y);
@@ -740,7 +779,7 @@ export default class Game {
       const nx = this.hero.x + this.hero.vx * dt;
       const ny = this.hero.y + this.hero.vy * dt;
 
-      if (this.dungeon.active && this._moveHeroDungeon) {
+      if (this.dungeon.active) {
         this._moveHeroDungeon(nx, ny);
       } else if (this.hero.state?.sailing) {
         this.hero.x = nx;
@@ -838,7 +877,7 @@ export default class Game {
         0,
         0,
         dmg,
-        0.2,
+        0.18,
         this.hero.level,
         { friendly: true, nova: true, radius: 12, hitRadius: 76, color: "#d6f5ff" }
       )
@@ -857,11 +896,11 @@ export default class Game {
       return;
     }
 
-    const dist = 80;
+    const dist = 86;
     const nx = this.hero.x + dx * dist;
     const ny = this.hero.y + dy * dist;
 
-    if (this.dungeon.active && this._moveHeroDungeon) {
+    if (this.dungeon.active) {
       this._moveHeroDungeon(nx, ny);
     } else {
       if (this.world.canWalk(nx, this.hero.y)) this.hero.x = nx;
@@ -952,8 +991,10 @@ export default class Game {
   _enterDungeon(dg) {
     this.dungeon.active = true;
     this.dungeon.floor = 1;
+    this.dungeon.seed = hash2(dg.x | 0, dg.y | 0, this.seed | 0);
     this.dungeon.rooms = this._buildDungeon();
     this.dungeon.currentRoomIndex = 0;
+    this.dungeon.visited = new Set([0]);
 
     const room = this._getRoom();
     this.hero.x = room.x;
@@ -965,24 +1006,43 @@ export default class Game {
 
     this._spawnDungeonEnemies(room);
     this._msg("Entered Dungeon");
+    this._shake(0.16, 5);
   }
 
   _buildDungeon() {
     const rooms = [];
+    const roomCount = 6;
 
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < roomCount; i++) {
+      const isBoss = i === roomCount - 1;
+      const prev = i === 0 ? null : rooms[i - 1];
+
+      const dir = i === 0
+        ? { x: 0, y: 0 }
+        : (i % 2 === 0 ? { x: 1, y: 0 } : { x: 0, y: 1 });
+
+      const x = i === 0 ? 0 : prev.x + dir.x * 520;
+      const y = i === 0 ? 0 : prev.y + dir.y * 360;
+
       rooms.push({
-        x: i * 500,
-        y: 0,
-        w: 400,
-        h: 240,
-        boss: i === 4,
-        modifier: i === 1 ? "haste" : i === 2 ? "drag" : "normal",
+        id: i,
+        x,
+        y,
+        w: isBoss ? 520 : 420,
+        h: isBoss ? 320 : 260,
+        boss: isBoss,
+        modifier: isBoss ? "boss" : (i % 3 === 1 ? "haste" : i % 3 === 2 ? "drag" : "normal"),
+        exits: {
+          next: i < roomCount - 1,
+          prev: i > 0,
+        }
       });
     }
 
     return rooms;
-  }  _getRoom() {
+  }
+
+  _getRoom() {
     return this.dungeon.rooms[this.dungeon.currentRoomIndex];
   }
 
@@ -994,19 +1054,28 @@ export default class Game {
   _spawnDungeonEnemies(room) {
     this.enemies = [];
 
-    const count = room.boss ? 1 : 5;
+    const count = room.boss ? 1 : 3 + Math.min(4, this.dungeon.floor);
 
     for (let i = 0; i < count; i++) {
-      const ex = room.x + Math.random() * 200 - 100;
-      const ey = room.y + Math.random() * 120 - 60;
+      const ex = room.x + (Math.random() * (room.w - 120) - (room.w - 120) * 0.5);
+      const ey = room.y + (Math.random() * (room.h - 120) - (room.h - 120) * 0.5);
 
-      this.enemies.push(
-        new Enemy(ex, ey, this.hero.level + (room.boss ? 2 : 0))
-      );
+      const roll = Math.random();
+      const kind =
+        room.boss ? "brute" :
+        roll < 0.18 ? "brute" :
+        roll < 0.35 ? "stalker" :
+        roll < 0.48 ? "caster" :
+        "blob";
+
+      const e = new Enemy(ex, ey, this.hero.level + (room.boss ? 2 : 0), kind, hash2(ex | 0, ey | 0, room.id | 0));
+      e.home = { x: ex, y: ey };
+      this.enemies.push(e);
     }
-  }
+  }  _updateDungeon(dt) {
+    const room = this._getRoom();
+    if (!room) return;
 
-  _updateDungeon(dt) {
     for (const e of this.enemies) {
       if (!e.alive) continue;
 
@@ -1027,8 +1096,8 @@ export default class Game {
     const room = this._getCurrentDungeonRoom?.() || this._getRoom?.();
     if (!room) return;
 
-    const halfW = (room.w || 400) * 0.5 - 20;
-    const halfH = (room.h || 240) * 0.5 - 20;
+    const halfW = room.w * 0.5 - 20;
+    const halfH = room.h * 0.5 - 20;
 
     this.hero.x = clamp(nx, room.x - halfW, room.x + halfW);
     this.hero.y = clamp(ny, room.y - halfH, room.y + halfH);
@@ -1047,6 +1116,10 @@ export default class Game {
     this.hero.y = room.y;
 
     this._spawnDungeonEnemies(room);
+
+    this.dungeon.visited.add(this.dungeon.currentRoomIndex);
+    this.dungeon.roomMsgT = 1.2;
+    this._msg(`Room ${this.dungeon.currentRoomIndex + 1}`);
   }
 
   _exitDungeon() {
@@ -1055,10 +1128,11 @@ export default class Game {
     const dg = this.world?.dungeons?.[0];
     if (dg) {
       this.hero.x = dg.x;
-      this.hero.y = dg.y + 50;
+      this.hero.y = dg.y + 60;
     }
 
     this._msg("Exited Dungeon");
+    this._shake(0.2, 6);
   }
 
   _drawDungeonOverlayWorld(ctx) {
@@ -1066,19 +1140,21 @@ export default class Game {
     if (!this.dungeon.active || !room) return;
 
     ctx.save();
-    ctx.strokeStyle = "rgba(180,120,255,0.30)";
+    ctx.strokeStyle = "rgba(180,120,255,0.35)";
     ctx.lineWidth = 3;
-    ctx.strokeRect(room.x - room.w * 0.5, room.y - room.h * 0.5, room.w, room.h);
+    ctx.strokeRect(
+      room.x - room.w * 0.5,
+      room.y - room.h * 0.5,
+      room.w,
+      room.h
+    );
     ctx.restore();
   }
 
   _updateMouseWorld() {
     const rect = this.canvas.getBoundingClientRect();
-    const mx = this.mouse.x;
-    const my = this.mouse.y;
-
-    const sx = mx - rect.left;
-    const sy = my - rect.top;
+    const sx = this.mouse.x - rect.left;
+    const sy = this.mouse.y - rect.top;
 
     const wx = (sx - this.w * 0.5) / this.camera.zoom + this.camera.x;
     const wy = (sy - this.h * 0.5) / this.camera.zoom + this.camera.y;
@@ -1183,12 +1259,40 @@ export default class Game {
   }
 
   _ensureWorldPopulation() {
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 12; i++) {
       const x = this.hero.x + (Math.random() * 800 - 400);
       const y = this.hero.y + (Math.random() * 800 - 400);
 
       if (this.world.canWalk(x, y)) {
         this.enemies.push(new Enemy(x, y, this.hero.level));
+      }
+    }
+  }
+
+  _cleanupFarEntities() {
+    const r2 = (this.perf.spawnRadius * 1.6) ** 2;
+
+    this.enemies = this.enemies.filter(e => {
+      if (!e.alive) return false;
+      return dist2(e.x, e.y, this.hero.x, this.hero.y) < r2;
+    });
+
+    this.projectiles = this.projectiles.filter(p => p.alive);
+    this.loot = this.loot.filter(l => l.alive);
+  }
+
+  _nudgeToLand() {
+    for (let r = 0; r < 120; r += 10) {
+      for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2;
+        const x = this.hero.x + Math.cos(a) * r;
+        const y = this.hero.y + Math.sin(a) * r;
+
+        if (this.world.canWalk(x, y)) {
+          this.hero.x = x;
+          this.hero.y = y;
+          return;
+        }
       }
     }
   }
