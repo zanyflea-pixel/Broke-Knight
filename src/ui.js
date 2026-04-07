@@ -1,10 +1,10 @@
 // src/ui.js
-// v58 RPG UI PASS (FULL FILE)
+// v59 RPG SHOP UI PASS (FULL FILE)
 // Focus:
-// - clearer quest log
-// - camp prompts
-// - quest menu support
-// - keep current game.js compatibility
+// - add camp shop menu
+// - keep quest / map / inventory panels
+// - stronger RPG camp feedback
+// - compatible with current game.js
 
 import { clamp } from "./util.js";
 
@@ -73,6 +73,7 @@ export default class UI {
     else if (open === "god") this._drawGod(ctx, game);
     else if (open === "map") this._drawMap(ctx, game);
     else if (open === "quests") this._drawQuests(ctx, game);
+    else if (open === "shop") this._drawShop(ctx, game);
     else if (open === "options") this._drawOptions(ctx, game);
   }
 
@@ -138,6 +139,8 @@ export default class UI {
       this._chip(ctx, x + panelW - 92, y + 10, 76, 18, "SAILING", "rgba(76,152,226,0.95)");
     } else if (game?.dungeon?.active) {
       this._chip(ctx, x + panelW - 100, y + 10, 84, 18, `FLOOR ${game?.dungeon?.floor || 1}`, "rgba(144,96,220,0.95)");
+    } else if (game?.menu?.open === "shop") {
+      this._chip(ctx, x + panelW - 88, y + 10, 72, 18, "SHOP", "rgba(218,166,88,0.94)");
     } else {
       const activeQuest = (game?.quests || []).find(q => !q.turnedIn && !q.done);
       if (activeQuest) {
@@ -260,8 +263,8 @@ export default class UI {
   _drawHelp(ctx, game) {
     const open = game?.menu?.open || null;
     const text = open
-      ? "ESC close • F interact • 1-9 fast travel on map"
-      : "Arrows move • Q/W/E/R cast • F interact • J quests • B sail/dock • I inv • M map";
+      ? "ESC close • F interact • H shop near camps • 1-9 menu actions"
+      : "Arrows move • Q/W/E/R cast • F interact • H shop • J quests • B sail/dock • I inv • M map";
 
     ctx.save();
     ctx.font = "12px Arial";
@@ -288,9 +291,9 @@ export default class UI {
     for (const c of game?.world?.camps || []) {
       if (distSq(hx, hy, c.x, c.y) < 100 * 100) {
         const quest = (game?.quests || []).find(q => q.campId === c.id && !q.turnedIn);
-        if (quest?.done) text = "Press F to turn in quest and rest";
-        else if (quest) text = "Press F to rest at camp";
-        else text = "Press F to take quest and rest";
+        if (quest?.done) text = "Press F to turn in quest • H to open shop";
+        else if (quest) text = "Press F to rest at camp • H to open shop";
+        else text = "Press F to take quest • H to open shop";
         break;
       }
     }
@@ -326,7 +329,7 @@ export default class UI {
 
     if (!text) return;
 
-    const w = Math.min(460, Math.max(250, Math.floor(this.w * 0.48)));
+    const w = Math.min(500, Math.max(250, Math.floor(this.w * 0.52)));
     const h = 34;
     const x = ((this.w - w) * 0.5) | 0;
     const y = this.h - 128;
@@ -614,6 +617,100 @@ export default class UI {
     ctx.restore();
   }
 
+  _drawShop(ctx, game) {
+    const shop = game?.shop || {};
+    const hero = game?.hero;
+    const stock = Array.isArray(shop.stock) ? shop.stock : [];
+    const inv = Array.isArray(hero?.inventory) ? hero.inventory : [];
+
+    const x = Math.max(40, ((this.w - 760) * 0.5) | 0);
+    const y = Math.max(24, ((this.h - 500) * 0.5) | 0);
+    const w = Math.min(760, this.w - 80);
+    const h = Math.min(500, this.h - 48);
+
+    ctx.save();
+    this._bigPanel(ctx, x, y, w, h, `Camp Shop${shop.campId ? ` • Camp ${shop.campId}` : ""}`);
+
+    ctx.fillStyle = "rgba(232,238,252,0.94)";
+    ctx.font = "bold 14px Arial";
+    ctx.fillText(`Gold: ${hero?.gold || 0}`, x + 20, y + 60);
+
+    const leftX = x + 18;
+    const leftY = y + 84;
+    const leftW = 320;
+    const rightX = x + 354;
+    const rightY = y + 84;
+    const rightW = w - (rightX - x) - 18;
+
+    this._subPanel(ctx, leftX, leftY, leftW, h - 102, "Buy");
+    this._subPanel(ctx, rightX, rightY, rightW, h - 102, "Sell Backpack Items");
+
+    const buyRows = [
+      { hotkey: "1", name: "HP Potion", price: 14, desc: "+1 HP potion" },
+      { hotkey: "2", name: "Mana Potion", price: 16, desc: "+1 Mana potion" },
+      {
+        hotkey: "3",
+        name: stock[0]?.name || "Weapon",
+        price: stock[0]?.price || 0,
+        desc: stock[0] ? itemStatText(stock[0]) : "No stock"
+      },
+      {
+        hotkey: "4",
+        name: stock[1]?.name || "Armor",
+        price: stock[1]?.price || 0,
+        desc: stock[1] ? itemStatText(stock[1]) : "No stock"
+      },
+    ];
+
+    let by = leftY + 36;
+    for (const row of buyRows) {
+      this._panel(ctx, leftX + 10, by, leftW - 20, 62, 10, "rgba(12,18,26,0.72)");
+      this._hotkeyChip(ctx, leftX + 18, by + 10, row.hotkey);
+      ctx.fillStyle = "rgba(242,246,255,0.95)";
+      ctx.font = "bold 14px Arial";
+      ctx.fillText(row.name, leftX + 52, by + 20);
+      ctx.fillStyle = "rgba(204,214,232,0.82)";
+      ctx.font = "12px Arial";
+      ctx.fillText(row.desc, leftX + 52, by + 39);
+      ctx.fillStyle = "rgba(255,224,150,0.94)";
+      ctx.font = "bold 13px Arial";
+      ctx.fillText(`${row.price}G`, leftX + leftW - 78, by + 28);
+      by += 72;
+    }
+
+    let sy = rightY + 36;
+    const sellCount = Math.min(5, inv.length);
+    for (let i = 0; i < sellCount; i++) {
+      const item = inv[i];
+      const sellPrice = Math.max(4, Math.round((item?.price || 10) * 0.45));
+
+      this._panel(ctx, rightX + 10, sy, rightW - 20, 62, 10, "rgba(12,18,26,0.72)");
+      this._hotkeyChip(ctx, rightX + 18, sy + 10, String(i + 5));
+      ctx.fillStyle = rarityTextColor(item?.rarity);
+      ctx.font = "bold 14px Arial";
+      ctx.fillText(item?.name || "Item", rightX + 52, sy + 20);
+      ctx.fillStyle = "rgba(204,214,232,0.82)";
+      ctx.font = "12px Arial";
+      ctx.fillText(itemStatText(item), rightX + 52, sy + 39);
+      ctx.fillStyle = "rgba(160,235,160,0.95)";
+      ctx.font = "bold 13px Arial";
+      ctx.fillText(`${sellPrice}G`, rightX + rightW - 78, sy + 28);
+      sy += 72;
+    }
+
+    if (sellCount === 0) {
+      ctx.fillStyle = "rgba(206,216,236,0.78)";
+      ctx.font = "14px Arial";
+      ctx.fillText("No backpack items to sell.", rightX + 16, rightY + 46);
+    }
+
+    ctx.fillStyle = "rgba(198,208,226,0.78)";
+    ctx.font = "12px Arial";
+    ctx.fillText("Press H or ESC to close shop.", x + 20, y + h - 18);
+
+    ctx.restore();
+  }
+
   _drawOptions(ctx) {
     const x = Math.max(100, ((this.w - 480) * 0.5) | 0);
     const y = Math.max(60, ((this.h - 260) * 0.5) | 0);
@@ -714,14 +811,19 @@ export default class UI {
     ctx.fillText(`Slot ${index + 1}`, x + w - 130, y + 15);
   }
 
+  _hotkeyChip(ctx, x, y, text) {
+    ctx.fillStyle = "rgba(255,255,255,0.10)";
+    roundRectFill(ctx, x, y, 22, 18, 6);
+    ctx.fillStyle = "rgba(245,248,255,0.95)";
+    ctx.font = "bold 11px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(text, x + 11, y + 12);
+    ctx.textAlign = "left";
+  }
+
   _itemStatText(item) {
     if (!item || !item.stats) return "";
-    const s = item.stats;
-    const parts = [];
-    if (s.dmg) parts.push(`DMG ${Math.round(s.dmg)}`);
-    if (s.armor) parts.push(`ARM ${Math.round(s.armor)}`);
-    if (s.crit) parts.push(`CRIT ${Math.round(s.crit * 100)}%`);
-    return parts.join(" • ") || "No stats";
+    return itemStatText(item);
   }
 
   _panel(ctx, x, y, w, h, r = 12, fill = "rgba(10,14,20,0.75)") {
@@ -778,6 +880,16 @@ export default class UI {
     ctx.fillText(text, x + w * 0.5, y + 13);
     ctx.textAlign = "left";
   }
+}
+
+function itemStatText(item) {
+  if (!item || !item.stats) return "";
+  const s = item.stats;
+  const parts = [];
+  if (s.dmg) parts.push(`DMG ${Math.round(s.dmg)}`);
+  if (s.armor) parts.push(`ARM ${Math.round(s.armor)}`);
+  if (s.crit) parts.push(`CRIT ${Math.round(s.crit * 100)}%`);
+  return parts.join(" • ") || "No stats";
 }
 
 function rarityTextColor(rarity) {

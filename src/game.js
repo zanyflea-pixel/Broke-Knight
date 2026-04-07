@@ -1,12 +1,12 @@
 // src/game.js
-// v63 RPG + PERFORMANCE PASS (FULL FILE)
+// v64 RPG CAMP SHOP PASS (FULL FILE)
 // Focus:
-// - keep RPG additions
-// - improve smoothness
-// - reduce expensive repeated work
-// - keep camp quests / rest / waystone restore
-// - keep camp-based enemy behavior
-// - lighter update workload
+// - keep performance gains from v63
+// - add camp shops
+// - buy potions and random gear
+// - sell backpack gear
+// - stronger RPG camp loop
+// - keep current systems compatible
 
 import World from "./world.js";
 import { clamp, lerp, dist2, norm, RNG, hash2 } from "./util.js";
@@ -29,7 +29,7 @@ export default class Game {
 
     this.input = new Input(window);
     this.ui = new UI(canvas);
-    this.save = new Save("broke-knight-save-v63");
+    this.save = new Save("broke-knight-save-v64");
 
     this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
     this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
@@ -91,6 +91,7 @@ export default class Game {
     this._touchDamageCd = 0;
     this._dockToggleCd = 0;
     this._interactCd = 0;
+    this._shopToggleCd = 0;
     this._spawnSuppressionT = 0;
     this._zoneSampleT = 0;
     this._lastZoneName = "";
@@ -103,6 +104,14 @@ export default class Game {
     this._cachedNearbyWaystone = null;
     this._cachedNearbyDungeon = null;
     this._nearbyPoiTimer = 0;
+
+    this.shop = {
+      campId: null,
+      stockSeed: 0,
+      refreshTier: 1,
+      lastRefreshLevel: 1,
+      stock: [],
+    };
 
     this.mouse = {
       x: this.w * 0.5,
@@ -187,14 +196,18 @@ export default class Game {
 
     this._dockToggleCd = Math.max(0, this._dockToggleCd - dt);
     this._interactCd = Math.max(0, this._interactCd - dt);
+    this._shopToggleCd = Math.max(0, this._shopToggleCd - dt);
     this._spawnSuppressionT = Math.max(0, this._spawnSuppressionT - dt);
     this._killFlashT = Math.max(0, this._killFlashT - dt);
     this._combatTextT = Math.max(0, this._combatTextT - dt);
 
     this._updateNearbyPOIs(dt);
+    this._autoCloseShopIfNeeded();
 
     if (this.menu.open === "map") {
       this._handleFastTravelInput();
+    } else if (this.menu.open === "shop") {
+      this._handleShopInput();
     } else {
       this._handleMovement(dt);
       this._handleSpells();
@@ -208,6 +221,11 @@ export default class Game {
     if (this.input.wasPressed("f") && this._interactCd <= 0) {
       this._interactCd = 0.18;
       this._interact();
+    }
+
+    if (this.input.wasPressed("h") && this._shopToggleCd <= 0) {
+      this._shopToggleCd = 0.18;
+      this._toggleShop();
     }
 
     this.hero.update?.(dt);
@@ -521,6 +539,163 @@ export default class Game {
     if (this.input.wasPressed("w")) this._castNova();
     if (this.input.wasPressed("e")) this._castDash(aim.x, aim.y);
     if (this.input.wasPressed("r")) this._castOrb(aim.x, aim.y);
+  }
+
+  _handleShopInput() {
+    if (!this.shop.campId) return;
+
+    if (this.input.wasPressed("1")) {
+      this._buyPotion("hp");
+      return;
+    }
+    if (this.input.wasPressed("2")) {
+      this._buyPotion("mana");
+      return;
+    }
+    if (this.input.wasPressed("3")) {
+      this._buyStockItem(0);
+      return;
+    }
+    if (this.input.wasPressed("4")) {
+      this._buyStockItem(1);
+      return;
+    }
+    if (this.input.wasPressed("5")) {
+      this._sellInventoryIndex(0);
+      return;
+    }
+    if (this.input.wasPressed("6")) {
+      this._sellInventoryIndex(1);
+      return;
+    }
+    if (this.input.wasPressed("7")) {
+      this._sellInventoryIndex(2);
+      return;
+    }
+    if (this.input.wasPressed("8")) {
+      this._sellInventoryIndex(3);
+      return;
+    }
+    if (this.input.wasPressed("9")) {
+      this._sellInventoryIndex(4);
+      return;
+    }
+  }
+
+  _toggleShop() {
+    const camp = this._cachedNearbyCamp;
+    if (!camp) {
+      if (this.menu.open === "shop") {
+        this.menu.open = null;
+      } else {
+        this._msg("No camp nearby");
+      }
+      return;
+    }
+
+    if (this.menu.open === "shop") {
+      this.menu.open = null;
+      return;
+    }
+
+    this._openShopForCamp(camp);
+  }
+
+  _openShopForCamp(camp) {
+    this._refreshShopForCamp(camp);
+    this.menu.open = "shop";
+    this.ui.open?.("shop");
+    this._msg(`Camp ${camp.id} shop`, 1.0);
+  }
+
+  _refreshShopForCamp(camp) {
+    const needsRefresh =
+      this.shop.campId !== camp.id ||
+      this.shop.lastRefreshLevel !== this.hero.level;
+
+    if (!needsRefresh) return;
+
+    this.shop.campId = camp.id;
+    this.shop.stockSeed = hash2(camp.id | 0, this.hero.level | 0, this.seed | 0);
+    this.shop.refreshTier = Math.max(1, this.hero.level);
+    this.shop.lastRefreshLevel = this.hero.level;
+
+    const rng = new RNG(this.shop.stockSeed);
+    const weaponRarityRoll = rng.float();
+    const armorRarityRoll = rng.float();
+
+    const weaponRarity =
+      weaponRarityRoll < 0.55 ? "common" :
+      weaponRarityRoll < 0.84 ? "uncommon" :
+      weaponRarityRoll < 0.96 ? "rare" : "epic";
+
+    const armorRarity =
+      armorRarityRoll < 0.58 ? "common" :
+      armorRarityRoll < 0.86 ? "uncommon" :
+      armorRarityRoll < 0.97 ? "rare" : "epic";
+
+    const weapon = makeGear("weapon", this.hero.level, weaponRarity, hash2(this.shop.stockSeed, 11));
+    const armor = makeGear("armor", this.hero.level, armorRarity, hash2(this.shop.stockSeed, 23));
+
+    weapon.price = Math.max(20, Math.round(weapon.price * 1.15));
+    armor.price = Math.max(18, Math.round(armor.price * 1.12));
+
+    this.shop.stock = [weapon, armor];
+  }
+
+  _buyPotion(kind) {
+    const cost = kind === "mana" ? 16 : 14;
+    if ((this.hero.gold || 0) < cost) {
+      this._msg("Not enough gold");
+      return;
+    }
+
+    this.hero.gold -= cost;
+    if (kind === "mana") this.hero.potions.mana = (this.hero.potions.mana || 0) + 1;
+    else this.hero.potions.hp = (this.hero.potions.hp || 0) + 1;
+
+    this._msg(kind === "mana" ? "Bought Mana Potion" : "Bought HP Potion");
+    this._saveSoon();
+  }
+
+  _buyStockItem(index) {
+    const item = this.shop.stock[index];
+    if (!item) return;
+
+    if ((this.hero.gold || 0) < (item.price || 0)) {
+      this._msg("Not enough gold");
+      return;
+    }
+
+    this.hero.gold -= item.price || 0;
+    this.hero.inventory.push({ ...item });
+    this._msg(`Bought ${item.name}`, 1.2);
+
+    const replacementSlot = item.slot || (index === 0 ? "weapon" : "armor");
+    const replacement = makeGear(
+      replacementSlot,
+      this.hero.level,
+      null,
+      hash2(this.shop.stockSeed, this.time * 1000 | 0, index | 0)
+    );
+    replacement.price = Math.max(16, Math.round(replacement.price * 1.12));
+    this.shop.stock[index] = replacement;
+
+    this._saveSoon();
+  }
+
+  _sellInventoryIndex(index) {
+    const inv = this.hero.inventory || [];
+    if (index < 0 || index >= inv.length) return;
+
+    const item = inv[index];
+    if (!item) return;
+
+    const sellPrice = Math.max(4, Math.round((item.price || 10) * 0.45));
+    this.hero.gold += sellPrice;
+    inv.splice(index, 1);
+    this._msg(`Sold ${item.name} for ${sellPrice}G`, 1.1);
+    this._saveSoon();
   }
 
   _getAim() {
@@ -911,212 +1086,65 @@ export default class Game {
     }
   }
 
-  _enterDungeon(dg) {
-    if (this.dungeon.active) return;
-
-    this.hero.state.sailing = false;
-    this.dungeon.active = true;
-    this.dungeon.floor = 1;
-    this.dungeon.seed = hash2(dg.x | 0, dg.y | 0, this.seed | 0);
-    this.dungeon.rooms = this._buildDungeon();
-    this.dungeon.currentRoomIndex = 0;
-    this.dungeon.visited = new Set([0]);
-
-    const room = this._getRoom();
-    this.hero.x = room.x;
-    this.hero.y = room.y;
-    this.hero.vx = 0;
-    this.hero.vy = 0;
-
-    this.enemies = [];
-    this.projectiles = [];
-    this.loot = [];
-
-    this._spawnDungeonEnemies(room);
-    this._msg("Entered Dungeon");
-    this._shake(0.14, 4);
-    this._spawnSuppressionT = 1.5;
-  }
-
-  _buildDungeon() {
-    const rooms = [];
-    const roomCount = 6;
-
-    for (let i = 0; i < roomCount; i++) {
-      const isBoss = i === roomCount - 1;
-      const prev = i === 0 ? null : rooms[i - 1];
-
-      const dir = i === 0 ? { x: 0, y: 0 } : (i % 2 === 0 ? { x: 1, y: 0 } : { x: 0, y: 1 });
-
-      const x = i === 0 ? 0 : prev.x + dir.x * 520;
-      const y = i === 0 ? 0 : prev.y + dir.y * 360;
-
-      rooms.push({
-        id: i,
-        x,
-        y,
-        w: isBoss ? 520 : 420,
-        h: isBoss ? 320 : 260,
-        boss: isBoss,
-        exits: { next: i < roomCount - 1, prev: i > 0 }
-      });
-    }
-
-    return rooms;
-  }
-
-  _getRoom() {
-    return this.dungeon.rooms[this.dungeon.currentRoomIndex];
-  }
-
-  _spawnDungeonEnemies(room) {
-    this.enemies = [];
-
-    const count = room.boss ? 1 : 3 + Math.min(4, this.dungeon.floor);
-
-    for (let i = 0; i < count; i++) {
-      const ex = room.x + (Math.random() * (room.w - 120) - (room.w - 120) * 0.5);
-      const ey = room.y + (Math.random() * (room.h - 120) - (room.h - 120) * 0.5);
-
-      const roll = Math.random();
-      const kind =
-        room.boss ? "brute" :
-        roll < 0.18 ? "brute" :
-        roll < 0.36 ? "stalker" :
-        roll < 0.48 ? "caster" :
-        "blob";
-
-      const e = new Enemy(ex, ey, this.hero.level + (room.boss ? 2 : 0), kind, hash2(ex | 0, ey | 0, room.id | 0));
-      e.home = { x: ex, y: ey };
-      e.campId = null;
-      this.enemies.push(e);
-    }
-  }
-
-  _advanceDungeon() {
-    this.dungeon.currentRoomIndex++;
-    this.dungeon.floor = Math.max(this.dungeon.floor, this.dungeon.currentRoomIndex + 1);
-
-    const room = this._getRoom();
-    if (!room) return;
-
-    this.hero.x = room.x;
-    this.hero.y = room.y;
-    this.hero.vx = 0;
-    this.hero.vy = 0;
-
-    this._spawnDungeonEnemies(room);
-    this._msg("Deeper...");
-    this._shake(0.08, 3);
-  }
-
-  _completeDungeon() {
-    this._msg("Dungeon Cleared!");
-    this.hero.gold += 40 + this.dungeon.floor * 10;
-    this.hero.giveXP?.(25 + this.dungeon.floor * 10);
-
-    this.progress.dungeonBest = Math.max(this.progress.dungeonBest || 0, this.dungeon.floor);
-
-    this.dungeon.active = false;
-
-    const dg = this.world?.dungeons?.[0];
-    if (dg) {
-      this.hero.x = dg.x;
-      this.hero.y = dg.y + 60;
-      this.hero.vx = 0;
-      this.hero.vy = 0;
-    }
-
-    this.enemies = [];
-    this.projectiles = [];
-    this.loot = [];
-
-    this._shake(0.14, 4);
-    this._saveSoon();
-    this._spawnSuppressionT = 2.0;
-  }
-
-  _moveHeroDungeon(nx, ny) {
-    const room = this._getRoom();
-    if (!room) return;
-
-    const halfW = room.w * 0.5 - 12;
-    const halfH = room.h * 0.5 - 12;
-
-    this.hero.x = clamp(nx, room.x - halfW, room.x + halfW);
-    this.hero.y = clamp(ny, room.y - halfH, room.y + halfH);
-  }
-
-  _toggleDockingOrSailing() {
+  _autoCloseShopIfNeeded() {
+    if (this.menu.open !== "shop") return;
     if (this.dungeon.active) {
-      this._msg("Cannot sail in dungeon");
+      this.menu.open = null;
       return;
     }
-
-    const dock = this._cachedNearbyDock || this._nearestDock(104);
-    if (!dock) {
-      this._msg("No dock nearby");
-      return;
+    if (!this._cachedNearbyCamp) {
+      this.menu.open = null;
     }
-
-    if (!this.hero.state.sailing) {
-      const nearWater =
-        this.world.isWater(dock.x + 24, dock.y) ||
-        this.world.isWater(dock.x - 24, dock.y) ||
-        this.world.isWater(dock.x, dock.y + 24) ||
-        this.world.isWater(dock.x, dock.y - 24);
-
-      if (!nearWater) {
-        this._msg("Dock is blocked");
-        return;
-      }
-
-      this.hero.state.sailing = true;
-      this.hero.x = dock.x;
-      this.hero.y = dock.y;
-      this.hero.vx = 0;
-      this.hero.vy = 0;
-      this._msg("Sailing");
-      return;
-    }
-
-    this.hero.state.sailing = false;
-    this.hero.vx = 0;
-    this.hero.vy = 0;
-    this._nudgeToLand();
-    this._msg("Docked");
   }
 
-  _nearestDock(radius = 100) {
-    const docks = this.world?.docks || [];
-    let best = null;
-    let bestD2 = radius * radius;
+  _updateNearbyPOIs(dt) {
+    this._nearbyPoiTimer -= dt;
+    if (this._nearbyPoiTimer > 0) return;
+    this._nearbyPoiTimer = 0.18;
 
-    for (const d of docks) {
-      const dd = dist2(this.hero.x, this.hero.y, d.x, d.y);
-      if (dd < bestD2) {
-        bestD2 = dd;
-        best = d;
+    const hx = this.hero.x;
+    const hy = this.hero.y;
+
+    this._cachedNearbyCamp = null;
+    this._cachedNearbyDock = null;
+    this._cachedNearbyWaystone = null;
+    this._cachedNearbyDungeon = null;
+
+    let bestCampD2 = 110 * 110;
+    for (const c of this.world?.camps || []) {
+      const d2 = dist2(hx, hy, c.x, c.y);
+      if (d2 < bestCampD2) {
+        bestCampD2 = d2;
+        this._cachedNearbyCamp = c;
       }
     }
 
-    return best;
-  }
-
-  _nearestCamp(radius = 120) {
-    const camps = this.world?.camps || [];
-    let best = null;
-    let bestD2 = radius * radius;
-
-    for (const c of camps) {
-      const dd = dist2(this.hero.x, this.hero.y, c.x, c.y);
-      if (dd < bestD2) {
-        bestD2 = dd;
-        best = c;
+    let bestDockD2 = 110 * 110;
+    for (const d of this.world?.docks || []) {
+      const d2 = dist2(hx, hy, d.x, d.y);
+      if (d2 < bestDockD2) {
+        bestDockD2 = d2;
+        this._cachedNearbyDock = d;
       }
     }
 
-    return best;
+    let bestWayD2 = 100 * 100;
+    for (const w of this.world?.waystones || []) {
+      const d2 = dist2(hx, hy, w.x, w.y);
+      if (d2 < bestWayD2) {
+        bestWayD2 = d2;
+        this._cachedNearbyWaystone = w;
+      }
+    }
+
+    let bestDungeonD2 = 100 * 100;
+    for (const dg of this.world?.dungeons || []) {
+      const d2 = dist2(hx, hy, dg.x, dg.y);
+      if (d2 < bestDungeonD2) {
+        bestDungeonD2 = d2;
+        this._cachedNearbyDungeon = dg;
+      }
+    }
   }
 
   _interact() {
@@ -1273,56 +1301,6 @@ export default class Game {
     }
   }
 
-  _updateNearbyPOIs(dt) {
-    this._nearbyPoiTimer -= dt;
-    if (this._nearbyPoiTimer > 0) return;
-    this._nearbyPoiTimer = 0.18;
-
-    const hx = this.hero.x;
-    const hy = this.hero.y;
-
-    this._cachedNearbyCamp = null;
-    this._cachedNearbyDock = null;
-    this._cachedNearbyWaystone = null;
-    this._cachedNearbyDungeon = null;
-
-    let bestCampD2 = 110 * 110;
-    for (const c of this.world?.camps || []) {
-      const d2 = dist2(hx, hy, c.x, c.y);
-      if (d2 < bestCampD2) {
-        bestCampD2 = d2;
-        this._cachedNearbyCamp = c;
-      }
-    }
-
-    let bestDockD2 = 110 * 110;
-    for (const d of this.world?.docks || []) {
-      const d2 = dist2(hx, hy, d.x, d.y);
-      if (d2 < bestDockD2) {
-        bestDockD2 = d2;
-        this._cachedNearbyDock = d;
-      }
-    }
-
-    let bestWayD2 = 100 * 100;
-    for (const w of this.world?.waystones || []) {
-      const d2 = dist2(hx, hy, w.x, w.y);
-      if (d2 < bestWayD2) {
-        bestWayD2 = d2;
-        this._cachedNearbyWaystone = w;
-      }
-    }
-
-    let bestDungeonD2 = 100 * 100;
-    for (const dg of this.world?.dungeons || []) {
-      const d2 = dist2(hx, hy, dg.x, dg.y);
-      if (d2 < bestDungeonD2) {
-        bestDungeonD2 = d2;
-        this._cachedNearbyDungeon = dg;
-      }
-    }
-  }
-
   _updateMouseWorld() {
     const rect = this.canvas.getBoundingClientRect();
     this.mouse.worldX = (this.mouse.x - rect.left - this.w * 0.5) / this.camera.zoom + this.camera.x;
@@ -1330,6 +1308,8 @@ export default class Game {
   }
 
   _bindMouse() {
+    if (!this.canvas) return;
+
     this.canvas.addEventListener("mousemove", (e) => {
       this.mouse.x = e.clientX;
       this.mouse.y = e.clientY;
@@ -1421,6 +1401,10 @@ export default class Game {
     if ((this.hero.level || 1) > this._levelSeen) {
       this._levelSeen = this.hero.level;
       this._msg(`Level Up! ${this.hero.level}`, 1.6);
+      if (this.shop.campId) {
+        const fakeCamp = { id: this.shop.campId };
+        this._refreshShopForCamp(fakeCamp);
+      }
     }
   }
 
@@ -1580,5 +1564,77 @@ export default class Game {
         if (this.enemies.length >= 10) return;
       }
     }
+  }
+
+  _nearestDock(radius = 100) {
+    const docks = this.world?.docks || [];
+    let best = null;
+    let bestD2 = radius * radius;
+
+    for (const d of docks) {
+      const dd = dist2(this.hero.x, this.hero.y, d.x, d.y);
+      if (dd < bestD2) {
+        bestD2 = dd;
+        best = d;
+      }
+    }
+
+    return best;
+  }
+
+  _nearestCamp(radius = 120) {
+    const camps = this.world?.camps || [];
+    let best = null;
+    let bestD2 = radius * radius;
+
+    for (const c of camps) {
+      const dd = dist2(this.hero.x, this.hero.y, c.x, c.y);
+      if (dd < bestD2) {
+        bestD2 = dd;
+        best = c;
+      }
+    }
+
+    return best;
+  }
+
+  _toggleDockingOrSailing() {
+    if (this.dungeon.active) {
+      this._msg("Cannot sail in dungeon");
+      return;
+    }
+
+    const dock = this._cachedNearbyDock || this._nearestDock(104);
+    if (!dock) {
+      this._msg("No dock nearby");
+      return;
+    }
+
+    if (!this.hero.state.sailing) {
+      const nearWater =
+        this.world.isWater(dock.x + 24, dock.y) ||
+        this.world.isWater(dock.x - 24, dock.y) ||
+        this.world.isWater(dock.x, dock.y + 24) ||
+        this.world.isWater(dock.x, dock.y - 24);
+
+      if (!nearWater) {
+        this._msg("Dock is blocked");
+        return;
+      }
+
+      this.hero.state.sailing = true;
+      this.hero.x = dock.x;
+      this.hero.y = dock.y;
+      this.hero.vx = 0;
+      this.hero.vy = 0;
+      this._msg("Sailing");
+      return;
+    }
+
+    this.hero.state.sailing = false;
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+    this._nudgeToLand();
+    this._msg("Docked");
   }
 }
