@@ -1,11 +1,12 @@
 // src/input.js
-// v33 INPUT NORMALIZATION + DELETE / NUMPAD PASS (FULL FILE)
+// v37 INPUT COMPAT + SAFETY PASS (FULL FILE)
 // Goals:
 // - keep current game.js compatibility
-// - normalize Delete / Backspace / Enter / Tab
-// - make 0-9 hotkeys work from BOTH top row and numpad
-// - prevent stuck key states on blur
-// - preserve wasPressed / isDown API
+// - preserve isDown / wasPressed / endFrame API
+// - normalize arrows / letters / digits / numpad
+// - prevent stuck keys after blur / alt-tab / hidden tab
+// - keep controls responsive without repeat spam
+// - keep map hotkeys and menu hotkeys reliable
 
 export default class Input {
   constructor(target = window) {
@@ -25,7 +26,7 @@ export default class Input {
         }
       }
 
-      if (!alreadyDown) {
+      if (!alreadyDown && !e.repeat) {
         for (const v of variants) this.pressed.add(v);
       }
 
@@ -37,6 +38,7 @@ export default class Input {
         e.key === "ArrowLeft" ||
         e.key === "ArrowRight" ||
         e.key === " " ||
+        e.key === "Spacebar" ||
         e.code === "Space" ||
         e.key === "Tab"
       ) {
@@ -50,13 +52,36 @@ export default class Input {
     };
 
     this._onBlur = () => {
-      this.down.clear();
-      this.pressed.clear();
+      this.clearAll();
+    };
+
+    this._onWindowFocus = () => {
+      this.clearPressed();
+    };
+
+    this._onVisibilityChange = () => {
+      if (document.hidden) {
+        this.clearAll();
+      } else {
+        this.clearPressed();
+      }
+    };
+
+    this._onPointerLockChange = () => {
+      this.clearPressed();
+    };
+
+    this._onMouseLeave = () => {
+      this.clearPressed();
     };
 
     this.target.addEventListener("keydown", this._onKeyDown, { passive: false });
     this.target.addEventListener("keyup", this._onKeyUp);
     window.addEventListener("blur", this._onBlur);
+    window.addEventListener("focus", this._onWindowFocus);
+    document.addEventListener("visibilitychange", this._onVisibilityChange);
+    document.addEventListener("pointerlockchange", this._onPointerLockChange);
+    window.addEventListener("mouseleave", this._onMouseLeave);
   }
 
   _variants(e) {
@@ -66,18 +91,19 @@ export default class Input {
     const code = e?.code;
 
     if (key != null) {
-      out.add(key);
-      out.add(String(key).toLowerCase());
-      out.add(String(key).toUpperCase());
+      const s = String(key);
+      out.add(s);
+      out.add(s.toLowerCase());
+      out.add(s.toUpperCase());
     }
 
     if (code != null) {
-      out.add(code);
-      out.add(String(code).toLowerCase());
-      out.add(String(code).toUpperCase());
+      const s = String(code);
+      out.add(s);
+      out.add(s.toLowerCase());
+      out.add(s.toUpperCase());
     }
 
-    // arrows
     if (key === "ArrowLeft" || key === "Left") {
       out.add("ArrowLeft");
       out.add("arrowleft");
@@ -103,61 +129,39 @@ export default class Input {
       out.add("down");
     }
 
-    // escape
-    if (key === "Escape" || key === "Esc") {
+    if (key === "Escape" || key === "Esc" || code === "Escape") {
       out.add("Escape");
       out.add("escape");
       out.add("Esc");
       out.add("esc");
     }
 
-    // delete
-    if (key === "Delete" || code === "Delete" || code === "Del") {
-      out.add("Delete");
-      out.add("delete");
-      out.add("Del");
-      out.add("del");
-    }
-
-    // backspace
-    if (key === "Backspace" || code === "Backspace") {
-      out.add("Backspace");
-      out.add("backspace");
-    }
-
-    // enter
-    if (key === "Enter" || code === "Enter" || code === "NumpadEnter") {
-      out.add("Enter");
-      out.add("enter");
-      out.add("NumpadEnter");
-      out.add("numpadenter");
-    }
-
-    // tab
-    if (key === "Tab" || code === "Tab") {
-      out.add("Tab");
-      out.add("tab");
-    }
-
-    // letters / top-row digits
     if (typeof key === "string" && key.length === 1) {
       const ch = key.toUpperCase();
 
       if (ch >= "A" && ch <= "Z") {
+        out.add(ch);
+        out.add(ch.toLowerCase());
         out.add("Key" + ch);
         out.add(("Key" + ch).toLowerCase());
       }
 
       if (ch >= "0" && ch <= "9") {
+        out.add(ch);
         out.add("Digit" + ch);
         out.add(("Digit" + ch).toLowerCase());
-        out.add(ch);
       }
     }
 
-    // numpad digits -> regular digits
+    if (typeof code === "string" && /^Digit[0-9]$/.test(code)) {
+      const d = code.slice(5);
+      out.add(d);
+      out.add("Digit" + d);
+      out.add(("Digit" + d).toLowerCase());
+    }
+
     if (typeof code === "string" && /^Numpad[0-9]$/.test(code)) {
-      const n = code.slice("Numpad".length);
+      const n = code.slice(6);
       out.add(n);
       out.add("Digit" + n);
       out.add(("Digit" + n).toLowerCase());
@@ -165,7 +169,28 @@ export default class Input {
       out.add(("Numpad" + n).toLowerCase());
     }
 
-    // numpad operators / extras
+    if (key === "Enter" || code === "Enter" || code === "NumpadEnter") {
+      out.add("Enter");
+      out.add("enter");
+    }
+
+    if (key === "Delete" || code === "Delete") {
+      out.add("Delete");
+      out.add("delete");
+      out.add("Del");
+      out.add("del");
+    }
+
+    if (key === "Backspace" || code === "Backspace") {
+      out.add("Backspace");
+      out.add("backspace");
+    }
+
+    if (key === "Tab" || code === "Tab") {
+      out.add("Tab");
+      out.add("tab");
+    }
+
     if (code === "NumpadAdd") {
       out.add("+");
       out.add("Plus");
@@ -176,13 +201,22 @@ export default class Input {
       out.add("Minus");
       out.add("minus");
     }
+    if (code === "NumpadMultiply") {
+      out.add("*");
+      out.add("Multiply");
+      out.add("multiply");
+    }
+    if (code === "NumpadDivide") {
+      out.add("/");
+      out.add("Divide");
+      out.add("divide");
+    }
     if (code === "NumpadDecimal") {
       out.add(".");
       out.add("Period");
       out.add("period");
     }
 
-    // space
     if (key === " " || key === "Spacebar" || code === "Space") {
       out.add(" ");
       out.add("Space");
@@ -215,6 +249,15 @@ export default class Input {
     return false;
   }
 
+  clearPressed() {
+    this.pressed.clear();
+  }
+
+  clearAll() {
+    this.down.clear();
+    this.pressed.clear();
+  }
+
   endFrame() {
     this.pressed.clear();
   }
@@ -223,7 +266,10 @@ export default class Input {
     this.target.removeEventListener("keydown", this._onKeyDown);
     this.target.removeEventListener("keyup", this._onKeyUp);
     window.removeEventListener("blur", this._onBlur);
-    this.down.clear();
-    this.pressed.clear();
+    window.removeEventListener("focus", this._onWindowFocus);
+    document.removeEventListener("visibilitychange", this._onVisibilityChange);
+    document.removeEventListener("pointerlockchange", this._onPointerLockChange);
+    window.removeEventListener("mouseleave", this._onMouseLeave);
+    this.clearAll();
   }
 }

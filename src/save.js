@@ -1,16 +1,16 @@
 // src/save.js
-// v37 SAFE SAVE HARDENING PASS (FULL FILE)
+// v58 SAVE COMPAT + RECOVERY PASS (FULL FILE)
 // Goals:
-// - keep existing save behavior working
-// - preserve inventory / equip / progression fields
-// - safely sanitize newer hero fields
-// - make reset/export/import more reliable
-// - stay compatible with current game.js structure
+// - keep current game.js compatibility
+// - sanitize older / partial saves harder
+// - prevent broken coords / bad state reloads
+// - preserve hero / progress / cooldown / menu flow
+// - never reload into unsafe dungeon / sailing / dead state
 
 export default class Save {
   constructor(key = "broke-knight-save") {
     this.key = String(key || "broke-knight-save");
-    this.version = 3;
+    this.version = 7;
   }
 
   load() {
@@ -18,10 +18,10 @@ export default class Save {
       const raw = localStorage.getItem(this.key);
       if (!raw) return null;
 
-      const data = JSON.parse(raw);
-      if (!data || typeof data !== "object") return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return null;
 
-      return this._sanitize(data);
+      return this._sanitize(parsed);
     } catch (_) {
       return null;
     }
@@ -74,7 +74,7 @@ export default class Save {
 
   importString(text) {
     try {
-      if (!text || typeof text !== "string") return null;
+      if (typeof text !== "string" || !text.trim()) return null;
       const parsed = JSON.parse(text);
       return this._sanitize(parsed);
     } catch (_) {
@@ -83,201 +83,317 @@ export default class Save {
   }
 
   _sanitize(data) {
+    const src = data && typeof data === "object" ? data : {};
+
+    const heroSrc = src.hero && typeof src.hero === "object" ? src.hero : {};
+    const progressSrc = src.progress && typeof src.progress === "object" ? src.progress : {};
+    const dungeonSrc = src.dungeon && typeof src.dungeon === "object" ? src.dungeon : {};
+    const menuSrc = src.menu && typeof src.menu === "object" ? src.menu : {};
+    const cooldownsSrc = src.cooldowns && typeof src.cooldowns === "object" ? src.cooldowns : {};
+
     const out = {
-      seed: 0,
+      seed: this._num(src.seed, 0),
 
       hero: {
-        x: 0,
-        y: 0,
-        vx: 0,
-        vy: 0,
+        x: this._finiteCoord(heroSrc.x, 0),
+        y: this._finiteCoord(heroSrc.y, 0),
+        vx: this._safeVelocity(heroSrc.vx),
+        vy: this._safeVelocity(heroSrc.vy),
 
-        hp: 100,
-        maxHp: 100,
-        mana: 60,
-        maxMana: 60,
+        radius: this._num(heroSrc.radius, 10, 1, 128),
+        r: this._num(heroSrc.r, 14, 1, 128),
 
-        hpRegen: 1.5,
-        manaRegen: 6.0,
+        level: this._int(heroSrc.level, 1, 1, 9999),
+        xp: this._int(heroSrc.xp, 0, 0, 1000000000),
+        nextXp: this._int(heroSrc.nextXp, 30, 1, 1000000000),
+        gold: this._int(heroSrc.gold, 0, 0, 1000000000),
 
-        gold: 0,
-        level: 1,
-        xp: 0,
-        nextXp: 30,
+        maxHp: this._num(heroSrc.maxHp, 100, 1, 1000000),
+        hp: 0,
+        maxMana: this._num(heroSrc.maxMana, 60, 0, 1000000),
+        mana: 0,
+
+        hpRegen: this._num(heroSrc.hpRegen, 1.5, 0, 10000),
+        manaRegen: this._num(heroSrc.manaRegen, 6.0, 0, 10000),
 
         potions: {
-          hp: 2,
-          mana: 1,
+          hp: this._int(heroSrc?.potions?.hp, 2, 0, 9999),
+          mana: this._int(heroSrc?.potions?.mana, 1, 0, 9999),
         },
 
-        inventory: [],
-        equip: {},
+        inventory: this._sanitizeInventory(heroSrc.inventory),
+        equip: this._sanitizeEquip(heroSrc.equip),
 
         state: {
-          sailing: false,
-          dashT: 0,
-          hurtT: 0,
+          sailing: !!heroSrc?.state?.sailing,
+          dashT: this._num(heroSrc?.state?.dashT, 0, 0, 999),
+          hurtT: this._num(heroSrc?.state?.hurtT, 0, 0, 999),
         },
 
-        lastMove: { x: 1, y: 0 },
-      },
+        lastMove: this._sanitizeDir(heroSrc.lastMove, { x: 1, y: 0 }),
 
-      quests: [],
+        alive: heroSrc.alive !== false,
+        dead: !!heroSrc.dead,
+        animT: this._num(heroSrc.animT, 0, 0, 100000),
+      },
 
       progress: {
-        discoveredWaystones: [],
-        discoveredDocks: [],
-        clearedCamps: [],
-        eliteKills: 0,
-        currentZoneText: "Wilderness",
+        discoveredWaystones: this._intArray(progressSrc.discoveredWaystones),
+        discoveredDocks: this._intArray(progressSrc.discoveredDocks),
+        dungeonBest: this._int(progressSrc.dungeonBest, 0, 0, 9999),
+        eliteKills: this._int(progressSrc.eliteKills, 0, 0, 999999),
       },
+
+      dungeon: {
+        active: !!dungeonSrc.active,
+        floor: this._int(dungeonSrc.floor, 0, 0, 9999),
+        seed: this._num(dungeonSrc.seed, 0),
+        currentRoomIndex: this._int(dungeonSrc.currentRoomIndex, 0, 0, 9999),
+        visited: this._intArray(dungeonSrc.visited),
+      },
+
+      cooldowns: {
+        q: this._num(cooldownsSrc.q, 0, 0, 999),
+        w: this._num(cooldownsSrc.w, 0, 0, 999),
+        e: this._num(cooldownsSrc.e, 0, 0, 999),
+        r: this._num(cooldownsSrc.r, 0, 0, 999),
+      },
+
+      skillLoadout: this._sanitizeSkillLoadout(src.skillLoadout),
+      selectedSkillSlot: this._int(src.selectedSkillSlot, 0, 0, 3),
+
+      quests: this._sanitizeQuests(src.quests),
+      questTurnIn: this._sanitizeQuestTurnIn(src.questTurnIn),
+
+      menu: {
+        open: this._sanitizeMenu(menuSrc.open),
+      },
+
+      time: this._num(src.time, 0, 0, 1000000000),
+      msg: typeof src.msg === "string" ? src.msg.slice(0, 120) : "",
+      msgT: this._num(src.msgT, 0, 0, 999),
+      zoneMsg: typeof src.zoneMsg === "string" ? src.zoneMsg.slice(0, 120) : "",
+      zoneMsgT: this._num(src.zoneMsgT, 0, 0, 999),
     };
 
-    if (!data || typeof data !== "object") return out;
+    out.hero.hp = this._num(heroSrc.hp, out.hero.maxHp, 0, out.hero.maxHp);
+    out.hero.mana = this._num(heroSrc.mana, out.hero.maxMana, 0, out.hero.maxMana);
 
-    if (Number.isFinite(data.seed)) {
-      out.seed = data.seed | 0;
+    if (out.hero.hp <= 0 || out.hero.dead) {
+      out.hero.hp = out.hero.maxHp;
+      out.hero.mana = Math.max(0, out.hero.mana);
+      out.hero.alive = true;
+      out.hero.dead = false;
+      out.hero.state.hurtT = 0;
+      out.hero.state.sailing = false;
+    } else {
+      out.hero.alive = true;
+      out.hero.dead = false;
     }
 
-    const h = data.hero;
-    if (h && typeof h === "object") {
-      if (Number.isFinite(h.x)) out.hero.x = +h.x;
-      if (Number.isFinite(h.y)) out.hero.y = +h.y;
-      if (Number.isFinite(h.vx)) out.hero.vx = +h.vx;
-      if (Number.isFinite(h.vy)) out.hero.vy = +h.vy;
-
-      if (Number.isFinite(h.maxHp)) out.hero.maxHp = Math.max(1, +h.maxHp);
-      if (Number.isFinite(h.hp)) out.hero.hp = Math.max(0, +h.hp);
-
-      if (Number.isFinite(h.maxMana)) out.hero.maxMana = Math.max(1, +h.maxMana);
-      if (Number.isFinite(h.mana)) out.hero.mana = Math.max(0, +h.mana);
-
-      if (Number.isFinite(h.hpRegen)) out.hero.hpRegen = Math.max(0, +h.hpRegen);
-      if (Number.isFinite(h.manaRegen)) out.hero.manaRegen = Math.max(0, +h.manaRegen);
-
-      if (Number.isFinite(h.gold)) out.hero.gold = Math.max(0, h.gold | 0);
-      if (Number.isFinite(h.level)) out.hero.level = Math.max(1, h.level | 0);
-      if (Number.isFinite(h.xp)) out.hero.xp = Math.max(0, h.xp | 0);
-      if (Number.isFinite(h.nextXp)) out.hero.nextXp = Math.max(1, h.nextXp | 0);
-
-      if (h.potions && typeof h.potions === "object") {
-        if (Number.isFinite(h.potions.hp)) out.hero.potions.hp = Math.max(0, h.potions.hp | 0);
-        if (Number.isFinite(h.potions.mana)) out.hero.potions.mana = Math.max(0, h.potions.mana | 0);
-      }
-
-      if (Array.isArray(h.inventory)) {
-        out.hero.inventory = h.inventory
-          .map(it => this._sanitizeItem(it))
-          .filter(Boolean);
-      }
-
-      if (h.equip && typeof h.equip === "object") {
-        const eq = {};
-        for (const [slot, item] of Object.entries(h.equip)) {
-          const clean = this._sanitizeItem(item);
-          if (clean) eq[String(slot)] = clean;
-        }
-        out.hero.equip = eq;
-      }
-
-      if (h.state && typeof h.state === "object") {
-        out.hero.state = {
-          sailing: !!h.state.sailing,
-          dashT: Number.isFinite(h.state.dashT) ? Math.max(0, +h.state.dashT) : 0,
-          hurtT: Number.isFinite(h.state.hurtT) ? Math.max(0, +h.state.hurtT) : 0,
-        };
-      }
-
-      if (h.lastMove && typeof h.lastMove === "object") {
-        let lx = Number.isFinite(h.lastMove.x) ? +h.lastMove.x : 0;
-        let ly = Number.isFinite(h.lastMove.y) ? +h.lastMove.y : 0;
-
-        if (!Number.isFinite(lx)) lx = 1;
-        if (!Number.isFinite(ly)) ly = 0;
-        if (lx === 0 && ly === 0) lx = 1;
-
-        out.hero.lastMove = { x: lx, y: ly };
-      }
+    if (out.dungeon.active) {
+      out.dungeon.active = false;
+      out.dungeon.floor = 0;
+      out.dungeon.currentRoomIndex = 0;
+      out.dungeon.visited = [];
+      out.hero.state.sailing = false;
     }
 
-    if (Array.isArray(data.quests)) {
-      out.quests = data.quests
-        .filter(q => q && typeof q === "object")
-        .map(q => ({
-          id: String(q.id || ""),
-          name: String(q.name || ""),
-          desc: String(q.desc || ""),
-          goal: Math.max(0, q.goal | 0),
-          prog: Math.max(0, q.prog | 0),
-          done: !!q.done,
-          xp: Math.max(0, q.xp | 0),
-          gold: Math.max(0, q.gold | 0),
-        }));
-    }
+    if (Math.abs(out.hero.vx) < 0.001) out.hero.vx = 0;
+    if (Math.abs(out.hero.vy) < 0.001) out.hero.vy = 0;
 
-    const p = data.progress;
-    if (p && typeof p === "object") {
-      if (Array.isArray(p.discoveredWaystones)) {
-        out.progress.discoveredWaystones = dedupeInts(p.discoveredWaystones);
-      }
-
-      if (Array.isArray(p.discoveredDocks)) {
-        out.progress.discoveredDocks = dedupeInts(p.discoveredDocks);
-      }
-
-      if (Array.isArray(p.clearedCamps)) {
-        out.progress.clearedCamps = dedupeInts(p.clearedCamps);
-      }
-
-      if (Number.isFinite(p.eliteKills)) {
-        out.progress.eliteKills = Math.max(0, p.eliteKills | 0);
-      }
-
-      if (typeof p.currentZoneText === "string" && p.currentZoneText.trim()) {
-        out.progress.currentZoneText = p.currentZoneText.trim();
-      }
-    }
-
-    out.hero.hp = Math.min(out.hero.hp, out.hero.maxHp);
-    out.hero.mana = Math.min(out.hero.mana, out.hero.maxMana);
-
-    if (out.hero.level < 1) out.hero.level = 1;
-    if (out.hero.nextXp < 1) out.hero.nextXp = 1;
+    out.hero.lastMove = this._sanitizeDir(out.hero.lastMove, { x: 1, y: 0 });
 
     return out;
   }
 
-  _sanitizeItem(item) {
+  _sanitizeInventory(inv) {
+    if (!Array.isArray(inv)) return [];
+    return inv
+      .map((it) => this._sanitizeItem(it))
+      .filter(Boolean)
+      .slice(0, 300);
+  }
+
+  _sanitizeEquip(equip) {
+    const src = equip && typeof equip === "object" ? equip : {};
+    const out = {};
+
+    const allowed = ["weapon", "armor", "chest", "helm", "boots", "ring", "trinket"];
+    for (const key of allowed) {
+      const item = this._sanitizeItem(src[key], key);
+      if (item) out[key] = item;
+    }
+
+    return out;
+  }
+
+  _sanitizeItem(item, forcedSlot = null) {
     if (!item || typeof item !== "object") return null;
 
-    const stats = item.stats && typeof item.stats === "object" ? item.stats : {};
+    const slot = this._sanitizeSlot(forcedSlot || item.slot);
+    if (!slot) return null;
+
+    const rarity = this._sanitizeRarity(item.rarity);
+    const level = this._int(item.level, 1, 1, 9999);
+    const name =
+      typeof item.name === "string" && item.name.trim()
+        ? item.name.slice(0, 80)
+        : this._fallbackItemName(slot, rarity);
+
+    const statsSrc = item.stats && typeof item.stats === "object" ? item.stats : {};
 
     return {
-      slot: String(item.slot || "gear"),
-      level: Math.max(1, item.level | 0),
-      rarity: String(item.rarity || "common"),
-      name: String(item.name || "Gear"),
+      slot,
+      level,
+      rarity,
+      name,
       stats: {
-        dmg: Math.max(0, stats.dmg | 0),
-        armor: Math.max(0, stats.armor | 0),
-        crit: Number.isFinite(stats.crit) ? Math.max(0, +stats.crit) : 0,
+        dmg: this._int(statsSrc.dmg, 0, 0, 100000),
+        armor: this._int(statsSrc.armor, 0, 0, 100000),
+        crit: this._num(statsSrc.crit, 0, 0, 10),
       },
-      price: Math.max(0, item.price | 0),
+      price: this._int(item.price, 0, 0, 100000000),
     };
   }
-}
 
-function dedupeInts(arr) {
-  const out = [];
-  const seen = new Set();
+  _sanitizeQuests(quests) {
+    if (!Array.isArray(quests)) return [];
 
-  for (const v of arr) {
-    const n = v | 0;
-    if (!Number.isFinite(n)) continue;
-    if (seen.has(n)) continue;
-    seen.add(n);
-    out.push(n);
+    return quests.slice(0, 50).map((q, i) => {
+      const src = q && typeof q === "object" ? q : {};
+      return {
+        id: this._int(src.id, i + 1, 0, 999999),
+        type: typeof src.type === "string" ? src.type.slice(0, 40) : "kill",
+        name: typeof src.name === "string" ? src.name.slice(0, 120) : `Quest ${i + 1}`,
+        desc: typeof src.desc === "string" ? src.desc.slice(0, 240) : "",
+        target: this._int(src.target, 0, 0, 999999),
+        need: this._int(src.need, 0, 0, 999999),
+        have: this._int(src.have, 0, 0, 999999),
+        done: !!src.done,
+        turnedIn: !!src.turnedIn,
+        rewardGold: this._int(src.rewardGold, 0, 0, 99999999),
+        rewardXp: this._int(src.rewardXp, 0, 0, 99999999),
+      };
+    });
   }
 
-  return out;
+  _sanitizeQuestTurnIn(q) {
+    if (!q || typeof q !== "object") return null;
+    return {
+      id: this._int(q.id, 0, 0, 999999),
+      name: typeof q.name === "string" ? q.name.slice(0, 120) : "",
+    };
+  }
+
+  _sanitizeSkillLoadout(loadout) {
+    const valid = ["q", "w", "e", "r"];
+    if (!Array.isArray(loadout)) return ["q", "w", "e", "r"];
+
+    const out = loadout
+      .map((v) => String(v || "").toLowerCase())
+      .filter((v) => valid.includes(v))
+      .slice(0, 4);
+
+    while (out.length < 4) {
+      const next = valid.find((v) => !out.includes(v));
+      if (!next) break;
+      out.push(next);
+    }
+
+    return out.slice(0, 4);
+  }
+
+  _sanitizeMenu(open) {
+    const allowed = [null, "inventory", "skills", "god", "map", "quests", "options"];
+    return allowed.includes(open) ? open : null;
+  }
+
+  _sanitizeSlot(slot) {
+    const s = String(slot || "").toLowerCase();
+    const allowed = ["weapon", "armor", "chest", "helm", "boots", "ring", "trinket"];
+    return allowed.includes(s) ? s : null;
+  }
+
+  _sanitizeRarity(rarity) {
+    const r = String(rarity || "").toLowerCase();
+    if (r === "uncommon" || r === "rare" || r === "epic") return r;
+    return "common";
+  }
+
+  _sanitizeDir(dir, fallback = { x: 1, y: 0 }) {
+    const x = this._num(dir?.x, fallback.x, -1, 1);
+    const y = this._num(dir?.y, fallback.y, -1, 1);
+
+    if (Math.abs(x) < 0.001 && Math.abs(y) < 0.001) {
+      return { x: fallback.x, y: fallback.y };
+    }
+
+    const mag = Math.hypot(x, y) || 1;
+    return {
+      x: x / mag,
+      y: y / mag,
+    };
+  }
+
+  _intArray(value) {
+    if (value instanceof Set) {
+      return [...value]
+        .map((v) => this._int(v, null, -1000000000, 1000000000))
+        .filter((v) => v !== null);
+    }
+
+    if (!Array.isArray(value)) return [];
+
+    return value
+      .map((v) => this._int(v, null, -1000000000, 1000000000))
+      .filter((v) => v !== null)
+      .slice(0, 10000);
+  }
+
+  _fallbackItemName(slot, rarity) {
+    const r =
+      rarity === "epic" ? "Mythic" :
+      rarity === "rare" ? "Fine" :
+      rarity === "uncommon" ? "Sturdy" :
+      "Plain";
+
+    const s =
+      slot === "weapon" ? "Blade" :
+      slot === "armor" ? "Armor" :
+      slot === "chest" ? "Chestplate" :
+      slot === "helm" ? "Helm" :
+      slot === "boots" ? "Boots" :
+      slot === "ring" ? "Ring" :
+      slot === "trinket" ? "Charm" :
+      "Gear";
+
+    return `${r} ${s}`;
+  }
+
+  _safeVelocity(v) {
+    return this._num(v, 0, -5000, 5000);
+  }
+
+  _finiteCoord(v, fallback = 0) {
+    return this._num(v, fallback, -1000000, 1000000);
+  }
+
+  _num(v, fallback = 0, min = -Infinity, max = Infinity) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return fallback;
+    if (n < min) return min;
+    if (n > max) return max;
+    return n;
+  }
+
+  _int(v, fallback = 0, min = -Infinity, max = Infinity) {
+    if (v === null || v === undefined || v === "") return fallback;
+    const n = Number(v);
+    if (!Number.isFinite(n)) return fallback;
+    const i = Math.trunc(n);
+    if (i < min) return min;
+    if (i > max) return max;
+    return i;
+  }
 }

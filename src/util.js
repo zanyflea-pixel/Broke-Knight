@@ -1,11 +1,10 @@
 // src/util.js
-// v32 SAFE CORE UTILS + COMPAT PASS (FULL FILE)
+// v34 UTIL COMPAT + STABILITY PASS (FULL FILE)
 // Goals:
-// - keep Broke Knight helpers centralized and reliable
-// - support mixed old/new calling styles used across files
-// - provide safer math helpers
-// - provide stable seeded randomness + noise helpers
-// - avoid changing gameplay rules directly
+// - keep current game/world/entities compatibility
+// - provide stable math + RNG + noise helpers
+// - support mixed old/new call styles safely
+// - avoid breaking runtime assumptions
 
 /* ===========================
    Basic math helpers
@@ -51,14 +50,18 @@ export function dist2(ax, ay, bx, by) {
   return dx * dx + dy * dy;
 }
 
+export function len(x, y) {
+  return Math.hypot(x, y);
+}
+
 export function norm(x, y) {
   const d = Math.hypot(x, y);
   if (d <= 1e-8) return { x: 0, y: 0 };
   return { x: x / d, y: y / d };
 }
 
-export function len(x, y) {
-  return Math.hypot(x, y);
+export function normalize(x, y) {
+  return norm(x, y);
 }
 
 export function angleTo(ax, ay, bx, by) {
@@ -76,14 +79,29 @@ export function roundTo(v, step = 1) {
   return Math.round(v / step) * step;
 }
 
+export function approach(value, target, amount) {
+  if (value < target) return Math.min(target, value + amount);
+  if (value > target) return Math.max(target, value - amount);
+  return target;
+}
+
+export function damp(current, target, lambda, dt) {
+  return lerp(current, target, 1 - Math.exp(-lambda * dt));
+}
+
+export function cooldownTick(v, dt) {
+  return v > 0 ? Math.max(0, v - dt) : 0;
+}
+
 /* ===========================
    Hash / seeded randomness
 =========================== */
 
 export function hash2(x = 0, y = 0, seed = 0) {
-  // Stable 32-bit integer hash for tile/world lookups.
-  let h = (x | 0) * 374761393 + (y | 0) * 668265263 + (seed | 0) * 69069;
-  h = (h ^ (h >>> 13)) | 0;
+  let h = Math.imul((x | 0) ^ 0x27d4eb2d, 374761393);
+  h = (h + Math.imul((y | 0) ^ 0x165667b1, 668265263)) | 0;
+  h = (h + Math.imul(seed | 0, 69069)) | 0;
+  h ^= h >>> 13;
   h = Math.imul(h, 1274126177);
   h ^= h >>> 16;
   return h | 0;
@@ -102,7 +120,7 @@ export function hash3(x = 0, y = 0, z = 0, seed = 0) {
 }
 
 export function rand01FromHash(h) {
-  return ((h >>> 0) / 4294967295);
+  return (h >>> 0) / 4294967295;
 }
 
 export class RNG {
@@ -118,7 +136,6 @@ export class RNG {
   }
 
   next() {
-    // xorshift32
     let x = this._state | 0;
     x ^= x << 13;
     x ^= x >>> 17;
@@ -162,8 +179,40 @@ export class RNG {
   }
 }
 
+export function randRange(rngOrMin, minOrMax, maybeMax) {
+  if (rngOrMin instanceof RNG) {
+    return rngOrMin.range(minOrMax, maybeMax);
+  }
+
+  if (maybeMax === undefined) {
+    const min = Number(rngOrMin) || 0;
+    const max = Number(minOrMax) || 0;
+    return min + (max - min) * Math.random();
+  }
+
+  const min = Number(minOrMax) || 0;
+  const max = Number(maybeMax) || 0;
+  return min + (max - min) * Math.random();
+}
+
+export function randInt(rngOrMin, minOrMax, maybeMax) {
+  if (rngOrMin instanceof RNG) {
+    return rngOrMin.int(minOrMax, maybeMax);
+  }
+
+  if (maybeMax === undefined) {
+    const min = Number(rngOrMin) || 0;
+    const max = Number(minOrMax) || 0;
+    return Math.floor(min + Math.random() * (max - min + 1));
+  }
+
+  const min = Number(minOrMax) || 0;
+  const max = Number(maybeMax) || 0;
+  return Math.floor(min + Math.random() * (max - min + 1));
+}
+
 /* ===========================
-   Value noise
+   Value noise + fbm
 =========================== */
 
 function fade(t) {
@@ -196,7 +245,9 @@ function _fbmFixed(x, y, octaves = 4, lacunarity = 2, gain = 0.5, seed = 0) {
   let sum = 0;
   let normSum = 0;
 
-  for (let i = 0; i < Math.max(1, octaves | 0); i++) {
+  const oct = Math.max(1, octaves | 0);
+
+  for (let i = 0; i < oct; i++) {
     sum += valueNoise2(x * freq, y * freq, (seed | 0) + i * 1013) * amp;
     normSum += amp;
     freq *= lacunarity;
@@ -208,21 +259,11 @@ function _fbmFixed(x, y, octaves = 4, lacunarity = 2, gain = 0.5, seed = 0) {
 }
 
 /*
-  Supports BOTH styles safely:
-
-  Style A:
-    fbm(x, y, octaves, lacunarity, gain, seed)
-
-  Style B:
-    fbm(x, y, seed, octaves)
-
-  Some earlier project variants mixed these patterns, so this wrapper
-  tries to stay compatible instead of breaking older files.
+  Supports both:
+  fbm(x, y, octaves, lacunarity, gain, seed)
+  fbm(x, y, seed, octaves)
 */
 export function fbm(x, y, a = 4, b = 2, c = 0.5, d = 0) {
-  // Heuristic:
-  // If the 3rd arg looks like a seed and the 4th looks like a small octave count,
-  // treat as (x, y, seed, octaves).
   const looksLikeSeedThenOctaves =
     Number.isInteger(a) &&
     (Math.abs(a) > 32 || a < 0) &&
@@ -236,7 +277,6 @@ export function fbm(x, y, a = 4, b = 2, c = 0.5, d = 0) {
     return _fbmFixed(x, y, b, 2, 0.5, a);
   }
 
-  // Default modern style: (x, y, octaves, lacunarity, gain, seed)
   const octaves = Math.max(1, a | 0);
   const lacunarity = Number.isFinite(b) ? b : 2;
   const gain = Number.isFinite(c) ? c : 0.5;
@@ -246,7 +286,7 @@ export function fbm(x, y, a = 4, b = 2, c = 0.5, d = 0) {
 }
 
 /* ===========================
-   Collision / geometry helpers
+   Geometry helpers
 =========================== */
 
 export function aabbOverlap(a, b) {
@@ -265,51 +305,4 @@ export function pointInRect(px, py, rx, ry, rw, rh) {
 export function circleHit(ax, ay, ar, bx, by, br) {
   const rr = ar + br;
   return dist2(ax, ay, bx, by) <= rr * rr;
-}
-
-/* ===========================
-   Timing helpers
-=========================== */
-
-export function cooldownTick(v, dt) {
-  return v > 0 ? Math.max(0, v - dt) : 0;
-}
-
-export function approach(value, target, amount) {
-  if (value < target) return Math.min(target, value + amount);
-  if (value > target) return Math.max(target, value - amount);
-  return target;
-}
-
-export function damp(current, target, lambda, dt) {
-  return lerp(current, target, 1 - Math.exp(-lambda * dt));
-}
-
-/* ===========================
-   Compatibility aliases
-=========================== */
-
-export function normalize(x, y) {
-  return norm(x, y);
-}
-
-export function randRange(rngOrMin, minOrMax, maybeMax) {
-  // Supports:
-  // randRange(min, max)
-  // randRange(rng, min, max)
-  if (rngOrMin instanceof RNG) {
-    return rngOrMin.range(minOrMax, maybeMax);
-  }
-  return minOrMax === undefined
-    ? Math.random() * rngOrMin
-    : rngOrMin + (minOrMax - rngOrMin) * Math.random();
-}
-
-export function randInt(rngOrMin, minOrMax, maybeMax) {
-  if (rngOrMin instanceof RNG) {
-    return rngOrMin.int(minOrMax, maybeMax);
-  }
-  const min = rngOrMin | 0;
-  const max = minOrMax | 0;
-  return Math.floor(min + Math.random() * (max - min + 1));
 }

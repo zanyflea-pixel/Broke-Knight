@@ -1,5 +1,12 @@
 // src/main.js
-// v39 BOOT + FPS + RESUME + LAG HARDENING PASS (FULL FILE)
+// v43 MAIN LOOP + RECOVERY + CANVAS SAFETY PASS (FULL FILE)
+// Goals:
+// - keep current boot flow
+// - smoother frame pacing
+// - safer resize / focus handling
+// - recover cleanly after alt-tab / hidden tab
+// - avoid duplicate loops / runaway delta spikes
+// - keep canvas crisp and correctly sized
 
 import Game from "./game.js";
 
@@ -19,12 +26,16 @@ let booted = false;
 let running = false;
 let lastTime = performance.now();
 let accumulator = 0;
+let resizeQueued = false;
+let resumeTimer = 0;
+let dprCache = 1;
 
 const STEP = 1 / 60;
 const MAX_FRAME = 0.05;
 const MAX_STEPS = 4;
 
 setupCanvasElement();
+boot();
 
 function setupCanvasElement() {
   if (!canvas.hasAttribute("tabindex")) {
@@ -38,17 +49,20 @@ function setupCanvasElement() {
   canvas.style.userSelect = "none";
   canvas.style.webkitUserSelect = "none";
   canvas.style.touchAction = "none";
+  canvas.style.display = "block";
 }
 
 function getDPR() {
   return Math.max(1, Math.min(2, window.devicePixelRatio || 1));
 }
 
-function resizeCanvas() {
-  const cssW = Math.max(320, window.innerWidth | 0);
-  const cssH = Math.max(240, window.innerHeight | 0);
-  const dpr = getDPR();
+function getCssSize() {
+  const w = Math.max(320, window.innerWidth | 0);
+  const h = Math.max(240, window.innerHeight | 0);
+  return { w, h };
+}
 
+function applyCanvasSize(cssW, cssH, dpr) {
   canvas.style.width = `${cssW}px`;
   canvas.style.height = `${cssH}px`;
 
@@ -62,24 +76,40 @@ function resizeCanvas() {
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.imageSmoothingEnabled = true;
+}
+
+function resizeCanvas() {
+  const { w: cssW, h: cssH } = getCssSize();
+  const dpr = getDPR();
+  dprCache = dpr;
+
+  applyCanvasSize(cssW, cssH, dpr);
 
   if (game?.resize) {
     game.resize(cssW, cssH);
-  } else if (game?.setViewSize) {
-    game.setViewSize(cssW, cssH);
   } else if (game) {
-    game.viewW = cssW;
-    game.viewH = cssH;
+    game.w = cssW;
+    game.h = cssH;
   }
+}
+
+function queueResize() {
+  if (resizeQueued) return;
+  resizeQueued = true;
+
+  requestAnimationFrame(() => {
+    resizeQueued = false;
+    resizeCanvas();
+  });
 }
 
 function focusCanvas() {
   try {
     canvas.focus({ preventScroll: true });
-  } catch {
+  } catch (_) {
     try {
       canvas.focus();
-    } catch {}
+    } catch (_) {}
   }
 }
 
@@ -93,26 +123,22 @@ function cancelLoop() {
 
 function render() {
   if (!game) return;
-
-  ctx.save();
-  ctx.setTransform(getDPR(), 0, 0, getDPR(), 0, 0);
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.restore();
-
   game.draw?.();
 }
 
-function loop(now) {
+function tick(now) {
   if (!running) return;
 
-  rafId = requestAnimationFrame(loop);
+  rafId = requestAnimationFrame(tick);
 
   let frame = (now - lastTime) / 1000;
   lastTime = now;
 
-  if (!Number.isFinite(frame) || frame < 0) frame = STEP;
-  frame = Math.min(MAX_FRAME, frame);
+  if (!Number.isFinite(frame) || frame < 0) {
+    frame = STEP;
+  }
 
+  frame = Math.min(MAX_FRAME, frame);
   accumulator += frame;
 
   let steps = 0;
@@ -122,7 +148,7 @@ function loop(now) {
     steps++;
   }
 
-  if (steps === MAX_STEPS) {
+  if (steps >= MAX_STEPS) {
     accumulator = 0;
   }
 
@@ -134,7 +160,7 @@ function startLoop() {
   lastTime = performance.now();
   accumulator = 0;
   running = true;
-  rafId = requestAnimationFrame(loop);
+  rafId = requestAnimationFrame(tick);
 }
 
 function boot() {
@@ -142,9 +168,7 @@ function boot() {
   booted = true;
 
   resizeCanvas();
-
   game = new Game(canvas);
-
   resizeCanvas();
   focusCanvas();
   startLoop();
@@ -164,54 +188,75 @@ function hardResume() {
   }
 }
 
-window.addEventListener("resize", () => {
-  resizeCanvas();
-});
+function softResumeSoon(delay = 50) {
+  if (resumeTimer) {
+    clearTimeout(resumeTimer);
+    resumeTimer = 0;
+  }
 
-window.addEventListener("orientationchange", () => {
-  setTimeout(() => {
-    resizeCanvas();
+  resumeTimer = window.setTimeout(() => {
+    resumeTimer = 0;
     hardResume();
-  }, 60);
-});
+  }, delay);
+}
 
-window.addEventListener("focus", () => {
-  hardResume();
-});
-
-window.addEventListener("pageshow", () => {
-  hardResume();
-});
+window.addEventListener("resize", queueResize);
+window.addEventListener("orientationchange", () => softResumeSoon(80));
+window.addEventListener("focus", () => softResumeSoon(0));
+window.addEventListener("pageshow", () => softResumeSoon(0));
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     cancelLoop();
   } else {
-    hardResume();
+    softResumeSoon(0);
   }
+});
+
+window.addEventListener("blur", () => {
+  cancelLoop();
 });
 
 canvas.addEventListener("mousedown", () => {
   focusCanvas();
 });
 
-canvas.addEventListener("touchstart", () => {
-  focusCanvas();
-}, { passive: true });
+canvas.addEventListener(
+  "touchstart",
+  () => {
+    focusCanvas();
+  },
+  { passive: true }
+);
 
-window.addEventListener("keydown", e => {
-  const blocked = [
-    "ArrowUp",
-    "ArrowDown",
-    "ArrowLeft",
-    "ArrowRight",
-    " ",
-    "Spacebar"
-  ];
+window.addEventListener(
+  "keydown",
+  (e) => {
+    const blocked = [
+      "ArrowUp",
+      "ArrowDown",
+      "ArrowLeft",
+      "ArrowRight",
+      " ",
+      "Spacebar"
+    ];
 
-  if (blocked.includes(e.key)) {
-    e.preventDefault();
+    if (blocked.includes(e.key)) {
+      e.preventDefault();
+    }
+  },
+  { passive: false }
+);
+
+window.addEventListener("devicepixelratiochange", () => {
+  const next = getDPR();
+  if (next !== dprCache) queueResize();
+});
+
+// Fallback DPR check for browsers without a devicepixelratiochange event.
+setInterval(() => {
+  const next = getDPR();
+  if (next !== dprCache) {
+    queueResize();
   }
-}, { passive: false });
-
-boot();
+}, 1000);

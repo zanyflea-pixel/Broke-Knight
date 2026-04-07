@@ -1,33 +1,12 @@
-<!-- index.html -->
-<!-- v33 SAFE PAGE SHELL + CANVAS POLISH (FULL FILE)
-Purpose:
-- keep the current simple boot flow
-- preserve loading src/main.js
-- improve fullscreen presentation
-- improve canvas crispness / browser behavior
-- stay low-risk and not touch game logic
--->
-
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"
-  />
-  <meta name="theme-color" content="#0b0f16" />
-  <meta name="color-scheme" content="dark" />
   <title>Broke Knight</title>
-
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root {
-      --bg0: #070b11;
-      --bg1: #0d1420;
-      --bg2: #111a28;
-      --edge: rgba(255,255,255,0.06);
-      --edge2: rgba(255,255,255,0.03);
-      --text: #e8eefc;
+      color-scheme: dark;
     }
 
     * {
@@ -37,70 +16,35 @@ Purpose:
     html,
     body {
       margin: 0;
-      padding: 0;
       width: 100%;
       height: 100%;
       overflow: hidden;
-      background:
-        radial-gradient(circle at top, rgba(65, 95, 140, 0.14), transparent 34%),
-        linear-gradient(180deg, var(--bg2) 0%, var(--bg1) 42%, var(--bg0) 100%);
+      background: #070b12;
+      font-family: Arial, Helvetica, sans-serif;
     }
 
     body {
-      font-family: Arial, sans-serif;
-      color: var(--text);
-      user-select: none;
-      -webkit-user-select: none;
-      -webkit-tap-highlight-color: transparent;
-      overscroll-behavior: none;
-      touch-action: none;
+      display: block;
     }
 
     #game-shell {
       position: fixed;
       inset: 0;
       width: 100vw;
-      width: 100dvw;
       height: 100vh;
-      height: 100dvh;
       overflow: hidden;
       background:
-        radial-gradient(circle at center, rgba(255,255,255,0.02), transparent 55%);
+        radial-gradient(circle at 50% 16%, rgba(42, 74, 114, 0.28), rgba(0, 0, 0, 0) 42%),
+        linear-gradient(180deg, #0b1220 0%, #091019 100%);
     }
 
-    canvas {
+    #overworld {
       display: block;
-      width: 100vw;
-      width: 100dvw;
-      height: 100vh;
-      height: 100dvh;
+      width: 100%;
+      height: 100%;
       outline: none;
-      background: transparent;
+      cursor: crosshair;
       image-rendering: auto;
-      touch-action: none;
-    }
-
-    #game-shell::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      box-shadow:
-        inset 0 0 0 1px var(--edge),
-        inset 0 18px 50px rgba(255,255,255,0.015),
-        inset 0 -30px 80px rgba(0,0,0,0.18);
-    }
-
-    #game-shell::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      background:
-        linear-gradient(180deg, rgba(255,255,255,0.015), transparent 22%, transparent 78%, rgba(0,0,0,0.12)),
-        radial-gradient(circle at 50% 0%, rgba(150,190,255,0.045), transparent 28%);
-      border: 1px solid var(--edge2);
-      mix-blend-mode: screen;
     }
 
     #noscript-msg {
@@ -110,15 +54,12 @@ Purpose:
       transform: translate(-50%, -50%);
       padding: 14px 18px;
       border-radius: 12px;
-      background: rgba(0,0,0,0.55);
-      color: #eef4ff;
+      background: rgba(10, 14, 22, 0.92);
+      color: rgba(240, 244, 252, 0.96);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
       font-size: 14px;
-      border: 1px solid rgba(255,255,255,0.08);
-      backdrop-filter: blur(6px);
-      text-align: center;
-      max-width: min(90vw, 420px);
-      line-height: 1.45;
-      box-shadow: 0 12px 40px rgba(0,0,0,0.32);
+      line-height: 1.4;
+      z-index: 10;
     }
 
     .js-ready #noscript-msg {
@@ -126,7 +67,6 @@ Purpose:
     }
   </style>
 </head>
-
 <body>
   <div id="game-shell">
     <canvas id="overworld" tabindex="0" aria-label="Broke Knight game canvas"></canvas>

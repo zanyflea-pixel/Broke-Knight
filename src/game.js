@@ -1,10 +1,12 @@
 // src/game.js
-// v52 BUGFIX PASS (FULL FILE)
-// - keep current aiming system
-// - fix dungeon rendering so it is not just a box in the overworld
-// - reduce lag / enemy spam
-// - keep map / menus / waystones / docks working
-// - clean out duplicate/merged methods from the broken pasted file state
+// v63 RPG + PERFORMANCE PASS (FULL FILE)
+// Focus:
+// - keep RPG additions
+// - improve smoothness
+// - reduce expensive repeated work
+// - keep camp quests / rest / waystone restore
+// - keep camp-based enemy behavior
+// - lighter update workload
 
 import World from "./world.js";
 import { clamp, lerp, dist2, norm, RNG, hash2 } from "./util.js";
@@ -12,26 +14,6 @@ import { Hero, Enemy, Projectile, Loot, makeGear } from "./entities.js";
 import Input from "./input.js";
 import UI from "./ui.js";
 import Save from "./save.js";
-
-function roundedRectPath(path, x, y, w, h, r) {
-  const rr = Math.min(r, w / 2, h / 2);
-  path.moveTo(x + rr, y);
-  path.lineTo(x + w - rr, y);
-  path.quadraticCurveTo(x + w, y, x + w, y + rr);
-  path.lineTo(x + w, y + h - rr);
-  path.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
-  path.lineTo(x + rr, y + h);
-  path.quadraticCurveTo(x, y + h, x, y + h - rr);
-  path.lineTo(x, y + rr);
-  path.quadraticCurveTo(x, y, x + rr, y);
-  path.closePath();
-}
-
-function roundedRectFill(ctx, x, y, w, h, r) {
-  const p = new Path2D();
-  roundedRectPath(p, x, y, w, h, r);
-  ctx.fill(p);
-}
 
 export default class Game {
   constructor(canvas) {
@@ -47,7 +29,7 @@ export default class Game {
 
     this.input = new Input(window);
     this.ui = new UI(canvas);
-    this.save = new Save("broke-knight-save-v52");
+    this.save = new Save("broke-knight-save-v63");
 
     this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
     this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
@@ -67,30 +49,33 @@ export default class Game {
     };
 
     this.perf = {
-      enemyUpdateRadius: 1150,
-      lootUpdateRadius: 800,
-      projectileUpdateRadius: 1400,
-      spawnRadius: 1050,
-      drawPad: 180,
-      maxEnemies: 52,
-      maxLoot: 120,
+      enemyUpdateRadius: 980,
+      lootUpdateRadius: 760,
+      projectileUpdateRadius: 1260,
+      spawnRadius: 940,
+      drawPad: 150,
+      maxEnemies: 28,
+      maxLoot: 90,
       cleanupTimer: 0,
-      cleanupEvery: 0.35,
+      cleanupEvery: 0.55,
+      touchDamageTick: 0.18,
+      campRespawnCheckEvery: 2.6,
+      campAggroRadius: 340,
     };
 
     this.time = 0;
     this._dtClamp = 0.05;
-    this._autosaveT = 0;
+    this._autosaveT = 8;
 
     this._spawnTimer = 0;
-    this._campRespawn = 60;
-    this._campState = new Map();
+    this._campRespawnT = 0;
     this._rng = new RNG(hash2(this.seed, 9001));
 
     this.menu = { open: null };
 
-    this.quests = this._makeQuests();
+    this.quests = [];
     this.questTurnIn = null;
+    this._questIdCounter = 1;
 
     this.msg = "";
     this.msgT = 0;
@@ -102,6 +87,22 @@ export default class Game {
 
     this._pickupMsgCooldown = 0;
     this._spellMsgCooldown = 0;
+    this._touchShakeCd = 0;
+    this._touchDamageCd = 0;
+    this._dockToggleCd = 0;
+    this._interactCd = 0;
+    this._spawnSuppressionT = 0;
+    this._zoneSampleT = 0;
+    this._lastZoneName = "";
+    this._killFlashT = 0;
+    this._combatTextT = 0;
+    this._levelSeen = this.hero.level || 1;
+
+    this._cachedNearbyCamp = null;
+    this._cachedNearbyDock = null;
+    this._cachedNearbyWaystone = null;
+    this._cachedNearbyDungeon = null;
+    this._nearbyPoiTimer = 0;
 
     this.mouse = {
       x: this.w * 0.5,
@@ -111,13 +112,6 @@ export default class Game {
       worldY: this.hero.y,
       moved: false,
     };
-
-    this.skillBar = [
-      { key: "q", name: "Spark", mana: 8, cd: 0.22, slot: 0 },
-      { key: "w", name: "Nova", mana: 18, cd: 1.8, slot: 1 },
-      { key: "e", name: "Dash", mana: 14, cd: 2.8, slot: 2 },
-      { key: "r", name: "Orb", mana: 22, cd: 3.4, slot: 3 },
-    ];
 
     this.skillLoadout = ["q", "w", "e", "r"];
     this.selectedSkillSlot = 0;
@@ -141,16 +135,12 @@ export default class Game {
       roomMsgT: 0,
     };
 
-    this.progress = this.progress || {};
-    if (!(this.progress.discoveredWaystones instanceof Set)) {
-      this.progress.discoveredWaystones = new Set();
-    }
-    if (!(this.progress.discoveredDocks instanceof Set)) {
-      this.progress.discoveredDocks = new Set();
-    }
-    if (typeof this.progress.dungeonBest !== "number") {
-      this.progress.dungeonBest = 0;
-    }
+    this.progress = {
+      discoveredWaystones: new Set(),
+      discoveredDocks: new Set(),
+      dungeonBest: 0,
+      visitedCamps: new Set(),
+    };
 
     this._bindMouse();
     this._loadGame();
@@ -162,9 +152,11 @@ export default class Game {
     if (!this.hero.state) this.hero.state = {};
     if (typeof this.hero.state.sailing !== "boolean") this.hero.state.sailing = false;
     if (typeof this.hero.state.dashT !== "number") this.hero.state.dashT = 0;
+    if (typeof this.hero.state.hurtT !== "number") this.hero.state.hurtT = 0;
 
-    this._rebuildCampState();
     this._ensureWorldPopulation();
+    this._ensureCampQuests();
+    this._ensureHeroSafe();
 
     this._msg("Broke Knight ready", 1.8);
   }
@@ -173,6 +165,7 @@ export default class Game {
     this.w = w | 0;
     this.h = h | 0;
     this.world?.setViewSize?.(this.w, this.h);
+    this.ui?.setViewSize?.(this.w, this.h);
   }
 
   update(dt) {
@@ -181,6 +174,7 @@ export default class Game {
     if (this.hitStopT > 0) {
       this.hitStopT = Math.max(0, this.hitStopT - dt);
       this._tickUI(dt);
+      this.input.endFrame();
       return;
     }
 
@@ -188,9 +182,16 @@ export default class Game {
 
     this._tickUI(dt);
     this._tickCooldowns(dt);
-    this._tickCamera(dt);
     this._updateMouseWorld();
     this._handleMenus();
+
+    this._dockToggleCd = Math.max(0, this._dockToggleCd - dt);
+    this._interactCd = Math.max(0, this._interactCd - dt);
+    this._spawnSuppressionT = Math.max(0, this._spawnSuppressionT - dt);
+    this._killFlashT = Math.max(0, this._killFlashT - dt);
+    this._combatTextT = Math.max(0, this._combatTextT - dt);
+
+    this._updateNearbyPOIs(dt);
 
     if (this.menu.open === "map") {
       this._handleFastTravelInput();
@@ -199,28 +200,38 @@ export default class Game {
       this._handleSpells();
     }
 
-    if (this.input.wasPressed("b")) {
+    if (this.input.wasPressed("b") && this._dockToggleCd <= 0) {
+      this._dockToggleCd = 0.18;
       this._toggleDockingOrSailing();
     }
 
-    if (this.input.wasPressed("f")) {
+    if (this.input.wasPressed("f") && this._interactCd <= 0) {
+      this._interactCd = 0.18;
       this._interact();
     }
 
     this.hero.update?.(dt);
+    this._checkLevelUpMessage();
 
     if (this.dungeon.active) {
       this._updateDungeon(dt);
     } else {
       this.world.update?.(dt, this.hero);
       this._spawnWorldEnemies(dt);
+      this._respawnCampEnemies(dt);
       this._updateOverworldEnemies(dt);
     }
 
     this._updateProjectiles(dt);
     this._updateLoot(dt);
-    this._updateQuestProgress(dt);
-    this._updateZoneMessages();
+
+    if ((this.time % 0.20) < dt) {
+      this._updateQuestState();
+    }
+
+    this._updateZoneMessages(dt);
+    this._tickCamera(dt);
+    this._ensureHeroSafe();
 
     this.perf.cleanupTimer += dt;
     if (this.perf.cleanupTimer >= this.perf.cleanupEvery) {
@@ -246,6 +257,11 @@ export default class Game {
 
     this._drawBackground(ctx);
 
+    if (this._killFlashT > 0.02) {
+      ctx.fillStyle = `rgba(255,255,255,${0.035 * this._killFlashT})`;
+      ctx.fillRect(0, 0, this.w, this.h);
+    }
+
     ctx.translate((this.w * 0.5) | 0, (this.h * 0.5) | 0);
     ctx.scale(this.camera.zoom, this.camera.zoom);
     ctx.translate(
@@ -257,46 +273,28 @@ export default class Game {
       this._drawDungeonWorld(ctx);
     } else {
       this.world.draw?.(ctx, this.camera);
-
-      const vb = this._viewBoundsWorld();
-
-      for (const l of this.loot) {
-        if (!l?.alive) continue;
-        if (this._inView(l.x, l.y, vb)) l.draw?.(ctx);
-      }
-
-      for (const p of this.projectiles) {
-        if (!p?.alive) continue;
-        if (this._inView(p.x, p.y, vb)) p.draw?.(ctx);
-      }
-
-      for (const e of this.enemies) {
-        if (!e?.alive) continue;
-        if (this._inView(e.x, e.y, vb)) e.draw?.(ctx);
-      }
-
-      this.hero.draw?.(ctx);
     }
 
+    const vb = this._viewBoundsWorld();
+
+    for (const l of this.loot) {
+      if (!l?.alive) continue;
+      if (this._inView(l.x, l.y, vb)) l.draw?.(ctx);
+    }
+
+    for (const p of this.projectiles) {
+      if (!p?.alive) continue;
+      if (this._inView(p.x, p.y, vb)) p.draw?.(ctx);
+    }
+
+    for (const e of this.enemies) {
+      if (!e?.alive) continue;
+      if (this._inView(e.x, e.y, vb)) e.draw?.(ctx);
+    }
+
+    this.hero.draw?.(ctx);
+
     if (this.dungeon.active) {
-      const vb = this._viewBoundsWorld();
-
-      for (const l of this.loot) {
-        if (!l?.alive) continue;
-        if (this._inView(l.x, l.y, vb)) l.draw?.(ctx);
-      }
-
-      for (const p of this.projectiles) {
-        if (!p?.alive) continue;
-        if (this._inView(p.x, p.y, vb)) p.draw?.(ctx);
-      }
-
-      for (const e of this.enemies) {
-        if (!e?.alive) continue;
-        if (this._inView(e.x, e.y, vb)) e.draw?.(ctx);
-      }
-
-      this.hero.draw?.(ctx);
       this._drawDungeonOverlayWorld(ctx);
     }
 
@@ -314,12 +312,6 @@ export default class Game {
     g.addColorStop(1, "#0a111b");
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, this.w, this.h);
-
-    ctx.fillStyle = "rgba(255,255,255,0.025)";
-    for (let i = 0; i < 6; i++) {
-      const y = ((i + 1) * this.h) / 7;
-      ctx.fillRect(0, y, this.w, 1);
-    }
   }
 
   _drawOverlayText(ctx) {
@@ -346,6 +338,19 @@ export default class Game {
       ctx.fillText(this.zoneMsg, this.w * 0.5, 34);
       ctx.restore();
     }
+
+    if (this._combatTextT > 0.1) {
+      ctx.save();
+      ctx.font = "bold 16px Arial";
+      ctx.textAlign = "center";
+      ctx.fillStyle = "rgba(255,228,150,0.92)";
+      ctx.strokeStyle = "rgba(0,0,0,0.38)";
+      ctx.lineWidth = 4;
+      const y = this.h - 60 - (1 - this._combatTextT) * 8;
+      ctx.strokeText("Enemy defeated", this.w * 0.5, y);
+      ctx.fillText("Enemy defeated", this.w * 0.5, y);
+      ctx.restore();
+    }
   }
 
   _tickUI(dt) {
@@ -354,7 +359,10 @@ export default class Game {
     this.flashT = Math.max(0, this.flashT - dt);
     this._pickupMsgCooldown = Math.max(0, this._pickupMsgCooldown - dt);
     this._spellMsgCooldown = Math.max(0, this._spellMsgCooldown - dt);
+    this._touchShakeCd = Math.max(0, this._touchShakeCd - dt);
+    this._touchDamageCd = Math.max(0, this._touchDamageCd - dt);
     if (this.dungeon.roomMsgT > 0) this.dungeon.roomMsgT -= dt;
+    this.ui?.update?.(dt, this);
   }
 
   _tickCooldowns(dt) {
@@ -364,15 +372,12 @@ export default class Game {
   }
 
   _tickCamera(dt) {
-    const followX = this.hero.x;
-    const followY = this.hero.y;
-
-    this.camera.x = lerp(this.camera.x, followX, 1 - Math.exp(-dt * 10));
-    this.camera.y = lerp(this.camera.y, followY, 1 - Math.exp(-dt * 10));
+    this.camera.x = lerp(this.camera.x, this.hero.x, 1 - Math.exp(-dt * 10));
+    this.camera.y = lerp(this.camera.y, this.hero.y, 1 - Math.exp(-dt * 10));
 
     if (this.camera.shakeT > 0) {
       this.camera.shakeT = Math.max(0, this.camera.shakeT - dt);
-      const m = this.camera.shakeMag * (this.camera.shakeT > 0 ? 1 : 0);
+      const m = this.camera.shakeMag;
       this.camera.sx = (Math.random() * 2 - 1) * m;
       this.camera.sy = (Math.random() * 2 - 1) * m;
     } else {
@@ -382,16 +387,15 @@ export default class Game {
   }
 
   _viewBoundsWorld() {
-    const cam = this.camera;
-    const z = cam.zoom || 1;
+    const z = this.camera.zoom || 1;
     const halfW = (this.w * 0.5) / z;
     const halfH = (this.h * 0.5) / z;
     const pad = this.perf.drawPad;
     return {
-      x0: cam.x - halfW - pad,
-      x1: cam.x + halfW + pad,
-      y0: cam.y - halfH - pad,
-      y1: cam.y + halfH + pad,
+      x0: this.camera.x - halfW - pad,
+      x1: this.camera.x + halfW + pad,
+      y0: this.camera.y - halfH - pad,
+      y1: this.camera.y + halfH + pad,
     };
   }
 
@@ -400,7 +404,7 @@ export default class Game {
   }
 
   _drawDungeonWorld(ctx) {
-    const room = this._getCurrentDungeonRoom?.() || this._getRoom?.();
+    const room = this._getRoom();
     if (!room) return;
 
     const x0 = room.x - room.w * 0.5;
@@ -415,16 +419,8 @@ export default class Game {
         const wx = x0 + x;
         const wy = y0 + y;
         const n = hash2((wx / cell) | 0, (wy / cell) | 0, this.dungeon.floor | 0) >>> 0;
-
-        ctx.fillStyle = n % 2 === 0
-          ? "rgba(46,46,58,1)"
-          : "rgba(40,40,50,1)";
+        ctx.fillStyle = n % 2 === 0 ? "rgba(46,46,58,1)" : "rgba(40,40,50,1)";
         ctx.fillRect(wx, wy, cell + 1, cell + 1);
-
-        if (n % 9 === 0) {
-          ctx.fillStyle = "rgba(62,62,76,0.45)";
-          ctx.fillRect(wx + 6, wy + 6, 6, 6);
-        }
       }
     }
 
@@ -433,229 +429,16 @@ export default class Game {
     ctx.fillRect(x0 - 18, y0 + room.h, room.w + 36, 18);
     ctx.fillRect(x0 - 18, y0, 18, room.h);
     ctx.fillRect(x0 + room.w, y0, 18, room.h);
-  }  _grantGold(n) {
-    this.hero.gold += Math.max(0, n | 0);
   }
 
-  _grantXP(n) {
-    this.hero.giveXP?.(Math.max(0, n | 0));
-  }
+  _drawDungeonOverlayWorld(ctx) {
+    const room = this._getRoom();
+    if (!room) return;
 
-  _coolMsg(text, t = 1.6) {
-    if (this._pickupMsgCooldown > 0) return;
-    this._pickupMsgCooldown = 0.45;
-    this._msg(text, t);
-  }
-
-  _spellMsg(text, t = 1.0) {
-    if (this._spellMsgCooldown > 0) return;
-    this._spellMsgCooldown = 0.3;
-    this._msg(text, t);
-  }
-
-  _itemPower(it) {
-    if (!it) return -999999;
-    const s = it.stats || {};
-    return (s.dmg || 0) * 3 + (s.armor || 0) * 2 + (s.crit || 0) * 100 + (it.level || 0);
-  }
-
-  _maybeAutoEquip(gear) {
-    if (!gear || !gear.slot) return false;
-
-    const slot = gear.slot;
-    const current = this.hero.equip?.[slot] || null;
-
-    if (!current) {
-      this.hero.equip[slot] = gear;
-      return true;
-    }
-
-    const oldPower = this._itemPower(current);
-    const newPower = this._itemPower(gear);
-
-    if (newPower > oldPower) {
-      this.hero.equip[slot] = gear;
-      return true;
-    }
-
-    return false;
-  }
-
-  _pickupNearbyLootBonus() {
-    for (const l of this.loot) {
-      if (!l.alive) continue;
-      if (dist2(this.hero.x, this.hero.y, l.x, l.y) < 26 * 26) {
-        const kind = l.kind;
-        const data = l.data || {};
-        l.alive = false;
-
-        if (kind === "gold") {
-          this._grantGold(data.amount || 5);
-          this._coolMsg("+Gold");
-        }
-
-        if (kind === "gear") {
-          const eq = this._maybeAutoEquip(data);
-          this._coolMsg(eq ? "Equipped gear" : "Picked gear");
-        }
-
-        if (kind === "potion") {
-          const t = data.potionType || "hp";
-          if (t === "mana") this.hero.potions.mana = (this.hero.potions.mana || 0) + 1;
-          else this.hero.potions.hp = (this.hero.potions.hp || 0) + 1;
-          this._coolMsg(t === "mana" ? "+Mana Potion" : "+HP Potion");
-        }
-      }
-    }
-
-    this.loot = this.loot.filter(l => l.alive !== false);
-  }
-
-  _updateProjectiles(dt) {
-    const nearR2 = this.perf.projectileUpdateRadius * this.perf.projectileUpdateRadius;
-
-    for (const p of this.projectiles) {
-      if (!p.alive) continue;
-
-      const pdx = p.x - this.hero.x;
-      const pdy = p.y - this.hero.y;
-      if (pdx * pdx + pdy * pdy > nearR2) {
-        p.life -= dt * 2;
-        if (p.life <= 0) p.alive = false;
-        continue;
-      }
-
-      p.update?.(dt, this.dungeon.active ? null : this.world);
-
-      if (p.meta?.onHitHero) {
-        if (dist2(p.x, p.y, this.hero.x, this.hero.y) < (p.hitRadius || 16) ** 2) {
-          this.hero.takeDamage?.(p.dmg || 4);
-          p.alive = false;
-          this._shake(0.06, 2);
-          continue;
-        }
-      }
-
-      if (p.friendly) {
-        for (const e of this.enemies) {
-          if (!e.alive) continue;
-          if (dist2(p.x, p.y, e.x, e.y) < (p.hitRadius || 18) ** 2) {
-            e.takeDamage?.(p.dmg || 4);
-            if (!p.meta?.pierce) p.alive = false;
-
-            if (!e.alive) {
-              this._dropLoot(e.x, e.y, e.tier || e.level || 1);
-              this._grantXP(e.xpValue?.() || 4);
-            }
-            break;
-          }
-        }
-      }
-    }
-
-    this.projectiles = this.projectiles.filter(p => p.alive !== false);
-  }
-
-  _dropLoot(x, y, lvl) {
-    if (Math.random() < 0.72) {
-      this.loot.push(
-        new Loot(x, y, "gold", { amount: 4 + Math.floor(Math.random() * 6) + (lvl | 0) })
-      );
-    }
-
-    if (Math.random() < 0.18) {
-      this.loot.push(new Loot(x, y, "gear", makeGear("weapon", lvl, null, hash2(x | 0, y | 0, lvl | 0))));
-    }
-
-    if (Math.random() < 0.10) {
-      this.loot.push(new Loot(x, y, "potion", { potionType: Math.random() < 0.5 ? "hp" : "mana" }));
-    }
-  }
-
-  _spawnWorldEnemies(dt) {
-    if (this.enemies.length >= this.perf.maxEnemies) return;
-    if (this.hero.state?.sailing) return;
-
-    this._spawnTimer += dt;
-    if (this._spawnTimer < 0.55) return;
-    this._spawnTimer = 0;
-
-    const r = this.perf.spawnRadius;
-    const a = Math.random() * Math.PI * 2;
-    const x = this.hero.x + Math.cos(a) * r;
-    const y = this.hero.y + Math.sin(a) * r;
-
-    if (!this.world.canWalk(x, y)) return;
-    if (!this.world.canWalk(x + 20, y)) return;
-    if (!this.world.canWalk(x - 20, y)) return;
-    if (!this.world.canWalk(x, y + 20)) return;
-    if (!this.world.canWalk(x, y - 20)) return;
-    if (dist2(x, y, this.hero.x, this.hero.y) < 420 * 420) return;
-
-    const roll = Math.random();
-    const kind =
-      roll < 0.18 ? "brute" :
-      roll < 0.33 ? "stalker" :
-      roll < 0.43 ? "caster" :
-      "blob";
-
-    const e = new Enemy(x, y, this.hero.level, kind, hash2(x | 0, y | 0, this.time | 0));
-    e.home = { x, y };
-    this.enemies.push(e);
-  }
-
-  _updateOverworldEnemies(dt) {
-    const nearR2 = this.perf.enemyUpdateRadius * this.perf.enemyUpdateRadius;
-
-    for (const e of this.enemies) {
-      if (!e.alive) continue;
-
-      const dx = e.x - this.hero.x;
-      const dy = e.y - this.hero.y;
-      if (dx * dx + dy * dy > nearR2) continue;
-
-      e.update?.(dt, this.hero, this.world, this);
-
-      if (e.kind !== "caster" && dist2(e.x, e.y, this.hero.x, this.hero.y) < (e.radius + 10) ** 2) {
-        this.hero.takeDamage?.((e.touchDps || 3) * dt);
-        this._shake(0.04, 1.5);
-      }
-    }
-
-    this.enemies = this.enemies.filter(e => e.alive !== false);
-  }
-
-  _updateLoot() {
-    for (const l of this.loot) {
-      if (!l.alive) continue;
-      l.update?.(1 / 60, this.hero);
-    }
-    this._pickupNearbyLootBonus();
-    this.loot = this.loot.filter(l => l.alive !== false);
-  }
-
-  _updateZoneMessages() {
-    if (this.dungeon.active) {
-      this.zoneMsg = `Dungeon Floor ${this.dungeon.floor}`;
-      this.zoneMsgT = 1.5;
-      return;
-    }
-
-    for (const dg of this.world?.dungeons || []) {
-      if (dist2(this.hero.x, this.hero.y, dg.x, dg.y) < 150 * 150) {
-        this.zoneMsg = "Dungeon Entrance";
-        this.zoneMsgT = 1.1;
-        return;
-      }
-    }
-
-    for (const d of this.world?.docks || []) {
-      if (dist2(this.hero.x, this.hero.y, d.x, d.y) < 150 * 150) {
-        this.zoneMsg = "Dock";
-        this.zoneMsgT = 1.1;
-        return;
-      }
-    }
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.fillRect(room.x - room.w * 0.5, room.y - room.h * 0.5, room.w, room.h);
+    ctx.restore();
   }
 
   _handleMenus() {
@@ -663,103 +446,14 @@ export default class Game {
     if (this.input.wasPressed("k")) this.menu.open = this.menu.open === "skills" ? null : "skills";
     if (this.input.wasPressed("g")) this.menu.open = this.menu.open === "god" ? null : "god";
     if (this.input.wasPressed("m")) this.menu.open = this.menu.open === "map" ? null : "map";
+    if (this.input.wasPressed("j")) this.menu.open = this.menu.open === "quests" ? null : "quests";
     if (this.input.wasPressed("Escape")) this.menu.open = null;
 
     if (this.menu.open) this.ui.open?.(this.menu.open);
     else this.ui.closeAll?.();
   }
 
-  _getDiscoveredWaystones() {
-    const all = Array.isArray(this.world?.waystones) ? this.world.waystones.slice() : [];
-    return all
-      .filter(w => this.progress?.discoveredWaystones?.has?.(w.id))
-      .sort((a, b) => (a.id || 0) - (b.id || 0));
-  }
-
-  _teleportToWaystone(index) {
-    if (this.dungeon.active) return;
-
-    const ways = this._getDiscoveredWaystones();
-    if (!ways.length) {
-      this._msg("No awakened waystones yet.", 2);
-      return;
-    }
-
-    if (this.hero.state?.sailing) {
-      this._msg("Cannot fast travel while sailing.", 2);
-      return;
-    }
-
-    const w = ways[index | 0];
-    if (!w) return;
-
-    this.hero.x = w.x;
-    this.hero.y = w.y + 42;
-    this.hero.vx = 0;
-    this.hero.vy = 0;
-    this.hero.state.dashT = 0;
-
-    this.menu.open = null;
-    this.ui?.closeAll?.();
-
-    this._msg(`Fast traveled to Waystone ${index + 1}`, 2.2);
-    this._shake(0.12, 4);
-    this._saveSoon();
-  }
-
-  _teleportToDungeonEntrance() {
-    if (this.dungeon.active) return;
-
-    if (this.hero.state?.sailing) {
-      this._msg("Cannot fast travel while sailing.", 2);
-      return;
-    }
-
-    const dg = Array.isArray(this.world?.dungeons) ? this.world.dungeons[0] : null;
-    if (!dg) {
-      this._msg("No dungeon entrance found.", 2);
-      return;
-    }
-
-    this.hero.x = dg.x;
-    this.hero.y = dg.y + 54;
-    this.hero.vx = 0;
-    this.hero.vy = 0;
-    this.hero.state.dashT = 0;
-
-    this.menu.open = null;
-    this.ui?.closeAll?.();
-
-    this._msg("Teleported to dungeon entrance", 2.2);
-    this._shake(0.14, 5);
-    this._saveSoon();
-  }
-
-  _handleFastTravelInput() {
-    if (this.menu.open !== "map") return;
-
-    if (this.input.wasPressed("z")) {
-      if (this.world?.toggleMapScale) {
-        this.world.toggleMapScale();
-        this._msg(`Map scale: ${this.world.mapMode}`, 1.2);
-      }
-    }
-
-    if (this.input.wasPressed("x")) {
-      this._teleportToDungeonEntrance();
-      return;
-    }
-
-    if (this.input.wasPressed("1")) this._teleportToWaystone(0);
-    else if (this.input.wasPressed("2")) this._teleportToWaystone(1);
-    else if (this.input.wasPressed("3")) this._teleportToWaystone(2);
-    else if (this.input.wasPressed("4")) this._teleportToWaystone(3);
-    else if (this.input.wasPressed("5")) this._teleportToWaystone(4);
-    else if (this.input.wasPressed("6")) this._teleportToWaystone(5);
-    else if (this.input.wasPressed("7")) this._teleportToWaystone(6);
-    else if (this.input.wasPressed("8")) this._teleportToWaystone(7);
-    else if (this.input.wasPressed("9")) this._teleportToWaystone(8);
-  }  _handleMovement(dt) {
+  _handleMovement(dt) {
     const left = this.input.isDown("ArrowLeft");
     const right = this.input.isDown("ArrowRight");
     const up = this.input.isDown("ArrowUp");
@@ -774,17 +468,14 @@ export default class Game {
 
     if (ax || ay) {
       const n = norm(ax, ay);
-
       this.hero.lastMove = { x: n.x, y: n.y };
 
-      let speed = this.hero.state?.sailing ? 190 : 150;
+      let speed = this.hero.getMoveSpeed?.(this) || 140;
+      if (this.menu.open) speed *= 0.65;
+      if (this.hero.state?.dashT > 0) speed *= 1.1;
 
-      if (!this.dungeon.active && !this.hero.state?.sailing && this.world?.getMoveModifier) {
-        speed *= this.world.getMoveModifier(this.hero.x, this.hero.y);
-      }
-
-      this.hero.vx = n.x * speed;
-      this.hero.vy = n.y * speed;
+      this.hero.vx += (n.x * speed - this.hero.vx) * 0.18;
+      this.hero.vy += (n.y * speed - this.hero.vy) * 0.18;
 
       const nx = this.hero.x + this.hero.vx * dt;
       const ny = this.hero.y + this.hero.vy * dt;
@@ -796,11 +487,16 @@ export default class Game {
         this.hero.y = ny;
       } else {
         if (this.world.canWalk(nx, this.hero.y)) this.hero.x = nx;
+        else this.hero.vx = 0;
+
         if (this.world.canWalk(this.hero.x, ny)) this.hero.y = ny;
+        else this.hero.vy = 0;
       }
     } else {
-      this.hero.vx = 0;
-      this.hero.vy = 0;
+      this.hero.vx *= 0.82;
+      this.hero.vy *= 0.82;
+      if (Math.abs(this.hero.vx) < 1) this.hero.vx = 0;
+      if (Math.abs(this.hero.vy) < 1) this.hero.vy = 0;
     }
 
     if (this.input.wasPressed("1")) {
@@ -828,10 +524,9 @@ export default class Game {
   }
 
   _getAim() {
-    const m = this.mouse;
-    if (m?.moved) {
-      const dx = m.worldX - this.hero.x;
-      const dy = m.worldY - this.hero.y;
+    if (this.mouse?.moved) {
+      const dx = this.mouse.worldX - this.hero.x;
+      const dy = this.mouse.worldY - this.hero.y;
       const n = norm(dx, dy);
       return { x: n.x || 1, y: n.y || 0 };
     }
@@ -895,6 +590,7 @@ export default class Game {
 
     this.cooldowns.w = def.cd;
     this._spellMsg("Nova");
+    this._shake(0.04, 1.6);
   }
 
   _castDash(dx, dy) {
@@ -919,7 +615,7 @@ export default class Game {
 
     this.hero.state.dashT = 0.12;
     this.cooldowns.e = def.cd;
-    this._shake(0.1, 4);
+    this._shake(0.08, 3.0);
     this._spellMsg("Dash");
   }
 
@@ -951,54 +647,274 @@ export default class Game {
     this._spellMsg("Orb");
   }
 
-  _toggleDockingOrSailing() {
-    const dock = (this.world?.docks || []).find(
-      d => dist2(this.hero.x, this.hero.y, d.x, d.y) < 90 * 90
-    );
+  _updateProjectiles(dt) {
+    const nearR2 = this.perf.projectileUpdateRadius * this.perf.projectileUpdateRadius;
 
-    if (!dock) {
-      this._msg("No dock nearby");
-      return;
+    for (const p of this.projectiles) {
+      if (!p.alive) continue;
+
+      const pdx = p.x - this.hero.x;
+      const pdy = p.y - this.hero.y;
+      if (pdx * pdx + pdy * pdy > nearR2) {
+        p.life -= dt * 2;
+        if (p.life <= 0) p.alive = false;
+        continue;
+      }
+
+      p.update?.(dt, this.dungeon.active ? null : this.world);
+
+      if (p.meta?.onHitHero) {
+        if (dist2(p.x, p.y, this.hero.x, this.hero.y) < (p.hitRadius || 16) ** 2) {
+          this.hero.takeDamage?.(p.dmg || 4);
+          p.alive = false;
+          this._shake(0.05, 1.6);
+          continue;
+        }
+      }
+
+      if (p.friendly) {
+        for (const e of this.enemies) {
+          if (!e.alive) continue;
+          if (dist2(p.x, p.y, e.x, e.y) < (p.hitRadius || 18) ** 2) {
+            e.takeDamage?.(p.dmg || 4);
+
+            if (!p.meta?.pierce) p.alive = false;
+
+            if (!e.alive) {
+              this._dropLoot(e.x, e.y, e.tier || 1);
+              this.hero.giveXP?.(e.xpValue?.() || 4);
+              this._onEnemyKilled(e);
+              this._killFlashT = 0.7;
+              this._combatTextT = 0.65;
+              this._shake(0.05, 1.7);
+            }
+            break;
+          }
+        }
+      }
     }
 
-    this.hero.state.sailing = !this.hero.state.sailing;
+    this.projectiles = this.projectiles.filter((p) => p.alive !== false);
+  }
 
-    if (this.hero.state.sailing) {
-      this._msg("Sailing");
-    } else {
-      this._msg("Docked");
-      this._nudgeToLand();
+  _updateLoot(dt) {
+    const nearR2 = this.perf.lootUpdateRadius * this.perf.lootUpdateRadius;
+
+    for (const l of this.loot) {
+      if (!l.alive) continue;
+
+      const dx = l.x - this.hero.x;
+      const dy = l.y - this.hero.y;
+      if (dx * dx + dy * dy > nearR2) continue;
+
+      l.update?.(dt, this.hero);
+
+      if (!l.alive) {
+        if (l.kind === "gold") {
+          const amt = l.data?.amount || 5;
+          this.hero.gold += amt;
+          if (this._pickupMsgCooldown <= 0) {
+            this._pickupMsgCooldown = 0.22;
+            this._msg(`+${amt} Gold`, 0.6);
+          }
+        } else if (l.kind === "potion") {
+          const t = l.data?.potionType || "hp";
+          if (t === "mana") this.hero.potions.mana = (this.hero.potions.mana || 0) + 1;
+          else this.hero.potions.hp = (this.hero.potions.hp || 0) + 1;
+
+          if (this._pickupMsgCooldown <= 0) {
+            this._pickupMsgCooldown = 0.3;
+            this._msg(t === "mana" ? "Mana Potion" : "HP Potion", 0.8);
+          }
+        } else if (l.kind === "gear") {
+          const gear = l.data;
+          if (gear?.slot) {
+            const current = this.hero.equip?.[gear.slot];
+            if (!current) {
+              this.hero.equip[gear.slot] = gear;
+              this._msg(`Equipped ${gear.name}`, 1.0);
+            } else {
+              this.hero.inventory.push(gear);
+              this._msg(`Looted ${gear.name}`, 1.0);
+            }
+          }
+        }
+      }
+    }
+
+    this.loot = this.loot.filter((l) => l.alive !== false);
+  }
+
+  _dropLoot(x, y, lvl) {
+    if (this.loot.length >= this.perf.maxLoot) return;
+
+    if (Math.random() < 0.72) {
+      this.loot.push(new Loot(x, y, "gold", { amount: 4 + Math.floor(Math.random() * 6) + (lvl | 0) }));
+    }
+
+    if (Math.random() < 0.18 && this.loot.length < this.perf.maxLoot) {
+      this.loot.push(new Loot(x, y, "gear", makeGear("weapon", lvl, null, hash2(x | 0, y | 0, lvl | 0))));
+    }
+
+    if (Math.random() < 0.09 && this.loot.length < this.perf.maxLoot) {
+      this.loot.push(new Loot(x, y, "potion", { potionType: Math.random() < 0.5 ? "hp" : "mana" }));
     }
   }
 
-  _interact() {
-    for (const w of this.world?.waystones || []) {
-      if (dist2(this.hero.x, this.hero.y, w.x, w.y) < 90 * 90) {
-        this.progress.discoveredWaystones?.add?.(w.id);
-        this._msg(`Waystone ${w.id} awakened`, 1.6);
-        this._saveSoon();
-        return;
-      }
+  _spawnWorldEnemies(dt) {
+    if (this.enemies.length >= this.perf.maxEnemies) return;
+    if (this.hero.state?.sailing) return;
+    if (this.menu.open) return;
+    if (this._spawnSuppressionT > 0) return;
+
+    this._spawnTimer += dt;
+    if (this._spawnTimer < 4.0) return;
+    this._spawnTimer = 0;
+
+    if (Math.random() > 0.22) return;
+
+    const r = this.perf.spawnRadius;
+    const a = Math.random() * Math.PI * 2;
+    const x = this.hero.x + Math.cos(a) * r;
+    const y = this.hero.y + Math.sin(a) * r;
+
+    if (!this.world.canWalk(x, y)) return;
+    if (this.world._isNearWater?.(x, y, 64)) return;
+    if (dist2(x, y, this.hero.x, this.hero.y) < 700 * 700) return;
+
+    let nearby = 0;
+    for (const e of this.enemies) {
+      if (dist2(x, y, e.x, e.y) < 320 * 320) nearby++;
+      if (nearby >= 2) return;
     }
 
-    for (const d of this.world?.docks || []) {
-      if (dist2(this.hero.x, this.hero.y, d.x, d.y) < 90 * 90) {
-        this.progress.discoveredDocks?.add?.(d.id);
-        this._msg("Dock discovered", 1.2);
-        this._saveSoon();
-        return;
+    const roll = Math.random();
+    const kind =
+      roll < 0.15 ? "brute" :
+      roll < 0.35 ? "stalker" :
+      roll < 0.47 ? "caster" :
+      "blob";
+
+    const e = new Enemy(x, y, this.hero.level, kind, hash2(x | 0, y | 0, this.time | 0));
+    e.home = { x, y };
+    e.campId = null;
+    this.enemies.push(e);
+  }
+
+  _respawnCampEnemies(dt) {
+    this._campRespawnT += dt;
+    if (this._campRespawnT < this.perf.campRespawnCheckEvery) return;
+    this._campRespawnT = 0;
+
+    const camps = this.world?.camps || [];
+    if (!camps.length) return;
+    if (this.enemies.length >= this.perf.maxEnemies) return;
+    if (this.hero.state?.sailing) return;
+    if (this.dungeon.active) return;
+
+    for (const camp of camps) {
+      const heroNear = dist2(this.hero.x, this.hero.y, camp.x, camp.y) < this.perf.campAggroRadius * this.perf.campAggroRadius;
+
+      let campCount = 0;
+      for (const e of this.enemies) {
+        if (!e.alive) continue;
+        if (e.campId === camp.id) campCount++;
+      }
+
+      const desired = heroNear ? 3 : 2;
+      if (campCount >= desired) continue;
+
+      const missing = desired - campCount;
+      for (let i = 0; i < missing; i++) {
+        if (this.enemies.length >= this.perf.maxEnemies) break;
+
+        const ang = Math.random() * Math.PI * 2;
+        const rr = 72 + Math.random() * 56;
+        const ex = camp.x + Math.cos(ang) * rr;
+        const ey = camp.y + Math.sin(ang) * rr;
+
+        if (!this.world.canWalk(ex, ey)) continue;
+        if (this.world._isNearWater?.(ex, ey, 40)) continue;
+        if (dist2(ex, ey, this.hero.x, this.hero.y) < 190 * 190) continue;
+
+        const roll = Math.random();
+        const kind =
+          roll < 0.14 ? "brute" :
+          roll < 0.34 ? "stalker" :
+          roll < 0.46 ? "caster" :
+          "blob";
+
+        const e = new Enemy(ex, ey, Math.max(1, this.hero.level), kind, hash2(ex | 0, ey | 0, camp.id | 0));
+        e.home = { x: camp.x, y: camp.y };
+        e.campId = camp.id;
+        this.enemies.push(e);
       }
     }
+  }
 
-    for (const dg of this.world?.dungeons || []) {
-      if (dist2(this.hero.x, this.hero.y, dg.x, dg.y) < 90 * 90) {
-        this._enterDungeon(dg);
-        return;
-      }
+  _applyEnemyTouchDamage(e) {
+    if (!e?.alive) return;
+
+    const close = dist2(e.x, e.y, this.hero.x, this.hero.y) < (e.radius + 16) ** 2;
+    if (!close) return;
+
+    if (this._touchShakeCd <= 0) {
+      this._touchShakeCd = 0.10;
+      this._shake(0.03, 1.1);
+    }
+
+    if (this._touchDamageCd > 0) return;
+    this._touchDamageCd = this.perf.touchDamageTick;
+
+    this.hero.takeDamage?.((e.touchDps || 3) * this.perf.touchDamageTick);
+  }
+
+  _updateOverworldEnemies(dt) {
+    const nearR2 = this.perf.enemyUpdateRadius * this.perf.enemyUpdateRadius;
+
+    for (const e of this.enemies) {
+      if (!e.alive) continue;
+
+      const dx = e.x - this.hero.x;
+      const dy = e.y - this.hero.y;
+      if (dx * dx + dy * dy > nearR2) continue;
+
+      e.update?.(dt, this.hero, this.world, this);
+      this._applyEnemyTouchDamage(e);
+    }
+
+    this.enemies = this.enemies.filter((e) => e.alive !== false);
+  }
+
+  _updateDungeon(dt) {
+    const room = this._getRoom();
+    if (!room) return;
+
+    const nearR2 = this.perf.enemyUpdateRadius * this.perf.enemyUpdateRadius;
+
+    for (const e of this.enemies) {
+      if (!e.alive) continue;
+
+      const dx = e.x - this.hero.x;
+      const dy = e.y - this.hero.y;
+      if (dx * dx + dy * dy > nearR2) continue;
+
+      e.update?.(dt, this.hero, null, this);
+      this._applyEnemyTouchDamage(e);
+    }
+
+    this.enemies = this.enemies.filter((e) => e.alive !== false);
+
+    if (this.enemies.length === 0) {
+      if (room.exits.next) this._advanceDungeon();
+      else this._completeDungeon();
     }
   }
 
   _enterDungeon(dg) {
+    if (this.dungeon.active) return;
+
+    this.hero.state.sailing = false;
     this.dungeon.active = true;
     this.dungeon.floor = 1;
     this.dungeon.seed = hash2(dg.x | 0, dg.y | 0, this.seed | 0);
@@ -1009,6 +925,8 @@ export default class Game {
     const room = this._getRoom();
     this.hero.x = room.x;
     this.hero.y = room.y;
+    this.hero.vx = 0;
+    this.hero.vy = 0;
 
     this.enemies = [];
     this.projectiles = [];
@@ -1016,7 +934,8 @@ export default class Game {
 
     this._spawnDungeonEnemies(room);
     this._msg("Entered Dungeon");
-    this._shake(0.16, 5);
+    this._shake(0.14, 4);
+    this._spawnSuppressionT = 1.5;
   }
 
   _buildDungeon() {
@@ -1027,9 +946,7 @@ export default class Game {
       const isBoss = i === roomCount - 1;
       const prev = i === 0 ? null : rooms[i - 1];
 
-      const dir = i === 0
-        ? { x: 0, y: 0 }
-        : (i % 2 === 0 ? { x: 1, y: 0 } : { x: 0, y: 1 });
+      const dir = i === 0 ? { x: 0, y: 0 } : (i % 2 === 0 ? { x: 1, y: 0 } : { x: 0, y: 1 });
 
       const x = i === 0 ? 0 : prev.x + dir.x * 520;
       const y = i === 0 ? 0 : prev.y + dir.y * 360;
@@ -1041,11 +958,7 @@ export default class Game {
         w: isBoss ? 520 : 420,
         h: isBoss ? 320 : 260,
         boss: isBoss,
-        modifier: isBoss ? "boss" : (i % 3 === 1 ? "haste" : i % 3 === 2 ? "drag" : "normal"),
-        exits: {
-          next: i < roomCount - 1,
-          prev: i > 0,
-        }
+        exits: { next: i < roomCount - 1, prev: i > 0 }
       });
     }
 
@@ -1054,11 +967,6 @@ export default class Game {
 
   _getRoom() {
     return this.dungeon.rooms[this.dungeon.currentRoomIndex];
-  }
-
-  _getCurrentDungeonRoom() {
-    if (!this.dungeon?.active) return null;
-    return this.dungeon.rooms?.[this.dungeon.currentRoomIndex] || null;
   }
 
   _spawnDungeonEnemies(room) {
@@ -1074,69 +982,40 @@ export default class Game {
       const kind =
         room.boss ? "brute" :
         roll < 0.18 ? "brute" :
-        roll < 0.35 ? "stalker" :
+        roll < 0.36 ? "stalker" :
         roll < 0.48 ? "caster" :
         "blob";
 
       const e = new Enemy(ex, ey, this.hero.level + (room.boss ? 2 : 0), kind, hash2(ex | 0, ey | 0, room.id | 0));
       e.home = { x: ex, y: ey };
+      e.campId = null;
       this.enemies.push(e);
-    }
-  }  _updateDungeon(dt) {
-    const room = this._getRoom();
-    if (!room) return;
-
-    const nearR2 = this.perf.enemyUpdateRadius * this.perf.enemyUpdateRadius;
-
-    for (const e of this.enemies) {
-      if (!e.alive) continue;
-
-      const dx = e.x - this.hero.x;
-      const dy = e.y - this.hero.y;
-      if (dx * dx + dy * dy > nearR2) continue;
-
-      e.update?.(dt, this.hero, null, this);
-
-      if (dist2(e.x, e.y, this.hero.x, this.hero.y) < (e.radius + 10) ** 2) {
-        this.hero.takeDamage?.((e.touchDps || 3) * dt);
-        this._shake(0.05, 2);
-      }
-    }
-
-    this.enemies = this.enemies.filter(e => e.alive !== false);
-
-    if (this.enemies.length === 0) {
-      if (room.exits.next) {
-        this._advanceDungeon();
-      } else {
-        this._completeDungeon();
-      }
     }
   }
 
   _advanceDungeon() {
     this.dungeon.currentRoomIndex++;
+    this.dungeon.floor = Math.max(this.dungeon.floor, this.dungeon.currentRoomIndex + 1);
 
     const room = this._getRoom();
     if (!room) return;
 
     this.hero.x = room.x;
     this.hero.y = room.y;
+    this.hero.vx = 0;
+    this.hero.vy = 0;
 
     this._spawnDungeonEnemies(room);
     this._msg("Deeper...");
-    this._shake(0.1, 4);
+    this._shake(0.08, 3);
   }
 
   _completeDungeon() {
     this._msg("Dungeon Cleared!");
-    this._grantGold(40 + this.dungeon.floor * 10);
-    this._grantXP(25 + this.dungeon.floor * 10);
+    this.hero.gold += 40 + this.dungeon.floor * 10;
+    this.hero.giveXP?.(25 + this.dungeon.floor * 10);
 
-    this.progress.dungeonBest = Math.max(
-      this.progress.dungeonBest || 0,
-      this.dungeon.floor
-    );
+    this.progress.dungeonBest = Math.max(this.progress.dungeonBest || 0, this.dungeon.floor);
 
     this.dungeon.active = false;
 
@@ -1144,14 +1023,17 @@ export default class Game {
     if (dg) {
       this.hero.x = dg.x;
       this.hero.y = dg.y + 60;
+      this.hero.vx = 0;
+      this.hero.vy = 0;
     }
 
     this.enemies = [];
     this.projectiles = [];
     this.loot = [];
 
-    this._shake(0.2, 6);
+    this._shake(0.14, 4);
     this._saveSoon();
+    this._spawnSuppressionT = 2.0;
   }
 
   _moveHeroDungeon(nx, ny) {
@@ -1165,51 +1047,290 @@ export default class Game {
     this.hero.y = clamp(ny, room.y - halfH, room.y + halfH);
   }
 
-  _drawDungeonOverlayWorld(ctx) {
-    const room = this._getRoom();
-    if (!room) return;
+  _toggleDockingOrSailing() {
+    if (this.dungeon.active) {
+      this._msg("Cannot sail in dungeon");
+      return;
+    }
 
-    ctx.save();
+    const dock = this._cachedNearbyDock || this._nearestDock(104);
+    if (!dock) {
+      this._msg("No dock nearby");
+      return;
+    }
 
-    ctx.fillStyle = "rgba(0,0,0,0.25)";
-    ctx.fillRect(
-      room.x - room.w * 0.5,
-      room.y - room.h * 0.5,
-      room.w,
-      room.h
-    );
+    if (!this.hero.state.sailing) {
+      const nearWater =
+        this.world.isWater(dock.x + 24, dock.y) ||
+        this.world.isWater(dock.x - 24, dock.y) ||
+        this.world.isWater(dock.x, dock.y + 24) ||
+        this.world.isWater(dock.x, dock.y - 24);
 
-    ctx.restore();
+      if (!nearWater) {
+        this._msg("Dock is blocked");
+        return;
+      }
+
+      this.hero.state.sailing = true;
+      this.hero.x = dock.x;
+      this.hero.y = dock.y;
+      this.hero.vx = 0;
+      this.hero.vy = 0;
+      this._msg("Sailing");
+      return;
+    }
+
+    this.hero.state.sailing = false;
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+    this._nudgeToLand();
+    this._msg("Docked");
   }
 
-  _cleanupFarEntities() {
-    const farR2 = (this.perf.enemyUpdateRadius * 1.6) ** 2;
+  _nearestDock(radius = 100) {
+    const docks = this.world?.docks || [];
+    let best = null;
+    let bestD2 = radius * radius;
 
-    this.enemies = this.enemies.filter(e => {
-      if (!e.alive) return false;
-      const dx = e.x - this.hero.x;
-      const dy = e.y - this.hero.y;
-      return dx * dx + dy * dy < farR2;
-    });
+    for (const d of docks) {
+      const dd = dist2(this.hero.x, this.hero.y, d.x, d.y);
+      if (dd < bestD2) {
+        bestD2 = dd;
+        best = d;
+      }
+    }
 
-    this.projectiles = this.projectiles.filter(p => p.alive !== false);
-    this.loot = this.loot.filter(l => l.alive !== false);
+    return best;
+  }
+
+  _nearestCamp(radius = 120) {
+    const camps = this.world?.camps || [];
+    let best = null;
+    let bestD2 = radius * radius;
+
+    for (const c of camps) {
+      const dd = dist2(this.hero.x, this.hero.y, c.x, c.y);
+      if (dd < bestD2) {
+        bestD2 = dd;
+        best = c;
+      }
+    }
+
+    return best;
+  }
+
+  _interact() {
+    if (this.hero.state?.sailing) {
+      const dock = this._cachedNearbyDock || this._nearestDock(100);
+      if (dock) {
+        this.progress.discoveredDocks?.add?.(dock.id);
+        this._msg("Dock discovered", 1.2);
+        this._saveSoon();
+      }
+      return;
+    }
+
+    const camp = this._cachedNearbyCamp || this._nearestCamp(110);
+    if (camp) {
+      this._interactCamp(camp);
+      return;
+    }
+
+    const waystone = this._cachedNearbyWaystone;
+    if (waystone) {
+      this.progress.discoveredWaystones?.add?.(waystone.id);
+      this.hero.hp = this.hero.maxHp;
+      this.hero.mana = this.hero.maxMana;
+      this._msg(`Waystone ${waystone.id} awakened • Restored`);
+      this._saveSoon();
+      return;
+    }
+
+    const dock = this._cachedNearbyDock;
+    if (dock) {
+      this.progress.discoveredDocks?.add?.(dock.id);
+      this._msg("Dock discovered", 1.2);
+      this._saveSoon();
+      return;
+    }
+
+    const dungeon = this._cachedNearbyDungeon;
+    if (dungeon) {
+      this._enterDungeon(dungeon);
+    }
+  }
+
+  _interactCamp(camp) {
+    this.progress.visitedCamps?.add?.(camp.id);
+
+    const existing = this.quests.find((q) => q.campId === camp.id && !q.turnedIn);
+
+    this.hero.hp = Math.min(this.hero.maxHp, this.hero.hp + 20);
+    this.hero.mana = Math.min(this.hero.maxMana, this.hero.mana + 20);
+
+    if (existing && existing.done) {
+      existing.turnedIn = true;
+      this.hero.gold += existing.rewardGold || 0;
+      this.hero.giveXP?.(existing.rewardXp || 0);
+      this.questTurnIn = { id: existing.id, name: existing.name };
+      this._msg(`Quest complete: +${existing.rewardGold} Gold +${existing.rewardXp} XP`, 1.8);
+      this._saveSoon();
+      return;
+    }
+
+    if (existing && !existing.done) {
+      this._msg(`Rested at camp • ${existing.have}/${existing.need} ${existing.target}`, 1.5);
+      return;
+    }
+
+    const quest = this._createCampQuest(camp);
+    this.quests.push(quest);
+    this._msg(`New quest: ${quest.name}`, 1.6);
+    this._saveSoon();
+  }
+
+  _handleFastTravelInput() {
+    if (this.menu.open !== "map") return;
+    if (this.dungeon.active) return;
+    if (this.hero.state?.sailing) return;
+
+    if (this.input.wasPressed("z")) {
+      this.world?.toggleMapScale?.();
+      this._msg(`Map scale: ${this.world.mapMode}`, 1.2);
+    }
+
+    const ways = [...(this.world?.waystones || [])].filter((w) =>
+      this.progress?.discoveredWaystones?.has?.(w.id)
+    );
+
+    const digitPressed =
+      this.input.wasPressed("1") ? 1 :
+      this.input.wasPressed("2") ? 2 :
+      this.input.wasPressed("3") ? 3 :
+      this.input.wasPressed("4") ? 4 :
+      this.input.wasPressed("5") ? 5 :
+      this.input.wasPressed("6") ? 6 :
+      this.input.wasPressed("7") ? 7 :
+      this.input.wasPressed("8") ? 8 :
+      this.input.wasPressed("9") ? 9 :
+      0;
+
+    if (digitPressed > 0) {
+      const w = ways[digitPressed - 1];
+      if (!w) return;
+
+      const safe =
+        this.world?._findSafeLandPatchNear?.(w.x, w.y, 90) ||
+        this.world?._findNearbyLand?.(w.x, w.y, 120, false, true) ||
+        { x: w.x, y: w.y + 42 };
+
+      this.hero.x = safe.x;
+      this.hero.y = safe.y;
+      this.hero.vx = 0;
+      this.hero.vy = 0;
+      this.hero.hp = this.hero.maxHp;
+      this.hero.mana = this.hero.maxMana;
+      this._msg(`Waystone ${w.id} • Restored`, 1.2);
+      this._shake(0.06, 2.2);
+      this._saveSoon();
+    }
+  }
+
+  _updateZoneMessages(dt) {
+    if (this.dungeon.active) {
+      this.zoneMsg = `Dungeon Floor ${this.dungeon.floor}`;
+      this.zoneMsgT = 1.5;
+      return;
+    }
+
+    if (this._cachedNearbyDungeon) {
+      this.zoneMsg = "Dungeon Entrance";
+      this.zoneMsgT = 1.0;
+      return;
+    }
+
+    if (this._cachedNearbyDock) {
+      this.zoneMsg = "Dock";
+      this.zoneMsgT = 1.0;
+      return;
+    }
+
+    if (this._cachedNearbyCamp) {
+      this.zoneMsg = "Camp";
+      this.zoneMsgT = 1.0;
+      return;
+    }
+
+    this._zoneSampleT -= dt;
+    if (this._zoneSampleT <= 0) {
+      this._zoneSampleT = 0.55;
+      const z = this.world?.getZoneName?.(this.hero.x, this.hero.y) || "";
+      if (z && z !== this._lastZoneName) {
+        this._lastZoneName = z;
+        this.zoneMsg = z;
+        this.zoneMsgT = 1.0;
+      }
+    }
+  }
+
+  _updateNearbyPOIs(dt) {
+    this._nearbyPoiTimer -= dt;
+    if (this._nearbyPoiTimer > 0) return;
+    this._nearbyPoiTimer = 0.18;
+
+    const hx = this.hero.x;
+    const hy = this.hero.y;
+
+    this._cachedNearbyCamp = null;
+    this._cachedNearbyDock = null;
+    this._cachedNearbyWaystone = null;
+    this._cachedNearbyDungeon = null;
+
+    let bestCampD2 = 110 * 110;
+    for (const c of this.world?.camps || []) {
+      const d2 = dist2(hx, hy, c.x, c.y);
+      if (d2 < bestCampD2) {
+        bestCampD2 = d2;
+        this._cachedNearbyCamp = c;
+      }
+    }
+
+    let bestDockD2 = 110 * 110;
+    for (const d of this.world?.docks || []) {
+      const d2 = dist2(hx, hy, d.x, d.y);
+      if (d2 < bestDockD2) {
+        bestDockD2 = d2;
+        this._cachedNearbyDock = d;
+      }
+    }
+
+    let bestWayD2 = 100 * 100;
+    for (const w of this.world?.waystones || []) {
+      const d2 = dist2(hx, hy, w.x, w.y);
+      if (d2 < bestWayD2) {
+        bestWayD2 = d2;
+        this._cachedNearbyWaystone = w;
+      }
+    }
+
+    let bestDungeonD2 = 100 * 100;
+    for (const dg of this.world?.dungeons || []) {
+      const d2 = dist2(hx, hy, dg.x, dg.y);
+      if (d2 < bestDungeonD2) {
+        bestDungeonD2 = d2;
+        this._cachedNearbyDungeon = dg;
+      }
+    }
   }
 
   _updateMouseWorld() {
     const rect = this.canvas.getBoundingClientRect();
-
-    this.mouse.worldX =
-      (this.mouse.x - rect.left - this.w * 0.5) / this.camera.zoom +
-      this.camera.x;
-
-    this.mouse.worldY =
-      (this.mouse.y - rect.top - this.h * 0.5) / this.camera.zoom +
-      this.camera.y;
+    this.mouse.worldX = (this.mouse.x - rect.left - this.w * 0.5) / this.camera.zoom + this.camera.x;
+    this.mouse.worldY = (this.mouse.y - rect.top - this.h * 0.5) / this.camera.zoom + this.camera.y;
   }
 
   _bindMouse() {
-    this.canvas.addEventListener("mousemove", e => {
+    this.canvas.addEventListener("mousemove", (e) => {
       this.mouse.x = e.clientX;
       this.mouse.y = e.clientY;
       this.mouse.moved = true;
@@ -1222,20 +1343,57 @@ export default class Game {
     this.canvas.addEventListener("mouseup", () => {
       this.mouse.down = false;
     });
+
+    this.canvas.addEventListener("mouseleave", () => {
+      this.mouse.down = false;
+    });
   }
 
   _nudgeToLand() {
-    for (let i = 0; i < 20; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const x = this.hero.x + Math.cos(a) * 30;
-      const y = this.hero.y + Math.sin(a) * 30;
+    const safe =
+      this.world?._findSafeLandPatchNear?.(this.hero.x, this.hero.y, 300) ||
+      this.world?._findNearbyLand?.(this.hero.x, this.hero.y, 300, false, true);
 
-      if (this.world.canWalk(x, y)) {
-        this.hero.x = x;
-        this.hero.y = y;
-        return;
-      }
+    if (safe) {
+      this.hero.x = safe.x;
+      this.hero.y = safe.y;
+      this.hero.vx = 0;
+      this.hero.vy = 0;
     }
+  }
+
+  _ensureHeroSafe() {
+    if (this.dungeon.active) return;
+    if (this.hero.state?.sailing) return;
+    if (this.world?.canWalk?.(this.hero.x, this.hero.y)) return;
+    this._nudgeToLand();
+  }
+
+  _cleanupFarEntities() {
+    const farEnemyR2 = (this.perf.enemyUpdateRadius * 1.75) ** 2;
+    const farProjR2 = (this.perf.projectileUpdateRadius * 1.4) ** 2;
+    const farLootR2 = (this.perf.lootUpdateRadius * 1.6) ** 2;
+
+    this.enemies = this.enemies.filter((e) => {
+      if (!e.alive) return false;
+      const dx = e.x - this.hero.x;
+      const dy = e.y - this.hero.y;
+      return dx * dx + dy * dy < farEnemyR2;
+    });
+
+    this.projectiles = this.projectiles.filter((p) => {
+      if (!p.alive) return false;
+      const dx = p.x - this.hero.x;
+      const dy = p.y - this.hero.y;
+      return dx * dx + dy * dy < farProjR2;
+    });
+
+    this.loot = this.loot.filter((l) => {
+      if (!l.alive) return false;
+      const dx = l.x - this.hero.x;
+      const dy = l.y - this.hero.y;
+      return dx * dx + dy * dy < farLootR2;
+    });
   }
 
   _shake(t, mag) {
@@ -1246,16 +1404,111 @@ export default class Game {
   _msg(text, t = 1.4) {
     this.msg = text;
     this.msgT = t;
+    this.ui?.setMsg?.(text, t);
+  }
+
+  _spellMsg(text, t = 1.0) {
+    if (this._spellMsgCooldown > 0) return;
+    this._spellMsgCooldown = 0.3;
+    this._msg(text, t);
   }
 
   _saveSoon() {
     this._autosaveT = Math.min(this._autosaveT, 1.0);
   }
 
+  _checkLevelUpMessage() {
+    if ((this.hero.level || 1) > this._levelSeen) {
+      this._levelSeen = this.hero.level;
+      this._msg(`Level Up! ${this.hero.level}`, 1.6);
+    }
+  }
+
+  _ensureCampQuests() {
+    const camps = this.world?.camps || [];
+    for (const camp of camps) {
+      const exists = this.quests.some((q) => q.campId === camp.id && !q.turnedIn);
+      if (!exists && this.progress?.visitedCamps?.has?.(camp.id)) {
+        this.quests.push(this._createCampQuest(camp));
+      }
+    }
+  }
+
+  _createCampQuest(camp) {
+    const types = ["blob", "stalker", "caster"];
+    const target = types[Math.floor(Math.random() * types.length)];
+    const need = 3 + Math.floor(Math.random() * 3);
+    const rewardGold = 18 + need * 6 + this.hero.level * 2;
+    const rewardXp = 14 + need * 5 + this.hero.level * 2;
+
+    return {
+      id: this._questIdCounter++,
+      type: "kill",
+      campId: camp.id,
+      name: `Camp ${camp.id}: Hunt ${target}s`,
+      desc: `Defeat ${need} ${target}${need > 1 ? "s" : ""} near Camp ${camp.id}. Return to camp for payment.`,
+      target,
+      need,
+      have: 0,
+      done: false,
+      turnedIn: false,
+      rewardGold,
+      rewardXp,
+    };
+  }
+
+  _onEnemyKilled(enemy) {
+    for (const q of this.quests) {
+      if (q.turnedIn || q.done) continue;
+      if (q.type !== "kill") continue;
+      if (q.target !== enemy.kind) continue;
+
+      q.have = Math.min(q.need, (q.have || 0) + 1);
+      if (q.have >= q.need) {
+        q.done = true;
+        this._msg(`Quest ready: ${q.name}`, 1.4);
+      }
+    }
+  }
+
+  _updateQuestState() {
+    for (const q of this.quests) {
+      if (!q.turnedIn && !q.done && q.have >= q.need) {
+        q.done = true;
+      }
+    }
+
+    this.quests = this.quests.slice(-12);
+  }
+
   _saveGame() {
     this.save.save?.({
+      seed: this.seed,
       hero: this.hero,
-      progress: this.progress,
+      progress: {
+        ...this.progress,
+        discoveredWaystones: [...(this.progress?.discoveredWaystones || [])],
+        discoveredDocks: [...(this.progress?.discoveredDocks || [])],
+        visitedCamps: [...(this.progress?.visitedCamps || [])],
+      },
+      dungeon: {
+        active: this.dungeon.active,
+        floor: this.dungeon.floor,
+        seed: this.dungeon.seed,
+        currentRoomIndex: this.dungeon.currentRoomIndex,
+        visited: [...(this.dungeon.visited || [])],
+      },
+      cooldowns: this.cooldowns,
+      skillLoadout: this.skillLoadout,
+      selectedSkillSlot: this.selectedSkillSlot,
+      quests: this.quests,
+      questTurnIn: this.questTurnIn,
+      menu: this.menu,
+      time: this.time,
+      msg: this.msg,
+      msgT: this.msgT,
+      zoneMsg: this.zoneMsg,
+      zoneMsgT: this.zoneMsgT,
     });
   }
 
@@ -1263,17 +1516,69 @@ export default class Game {
     const data = this.save.load?.();
     if (!data) return;
 
+    if (typeof data.seed === "number" && Number.isFinite(data.seed)) {
+      this.seed = data.seed | 0;
+    }
+
     if (data.hero) Object.assign(this.hero, data.hero);
-    if (data.progress) this.progress = data.progress;
+
+    if (data.progress) {
+      this.progress = {
+        ...this.progress,
+        ...data.progress,
+        discoveredWaystones: new Set(data.progress.discoveredWaystones || []),
+        discoveredDocks: new Set(data.progress.discoveredDocks || []),
+        visitedCamps: new Set(data.progress.visitedCamps || []),
+      };
+    }
+
+    if (data.cooldowns) this.cooldowns = { ...this.cooldowns, ...data.cooldowns };
+    if (Array.isArray(data.skillLoadout) && data.skillLoadout.length) {
+      this.skillLoadout = data.skillLoadout.slice(0, 4);
+    }
+    if (typeof data.selectedSkillSlot === "number") {
+      this.selectedSkillSlot = clamp(data.selectedSkillSlot | 0, 0, 3);
+    }
+
+    if (Array.isArray(data.quests)) {
+      this.quests = data.quests.map((q) => ({ ...q }));
+      this._questIdCounter = this.quests.reduce((m, q) => Math.max(m, q.id || 0), 0) + 1;
+    }
+
+    if (data.questTurnIn) {
+      this.questTurnIn = { ...data.questTurnIn };
+    }
+
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+    this.hero.state.sailing = false;
   }
 
-  _makeQuests() {
-    return [];
+  _ensureWorldPopulation() {
+    if (this.enemies.length > 0) return;
+
+    const camps = this.world?.camps || [];
+    for (const camp of camps) {
+      for (let i = 0; i < 2; i++) {
+        const a = (i / 2) * Math.PI * 2 + (camp.id || 0) * 0.33;
+        const ex = camp.x + Math.cos(a) * 110;
+        const ey = camp.y + Math.sin(a) * 110;
+        if (!this.world?.canWalk?.(ex, ey)) continue;
+        if (this.world?._isNearWater?.(ex, ey, 48)) continue;
+
+        const kind = i === 0 ? "blob" : "stalker";
+        const e = new Enemy(
+          ex,
+          ey,
+          Math.max(1, this.hero.level),
+          kind,
+          hash2(ex | 0, ey | 0, camp.id | 0)
+        );
+        e.home = { x: camp.x, y: camp.y };
+        e.campId = camp.id;
+        this.enemies.push(e);
+        if (this.enemies.length >= 10) return;
+      }
+    }
   }
-
-  _updateQuestProgress() {}
-
-  _rebuildCampState() {}
-
-  _ensureWorldPopulation() {}
 }
