@@ -83,18 +83,7 @@
 </html>
 ===== ./src/entities.js =====
 // src/entities.js
-// v62 CAMP AI + LEASH PASS (FULL FILE)
-// Focus:
-// - enemies should not all rush hero from everywhere
-// - camp/home based aggro
-// - leash back toward home
-// - preserve exports and compatibility
-// Exports:
-// - makeGear
-// - Hero
-// - Enemy
-// - Projectile
-// - Loot
+// v75 ITEMIZATION DEPTH PASS (FULL FILE)
 
 import { clamp, norm, RNG, hash2 } from "./util.js";
 
@@ -108,75 +97,202 @@ export function makeGear(slot = "weapon", level = 1, rarity = null, seed = 0) {
   if (!rarity) {
     const r = rr.float();
     rarity =
-      r < 0.58 ? "common" :
-      r < 0.83 ? "uncommon" :
-      r < 0.96 ? "rare" :
+      r < 0.52 ? "common" :
+      r < 0.80 ? "uncommon" :
+      r < 0.94 ? "rare" :
       "epic";
   }
 
   const rarityMult =
-    rarity === "epic" ? 1.9 :
-    rarity === "rare" ? 1.45 :
+    rarity === "epic" ? 2.05 :
+    rarity === "rare" ? 1.52 :
     rarity === "uncommon" ? 1.18 :
     1.0;
 
   const lvl = Math.max(1, level | 0);
-  const stats = { dmg: 0, armor: 0, crit: 0 };
+  const stats = {
+    dmg: 0,
+    armor: 0,
+    crit: 0,
+    critMult: 0,
+  };
+
+  const styleRoll = rr.float();
 
   switch (slot) {
-    case "weapon":
-      stats.dmg = Math.max(1, Math.round((4 + lvl * 1.8 + rr.range(0, 4)) * rarityMult));
-      if (rarity === "rare" || rarity === "epic") {
-        stats.crit = +(0.02 + lvl * 0.001 + rr.range(0, 0.03)).toFixed(3);
+    case "weapon": {
+      const base = 4 + lvl * 1.95 + rr.range(0, 5);
+      stats.dmg = Math.max(1, Math.round(base * rarityMult));
+
+      if (styleRoll < 0.28) {
+        stats.crit = +(0.01 + lvl * 0.0009 + rr.range(0.00, 0.025) * rarityMult).toFixed(3);
+      } else if (styleRoll < 0.48) {
+        stats.critMult = +(0.08 + lvl * 0.003 + rr.range(0.00, 0.10)).toFixed(3);
+      } else if (styleRoll < 0.62 && rarity !== "common") {
+        stats.dmg += Math.max(1, Math.round(lvl * 0.35));
+      }
+
+      if (rarity === "epic" && rr.float() < 0.45) {
+        stats.crit = +(stats.crit + 0.02 + rr.range(0.00, 0.02)).toFixed(3);
       }
       break;
+    }
+
     case "armor":
-    case "chest":
-      stats.armor = Math.max(1, Math.round((2 + lvl * 1.4 + rr.range(0, 3)) * rarityMult));
+    case "chest": {
+      const base = 2 + lvl * 1.55 + rr.range(0, 4);
+      stats.armor = Math.max(1, Math.round(base * rarityMult));
+
+      if (styleRoll < 0.22) {
+        stats.dmg = Math.max(0, Math.round(lvl * 0.22));
+      } else if (styleRoll < 0.38) {
+        stats.crit = +(0.005 + rr.range(0.00, 0.012)).toFixed(3);
+      }
+
+      if (rarity === "epic" && rr.float() < 0.38) {
+        stats.armor += Math.max(1, Math.round(lvl * 0.3));
+      }
       break;
-    case "helm":
-    case "boots":
-      stats.armor = Math.max(1, Math.round((1 + lvl * 0.9 + rr.range(0, 2)) * rarityMult));
+    }
+
+    case "helm": {
+      const base = 1 + lvl * 1.05 + rr.range(0, 3);
+      stats.armor = Math.max(1, Math.round(base * rarityMult));
+
+      if (styleRoll < 0.34) {
+        stats.crit = +(0.006 + lvl * 0.0005 + rr.range(0.00, 0.012)).toFixed(3);
+      } else if (styleRoll < 0.52 && rarity !== "common") {
+        stats.critMult = +(0.05 + rr.range(0.00, 0.07)).toFixed(3);
+      }
       break;
-    case "ring":
-    case "trinket":
-      stats.crit = +(0.01 + lvl * 0.0008 + rr.range(0, 0.025) * rarityMult).toFixed(3);
-      if (rarity === "epic") stats.dmg = Math.max(0, Math.round(lvl * 0.4));
+    }
+
+    case "boots": {
+      const base = 1 + lvl * 0.95 + rr.range(0, 2.5);
+      stats.armor = Math.max(1, Math.round(base * rarityMult));
+
+      if (styleRoll < 0.30) {
+        stats.crit = +(0.007 + rr.range(0.00, 0.015)).toFixed(3);
+      } else if (styleRoll < 0.52) {
+        stats.dmg = Math.max(0, Math.round(lvl * 0.18));
+      }
       break;
-    default:
-      stats.armor = Math.max(0, Math.round((1 + lvl * 0.5) * rarityMult));
+    }
+
+    case "ring": {
+      stats.crit = +(0.012 + lvl * 0.0011 + rr.range(0.00, 0.03) * rarityMult).toFixed(3);
+
+      if (styleRoll < 0.34) {
+        stats.dmg = Math.max(1, Math.round(lvl * 0.45 * rarityMult));
+      } else if (styleRoll < 0.67) {
+        stats.critMult = +(0.10 + lvl * 0.0025 + rr.range(0.00, 0.08)).toFixed(3);
+      } else {
+        stats.armor = Math.max(0, Math.round(lvl * 0.20));
+      }
       break;
+    }
+
+    case "trinket": {
+      if (styleRoll < 0.33) {
+        stats.dmg = Math.max(1, Math.round((1 + lvl * 0.60) * rarityMult));
+        stats.crit = +(0.008 + rr.range(0.00, 0.018)).toFixed(3);
+      } else if (styleRoll < 0.66) {
+        stats.critMult = +(0.12 + lvl * 0.003 + rr.range(0.00, 0.10)).toFixed(3);
+        stats.crit = +(0.006 + rr.range(0.00, 0.012)).toFixed(3);
+      } else {
+        stats.armor = Math.max(1, Math.round((1 + lvl * 0.45) * rarityMult));
+        stats.dmg = Math.max(0, Math.round(lvl * 0.25));
+      }
+      break;
+    }
+
+    default: {
+      stats.armor = Math.max(0, Math.round((1 + lvl * 0.6) * rarityMult));
+      break;
+    }
   }
+
+  cleanupStats(stats);
 
   return {
     slot,
     level: lvl,
     rarity,
-    name: gearName(slot, rarity, rr),
+    name: gearName(slot, rarity, rr, stats),
     stats,
-    price: Math.max(4, Math.round((lvl * 10 + rr.range(0, 12)) * rarityMult)),
+    price: gearPrice(slot, lvl, rarityMult, stats, rr),
   };
 }
 
-function gearName(slot, rarity, rr) {
-  const prefix =
-    rarity === "epic" ? ["Mythic", "Ancient", "Stormforged", "Kingsfall"] :
-    rarity === "rare" ? ["Fine", "Runed", "Steel", "Hunter's"] :
-    rarity === "uncommon" ? ["Sturdy", "Traveler's", "Polished", "Mercenary's"] :
-    ["Plain", "Worn", "Simple", "Old"];
+function cleanupStats(stats) {
+  for (const k of Object.keys(stats)) {
+    if (k === "crit" || k === "critMult") {
+      stats[k] = +Math.max(0, stats[k] || 0).toFixed(3);
+    } else {
+      stats[k] = Math.max(0, Math.round(stats[k] || 0));
+    }
+  }
+}
 
-  const coreBySlot = {
-    weapon: ["Blade", "Sword", "Wand", "Staff"],
-    armor: ["Armor", "Mail", "Plate", "Guard"],
+function gearPrice(slot, lvl, rarityMult, stats, rr) {
+  const statScore =
+    (stats.dmg || 0) * 2.2 +
+    (stats.armor || 0) * 1.8 +
+    (stats.crit || 0) * 130 +
+    (stats.critMult || 0) * 75;
+
+  const slotMod =
+    slot === "weapon" ? 1.18 :
+    slot === "ring" ? 1.12 :
+    slot === "trinket" ? 1.12 :
+    slot === "armor" || slot === "chest" ? 1.06 :
+    1.0;
+
+  return Math.max(
+    6,
+    Math.round((lvl * 8 + statScore + rr.range(0, 8)) * rarityMult * slotMod)
+  );
+}
+
+function gearName(slot, rarity, rr, stats) {
+  const rarityPrefix =
+    rarity === "epic" ? ["Mythic", "Ancient", "Kingsfall", "Stormforged", "Voidtouched"] :
+    rarity === "rare" ? ["Runed", "Gilded", "Knight's", "Hunter's", "Moonlit"] :
+    rarity === "uncommon" ? ["Sturdy", "Traveler's", "Mercenary's", "Polished", "Ironbound"] :
+    ["Plain", "Worn", "Old", "Simple", "Rough"];
+
+  const offensiveTag =
+    (stats.critMult || 0) >= 0.14 ? ["Executioner's", "Duelist's", "Ravager's"] :
+    (stats.crit || 0) >= 0.04 ? ["Keen", "Deadeye", "Lucky"] :
+    (stats.dmg || 0) >= (stats.armor || 0) + 4 ? ["Heavy", "Savage", "Warborn"] :
+    ["Guarded", "Balanced", "Tempered"];
+
+  const namesBySlot = {
+    weapon: ["Blade", "Sword", "Wand", "Glaive", "Staff", "Edge"],
+    armor: ["Armor", "Mail", "Plate", "Guard", "Cuirass"],
     chest: ["Chestplate", "Vest", "Cuirass", "Tunic"],
-    helm: ["Helm", "Cap", "Hood", "Crown"],
-    boots: ["Boots", "Greaves", "Striders", "Treads"],
-    ring: ["Ring", "Band", "Loop", "Seal"],
-    trinket: ["Charm", "Idol", "Relic", "Totem"],
+    helm: ["Helm", "Cap", "Hood", "Crown", "Visor"],
+    boots: ["Boots", "Greaves", "Striders", "Treads", "Walkers"],
+    ring: ["Ring", "Band", "Loop", "Seal", "Signet"],
+    trinket: ["Charm", "Idol", "Relic", "Totem", "Sigil"],
   };
 
-  const arr = coreBySlot[slot] || ["Gear"];
-  return `${rr.pick(prefix)} ${rr.pick(arr)}`;
+  const suffixPool =
+    slot === "weapon" ? ["of Cuts", "of Sparks", "of Ruin", "of Reach"] :
+    slot === "armor" || slot === "chest" ? ["of Guard", "of Stone", "of Resolve"] :
+    slot === "helm" ? ["of Sight", "of Thought", "of Focus"] :
+    slot === "boots" ? ["of Motion", "of Dust", "of Trails"] :
+    slot === "ring" ? ["of Fortune", "of Precision", "of Teeth"] :
+    ["of Secrets", "of Echoes", "of Hunger"];
+
+  const core = rr.pick(namesBySlot[slot] || ["Gear"]);
+  const prefixA = rr.pick(rarityPrefix);
+  const prefixB = rr.float() < 0.42 ? rr.pick(offensiveTag) : null;
+  const suffix = rr.float() < 0.55 ? rr.pick(suffixPool) : null;
+
+  let name = prefixB ? `${prefixB} ${core}` : `${prefixA} ${core}`;
+  if (suffix) name += ` ${suffix}`;
+  return name;
 }
 
 /* ===========================
@@ -216,6 +332,12 @@ export class Hero {
       sailing: false,
       dashT: 0,
       hurtT: 0,
+      campBuffT: 0,
+      campBuffPower: 0,
+      dungeonMomentumT: 0,
+      dungeonMomentumPower: 0,
+      eliteChainT: 0,
+      eliteChainCount: 0,
     };
 
     this.lastMove = { x: 1, y: 0 };
@@ -260,9 +382,11 @@ export class Hero {
     for (const key of Object.keys(this.equip || {})) {
       const it = this.equip[key];
       if (!it?.stats) continue;
+
       dmg += it.stats.dmg || 0;
       armor += it.stats.armor || 0;
       crit += it.stats.crit || 0;
+      critMult += it.stats.critMult || 0;
     }
 
     return {
@@ -395,7 +519,7 @@ export class Hero {
 =========================== */
 
 export class Enemy {
-  constructor(x = 0, y = 0, tier = 1, kind = "blob", seed = 1) {
+  constructor(x = 0, y = 0, tier = 1, kind = "blob", seed = 1, elite = null) {
     this.x = x;
     this.y = y;
 
@@ -406,7 +530,15 @@ export class Enemy {
     this.kind = kind || "blob";
     this.seed = seed | 0;
 
+    if (elite == null) {
+      const eliteRoll = Math.abs(hash2((x * 0.25) | 0, (y * 0.25) | 0, seed | 0)) % 100;
+      this.elite = eliteRoll < 9;
+    } else {
+      this.elite = !!elite;
+    }
+
     this.r = this.kind === "brute" ? 16 : this.kind === "stalker" ? 11 : this.kind === "caster" ? 12 : 13;
+    if (this.elite) this.r += 3;
     this.radius = this.r;
 
     this.speed =
@@ -415,12 +547,15 @@ export class Enemy {
       this.kind === "caster" ? 58 + this.tier * 1.5 :
       68 + this.tier * 1.8;
 
+    if (this.elite) this.speed *= 1.08;
+
     this.maxHp =
       this.kind === "brute" ? 34 + this.tier * 16 :
       this.kind === "caster" ? 20 + this.tier * 9 :
       this.kind === "stalker" ? 22 + this.tier * 10 :
       26 + this.tier * 12;
 
+    if (this.elite) this.maxHp = Math.round(this.maxHp * 1.85);
     this.hp = this.maxHp;
 
     this.touchDps =
@@ -428,6 +563,8 @@ export class Enemy {
       this.kind === "stalker" ? 14 + this.tier * 1.2 :
       this.kind === "caster" ? 10 + this.tier :
       12 + this.tier * 1.1;
+
+    if (this.elite) this.touchDps *= 1.35;
 
     this.alive = true;
     this.dead = false;
@@ -444,6 +581,23 @@ export class Enemy {
     this.aggroT = 0;
     this.wanderT = 0;
     this.wanderDir = { x: 0, y: 0 };
+
+    this.behaviorSeed = Math.abs(hash2(x | 0, y | 0, seed | 0)) % 10000;
+    this.sideSign = (this.behaviorSeed % 2 === 0) ? 1 : -1;
+
+    this.strafeT = 0;
+    this.burstShotsLeft = 0;
+    this.burstGapT = 0;
+    this.chargeT = 0;
+    this.cooldownT = 0;
+    this.pulse = 0;
+    this.lungeDir = { x: 0, y: 0 };
+
+    this.preferredRange =
+      this.kind === "caster" ? 180 + (this.behaviorSeed % 30) :
+      this.kind === "stalker" ? 120 + (this.behaviorSeed % 24) :
+      this.kind === "brute" ? 70 + (this.behaviorSeed % 16) :
+      92 + (this.behaviorSeed % 18);
   }
 
   xpValue() {
@@ -453,23 +607,34 @@ export class Enemy {
       this.kind === "stalker" ? 7 :
       6;
 
-    return base + this.tier * 2;
+    return Math.round((base + this.tier * 2) * (this.elite ? 2.2 : 1));
+  }
+
+  lootBonus() {
+    return this.elite ? 2 : 0;
   }
 
   update(dt, hero, world, game) {
     if (!this.alive || !hero) return;
 
-    this.animT += dt * 6;
+    this.animT += dt * (this.elite ? 7.8 : 6.1);
     this.hitFlash = Math.max(0, this.hitFlash - dt * 6);
     this.attackCd = Math.max(0, this.attackCd - dt);
     this.aggroT = Math.max(0, this.aggroT - dt);
     this.wanderT = Math.max(0, this.wanderT - dt);
+    this.strafeT = Math.max(0, this.strafeT - dt);
+    this.burstGapT = Math.max(0, this.burstGapT - dt);
+    this.chargeT = Math.max(0, this.chargeT - dt);
+    this.cooldownT = Math.max(0, this.cooldownT - dt);
+    this.pulse += dt * (this.elite ? 1.6 : 1.2);
 
     const hx = hero.x;
     const hy = hero.y;
     const dx = hx - this.x;
     const dy = hy - this.y;
     const d = Math.hypot(dx, dy) || 0.0001;
+    const toHero = { x: dx / d, y: dy / d };
+    const side = { x: -toHero.y * this.sideSign, y: toHero.x * this.sideSign };
 
     const home = this.home || { x: this.x, y: this.y };
     const hdx = hx - home.x;
@@ -504,46 +669,54 @@ export class Enemy {
       this.kind === "brute" ? 110 :
       135;
 
-    if (d < directAggroRadius || heroFromHome < campAggroRadius) {
-      this.aggroT = 2.6;
+    const aggroBoost = this.elite ? 1.15 : 1.0;
+
+    if (d < directAggroRadius * aggroBoost || heroFromHome < campAggroRadius * aggroBoost) {
+      this.aggroT = 2.8;
       this.state = "aggro";
     }
 
     if (distFromHome > hardLeash) {
       this.state = "return";
       this.aggroT = 0;
+      this.chargeT = 0;
+      this.burstShotsLeft = 0;
     } else if (this.aggroT <= 0) {
       if (distFromHome > leashRadius) this.state = "return";
       else if (this.state === "aggro") this.state = "idle";
     }
 
-    let tx = 0;
-    let ty = 0;
+    let move = { x: 0, y: 0 };
     let moveSpeed = this.speed * 0.92;
 
     if (this.state === "aggro") {
-      tx = dx / d;
-      ty = dy / d;
-      moveSpeed = this.speed;
-
-      if (this.kind === "caster" && d < 130) {
-        tx *= -1;
-        ty *= -1;
-        moveSpeed *= 0.95;
-      } else if (this.kind === "brute" && d < 90) {
-        moveSpeed *= 0.76;
-      } else if (this.kind === "stalker" && d > 170) {
-        moveSpeed *= 1.14;
+      if (this.kind === "stalker") {
+        this._updateStalker(dt, d, toHero, side);
+        move = this._stalkerMove(d, toHero, side);
+        moveSpeed = this.speed * (this.elite ? 1.06 : 1.0);
+      } else if (this.kind === "brute") {
+        this._updateBrute(dt, d, toHero);
+        move = this._bruteMove(d, toHero);
+        moveSpeed = this.speed;
+      } else if (this.kind === "caster") {
+        this._updateCaster(dt, d, toHero, side, game);
+        move = this._casterMove(d, toHero, side);
+        moveSpeed = this.speed * 0.95;
+      } else {
+        this._updateBlob(dt, d, toHero, side);
+        move = this._blobMove(d, toHero, side);
+        moveSpeed = this.speed * 0.98;
       }
     } else if (this.state === "return") {
       const bd = Math.hypot(backDx, backDy) || 0.0001;
-      tx = backDx / bd;
-      ty = backDy / bd;
+      move.x = backDx / bd;
+      move.y = backDy / bd;
       moveSpeed = this.speed * 0.82;
 
       if (bd < 12) {
         this.state = "idle";
         this.wanderT = 0;
+        this.chargeT = 0;
       }
     } else {
       if (this.wanderT <= 0) {
@@ -553,50 +726,201 @@ export class Enemy {
         this.wanderDir.y = Math.sin(ang);
       }
 
-      tx = this.wanderDir.x;
-      ty = this.wanderDir.y;
+      move.x = this.wanderDir.x;
+      move.y = this.wanderDir.y;
       moveSpeed = this.speed * 0.34;
 
       if (distFromHome > 70) {
         const bd = Math.hypot(backDx, backDy) || 1;
-        tx = backDx / bd;
-        ty = backDy / bd;
+        move.x = backDx / bd;
+        move.y = backDy / bd;
         moveSpeed = this.speed * 0.48;
       }
     }
 
-    const nx = this.x + tx * moveSpeed * dt;
-    const ny = this.y + ty * moveSpeed * dt;
+    const len = Math.hypot(move.x, move.y) || 1;
+    move.x /= len;
+    move.y /= len;
+
+    const nx = this.x + move.x * moveSpeed * dt;
+    const ny = this.y + move.y * moveSpeed * dt;
 
     if (!world?.canWalk || world.canWalk(nx, this.y)) this.x = nx;
     if (!world?.canWalk || world.canWalk(this.x, ny)) this.y = ny;
+  }
 
-    if (this.state === "aggro" && this.kind === "caster" && d < 260 && this.attackCd <= 0) {
-      this.attackCd = 1.5;
+  _updateBlob(dt, d, toHero, side) {
+    if (this.strafeT <= 0) {
+      this.strafeT = 0.8 + ((this.behaviorSeed % 40) / 40) * 0.8;
+      this.sideSign *= -1;
+    }
 
-      const n = norm(dx, dy);
-      const p = new Projectile(
-        this.x + n.x * 12,
-        this.y + n.y * 12,
-        n.x * 225,
-        n.y * 225,
-        Math.round(6 + this.tier * 2.2),
-        1.2,
-        this.tier,
-        {
-          color: "rgba(255,120,120,0.92)",
-          radius: 5,
-          type: "enemy_bolt",
-          hitRadius: 16,
-          onHitHero: true,
-          friendly: false,
-        }
-      );
+    if (d < 78 && this.cooldownT <= 0) {
+      this.cooldownT = this.elite ? 0.55 : 0.7;
+      this.sideSign *= -1;
+    }
 
-      if (game?.projectiles?.push) {
-        game.projectiles.push(p);
+    void dt;
+    void toHero;
+    void side;
+  }
+
+  _blobMove(d, toHero, side) {
+    const push = d > 95 ? 1.0 : d < 64 ? -0.22 : 0.48;
+    const wobble = 0.36 + Math.sin(this.pulse * 5 + this.variant) * 0.16;
+
+    return {
+      x: toHero.x * push + side.x * wobble,
+      y: toHero.y * push + side.y * wobble,
+    };
+  }
+
+  _updateStalker(dt, d, toHero, side) {
+    if (this.strafeT <= 0) {
+      this.strafeT = 1.1 + ((this.behaviorSeed % 55) / 55) * 0.8;
+      this.sideSign *= -1;
+    }
+
+    if (this.chargeT <= 0 && this.cooldownT <= 0 && d > 75 && d < 165) {
+      this.chargeT = this.elite ? 0.42 : 0.32;
+      this.cooldownT = this.elite ? 1.2 : 1.45;
+      this.lungeDir = {
+        x: toHero.x * 0.92 + side.x * 0.18,
+        y: toHero.y * 0.92 + side.y * 0.18,
+      };
+      const ln = Math.hypot(this.lungeDir.x, this.lungeDir.y) || 1;
+      this.lungeDir.x /= ln;
+      this.lungeDir.y /= ln;
+    }
+
+    void dt;
+    void d;
+  }
+
+  _stalkerMove(d, toHero, side) {
+    if (this.chargeT > 0) {
+      return {
+        x: this.lungeDir.x,
+        y: this.lungeDir.y,
+      };
+    }
+
+    const distBias = d > this.preferredRange ? 0.84 : d < 78 ? -0.34 : 0.12;
+    const orbit = 1.15;
+
+    return {
+      x: toHero.x * distBias + side.x * orbit,
+      y: toHero.y * distBias + side.y * orbit,
+    };
+  }
+
+  _updateBrute(dt, d, toHero) {
+    if (this.chargeT <= 0 && this.cooldownT <= 0 && d > 58 && d < 150) {
+      this.chargeT = this.elite ? 0.78 : 0.62;
+      this.cooldownT = this.elite ? 1.9 : 2.25;
+      this.lungeDir = { x: toHero.x, y: toHero.y };
+    }
+
+    void dt;
+  }
+
+  _bruteMove(d, toHero) {
+    if (this.chargeT > 0.36) {
+      return { x: 0, y: 0 };
+    }
+
+    if (this.chargeT > 0) {
+      return {
+        x: this.lungeDir.x,
+        y: this.lungeDir.y,
+      };
+    }
+
+    if (d < 66) {
+      return {
+        x: toHero.x * 0.28,
+        y: toHero.y * 0.28,
+      };
+    }
+
+    return {
+      x: toHero.x,
+      y: toHero.y,
+    };
+  }
+
+  _updateCaster(dt, d, toHero, side, game) {
+    if (this.strafeT <= 0) {
+      this.strafeT = 1.0 + ((this.behaviorSeed % 60) / 60) * 1.0;
+      this.sideSign *= -1;
+    }
+
+    const fireRange = this.elite ? 290 : 260;
+    if (d < fireRange) {
+      if (this.burstShotsLeft <= 0 && this.attackCd <= 0) {
+        this.burstShotsLeft = this.elite ? 3 : 2;
+        this.burstGapT = 0;
+        this.attackCd = this.elite ? 1.15 : 1.55;
+      }
+
+      if (this.burstShotsLeft > 0 && this.burstGapT <= 0) {
+        this.burstGapT = this.elite ? 0.16 : 0.22;
+        this.burstShotsLeft--;
+
+        const lead = 0.10 + (this.elite ? 0.04 : 0);
+        const aim = {
+          x: heroLeadX(game?.hero, lead) - this.x,
+          y: heroLeadY(game?.hero, lead) - this.y,
+        };
+        const n = norm(aim.x, aim.y);
+
+        const spread = (Math.random() - 0.5) * (this.elite ? 0.10 : 0.16);
+        const cs = Math.cos(spread);
+        const sn = Math.sin(spread);
+        const rx = n.x * cs - n.y * sn;
+        const ry = n.x * sn + n.y * cs;
+
+        const p = new Projectile(
+          this.x + rx * 12,
+          this.y + ry * 12,
+          rx * (this.elite ? 255 : 225),
+          ry * (this.elite ? 255 : 225),
+          Math.round((6 + this.tier * 2.2) * (this.elite ? 1.4 : 1)),
+          1.2,
+          this.tier,
+          {
+            color: this.elite ? "rgba(255,210,120,0.95)" : "rgba(255,120,120,0.92)",
+            radius: this.elite ? 6 : 5,
+            type: "enemy_bolt",
+            hitRadius: this.elite ? 18 : 16,
+            onHitHero: true,
+            friendly: false,
+          }
+        );
+
+        if (game?.projectiles?.push) game.projectiles.push(p);
       }
     }
+
+    void dt;
+    void toHero;
+    void side;
+  }
+
+  _casterMove(d, toHero, side) {
+    const desired = this.preferredRange;
+    let distBias = 0;
+
+    if (d < desired - 28) distBias = -0.95;
+    else if (d > desired + 34) distBias = 0.55;
+    else distBias = 0.08;
+
+    const orbit = this.elite ? 0.95 : 0.72;
+
+    return {
+      x: toHero.x * distBias + side.x * orbit,
+      y: toHero.y * distBias + side.y * orbit,
+    };
   }
 
   takeDamage(amount = 0) {
@@ -604,6 +928,7 @@ export class Enemy {
     this.hitFlash = 1;
     this.aggroT = Math.max(this.aggroT, 3.2);
     this.state = "aggro";
+    this.sideSign *= -1;
 
     if (this.hp <= 0) {
       this.alive = false;
@@ -612,16 +937,16 @@ export class Enemy {
   }
 
   draw(ctx) {
-    const bob = Math.sin(this.animT * 1.2) * 0.9;
-    const pulse = 1 + Math.sin(this.animT * 2.1) * 0.04;
+    const bob = Math.sin(this.animT * 1.2) * (this.elite ? 1.3 : 0.9);
+    const pulse = 1 + Math.sin(this.animT * 2.1) * (this.elite ? 0.07 : 0.04);
 
     ctx.save();
     ctx.translate(this.x, this.y + bob);
     ctx.scale(pulse, pulse);
 
-    ctx.fillStyle = "rgba(0,0,0,0.16)";
+    ctx.fillStyle = this.elite ? "rgba(255,215,120,0.20)" : "rgba(0,0,0,0.16)";
     ctx.beginPath();
-    ctx.ellipse(0, this.radius + 1, this.radius * 0.75, 3.5, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, this.radius + 1, this.radius * 0.85, 4, 0, 0, Math.PI * 2);
     ctx.fill();
 
     let main = "#cc4444";
@@ -636,6 +961,15 @@ export class Enemy {
     } else if (this.kind === "brute") {
       main = "#d98a4e";
       dark = "#96541f";
+    }
+
+    if (this.elite) {
+      main =
+        this.kind === "caster" ? "#ffd87e" :
+        this.kind === "stalker" ? "#ffb86b" :
+        this.kind === "brute" ? "#ff9f5f" :
+        "#ffc16b";
+      dark = "#7a4a16";
     }
 
     if (this.hitFlash > 0) {
@@ -653,6 +987,14 @@ export class Enemy {
       } else {
         ctx.fillRect(-this.radius, -this.radius + 1, this.radius * 2, this.radius * 2 - 2);
       }
+
+      if (this.chargeT > 0.36) {
+        ctx.strokeStyle = "rgba(255,220,150,0.90)";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius + 5, 0, Math.PI * 2);
+        ctx.stroke();
+      }
     } else if (this.kind === "stalker") {
       ctx.beginPath();
       ctx.moveTo(0, -this.radius - 2);
@@ -660,15 +1002,32 @@ export class Enemy {
       ctx.lineTo(-this.radius - 1, this.radius - 2);
       ctx.closePath();
       ctx.fill();
+
+      if (this.chargeT > 0) {
+        ctx.strokeStyle = "rgba(200,255,200,0.90)";
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius + 4, 0, Math.PI * 2);
+        ctx.stroke();
+      }
     } else if (this.kind === "caster") {
       ctx.beginPath();
       ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = "rgba(255,255,255,0.35)";
-      ctx.lineWidth = 2;
+
+      ctx.strokeStyle = this.elite ? "rgba(255,233,180,0.70)" : "rgba(255,255,255,0.35)";
+      ctx.lineWidth = this.elite ? 3 : 2;
       ctx.beginPath();
       ctx.arc(0, 0, this.radius + 2, 0, Math.PI * 2);
       ctx.stroke();
+
+      if (this.burstShotsLeft > 0) {
+        ctx.strokeStyle = "rgba(255,180,180,0.92)";
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius + 6, 0, Math.PI * 2);
+        ctx.stroke();
+      }
     } else {
       if (this.variant === 0) {
         ctx.beginPath();
@@ -688,6 +1047,14 @@ export class Enemy {
         ctx.ellipse(0, 0, this.radius + 1.5, this.radius - 2, 0, 0, Math.PI * 2);
         ctx.fill();
       }
+    }
+
+    if (this.elite) {
+      ctx.strokeStyle = "rgba(255,224,140,0.95)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, this.radius + 3.5, 0, Math.PI * 2);
+      ctx.stroke();
     }
 
     ctx.fillStyle = dark;
@@ -716,6 +1083,18 @@ export class Enemy {
     ctx.arc(2.2, -1.5, 1.1, 0, Math.PI * 2);
     ctx.fill();
 
+    if (this.elite) {
+      ctx.fillStyle = "rgba(255,230,160,0.98)";
+      ctx.beginPath();
+      ctx.moveTo(-5, -this.radius - 4);
+      ctx.lineTo(-1.5, -this.radius - 10);
+      ctx.lineTo(0, -this.radius - 5);
+      ctx.lineTo(1.5, -this.radius - 10);
+      ctx.lineTo(5, -this.radius - 4);
+      ctx.closePath();
+      ctx.fill();
+    }
+
     ctx.restore();
   }
 }
@@ -731,7 +1110,7 @@ export class Projectile {
     this.vx = vx;
     this.vy = vy;
 
-    this.dmg = Math.max(1, dmg | 0);
+    this.dmg = Math.max(1, Math.round(dmg || 1));
     this.life = Math.max(0.05, +life || 1);
     this.level = Math.max(1, level | 0);
 
@@ -742,6 +1121,9 @@ export class Projectile {
       hitRadius: 18,
       pierce: false,
       friendly: true,
+      critChance: 0,
+      critMult: 1.7,
+      hitColor: null,
       ...meta,
     };
 
@@ -914,16 +1296,17 @@ export class Loot {
     ctx.restore();
   }
 }
+
+function heroLeadX(hero, t) {
+  return (hero?.x || 0) + (hero?.vx || 0) * t;
+}
+
+function heroLeadY(hero, t) {
+  return (hero?.y || 0) + (hero?.vy || 0) * t;
+}
 ===== ./src/game.js =====
 // src/game.js
-// v64 RPG CAMP SHOP PASS (FULL FILE)
-// Focus:
-// - keep performance gains from v63
-// - add camp shops
-// - buy potions and random gear
-// - sell backpack gear
-// - stronger RPG camp loop
-// - keep current systems compatible
+// v76 CAMP / TOWN PROGRESSION SYSTEMS PASS (FULL FILE)
 
 import World from "./world.js";
 import { clamp, lerp, dist2, norm, RNG, hash2 } from "./util.js";
@@ -946,7 +1329,7 @@ export default class Game {
 
     this.input = new Input(window);
     this.ui = new UI(canvas);
-    this.save = new Save("broke-knight-save-v64");
+    this.save = new Save("broke-knight-save-v76");
 
     this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
     this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
@@ -954,6 +1337,9 @@ export default class Game {
     this.enemies = [];
     this.projectiles = [];
     this.loot = [];
+
+    this.hitSparks = [];
+    this.floatingTexts = [];
 
     this.camera = {
       x: this.hero.x,
@@ -1059,6 +1445,8 @@ export default class Game {
       seed: 0,
       visited: new Set(),
       roomMsgT: 0,
+      boss: null,
+      rewardTier: 0,
     };
 
     this.progress = {
@@ -1066,6 +1454,9 @@ export default class Game {
       discoveredDocks: new Set(),
       dungeonBest: 0,
       visitedCamps: new Set(),
+      eliteKills: 0,
+      campRenown: {},
+      campRestBonusClaimed: {},
     };
 
     this._bindMouse();
@@ -1079,6 +1470,12 @@ export default class Game {
     if (typeof this.hero.state.sailing !== "boolean") this.hero.state.sailing = false;
     if (typeof this.hero.state.dashT !== "number") this.hero.state.dashT = 0;
     if (typeof this.hero.state.hurtT !== "number") this.hero.state.hurtT = 0;
+    if (typeof this.hero.state.campBuffT !== "number") this.hero.state.campBuffT = 0;
+    if (typeof this.hero.state.campBuffPower !== "number") this.hero.state.campBuffPower = 0;
+    if (typeof this.hero.state.dungeonMomentumT !== "number") this.hero.state.dungeonMomentumT = 0;
+    if (typeof this.hero.state.dungeonMomentumPower !== "number") this.hero.state.dungeonMomentumPower = 0;
+    if (typeof this.hero.state.eliteChainT !== "number") this.hero.state.eliteChainT = 0;
+    if (typeof this.hero.state.eliteChainCount !== "number") this.hero.state.eliteChainCount = 0;
 
     this._ensureWorldPopulation();
     this._ensureCampQuests();
@@ -1100,6 +1497,8 @@ export default class Game {
     if (this.hitStopT > 0) {
       this.hitStopT = Math.max(0, this.hitStopT - dt);
       this._tickUI(dt);
+      this._tickBuffs(dt);
+      this._updateFx(dt);
       this.input.endFrame();
       return;
     }
@@ -1108,6 +1507,8 @@ export default class Game {
 
     this._tickUI(dt);
     this._tickCooldowns(dt);
+    this._tickBuffs(dt);
+    this._updateFx(dt);
     this._updateMouseWorld();
     this._handleMenus();
 
@@ -1125,6 +1526,8 @@ export default class Game {
       this._handleFastTravelInput();
     } else if (this.menu.open === "shop") {
       this._handleShopInput();
+    } else if (this.menu.open === "inventory") {
+      this._handleInventoryInput();
     } else {
       this._handleMovement(dt);
       this._handleSpells();
@@ -1155,6 +1558,7 @@ export default class Game {
       this._spawnWorldEnemies(dt);
       this._respawnCampEnemies(dt);
       this._updateOverworldEnemies(dt);
+      this._applyCampSafeZones(dt);
     }
 
     this._updateProjectiles(dt);
@@ -1227,6 +1631,8 @@ export default class Game {
       if (this._inView(e.x, e.y, vb)) e.draw?.(ctx);
     }
 
+    this._drawBossTelegraphWorld(ctx, vb);
+    this._drawFxWorld(ctx, vb);
     this.hero.draw?.(ctx);
 
     if (this.dungeon.active) {
@@ -1306,6 +1712,131 @@ export default class Game {
     }
   }
 
+  _tickBuffs(dt) {
+    const st = this.hero.state || {};
+    st.campBuffT = Math.max(0, (st.campBuffT || 0) - dt);
+    st.dungeonMomentumT = Math.max(0, (st.dungeonMomentumT || 0) - dt);
+    st.eliteChainT = Math.max(0, (st.eliteChainT || 0) - dt);
+
+    if (st.campBuffT <= 0) st.campBuffPower = 0;
+    if (st.dungeonMomentumT <= 0) st.dungeonMomentumPower = 0;
+    if (st.eliteChainT <= 0) st.eliteChainCount = 0;
+  }
+
+  _updateFx(dt) {
+    for (const s of this.hitSparks) {
+      s.t -= dt;
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.vx *= 0.92;
+      s.vy *= 0.92;
+    }
+    this.hitSparks = this.hitSparks.filter((s) => s.t > 0);
+
+    for (const f of this.floatingTexts) {
+      f.t -= dt;
+      f.y -= f.speed * dt;
+    }
+    this.floatingTexts = this.floatingTexts.filter((f) => f.t > 0);
+  }
+
+  _currentDamageBonus() {
+    const st = this.hero.state || {};
+    const camp = st.campBuffT > 0 ? st.campBuffPower || 0 : 0;
+    const dungeon = st.dungeonMomentumT > 0 ? st.dungeonMomentumPower || 0 : 0;
+    const chain = Math.max(0, Math.min(6, st.eliteChainCount || 0));
+    return camp + dungeon + chain;
+  }
+
+  _currentIncomingDamageMult() {
+    const st = this.hero.state || {};
+    let mult = 1;
+    if (st.campBuffT > 0) mult -= Math.min(0.22, (st.campBuffPower || 0) * 0.016);
+    if (st.dungeonMomentumT > 0) mult -= Math.min(0.10, (st.dungeonMomentumPower || 0) * 0.012);
+    return Math.max(0.68, mult);
+  }
+
+  _campRenown(campId) {
+    return this.progress?.campRenown?.[campId] || 0;
+  }
+
+  _campTier(campId) {
+    const renown = this._campRenown(campId);
+    if (renown >= 6) return 4;
+    if (renown >= 4) return 3;
+    if (renown >= 2) return 2;
+    return 1;
+  }
+
+  _campTierName(campId) {
+    const t = this._campTier(campId);
+    if (t >= 4) return "Stronghold";
+    if (t >= 3) return "Keep";
+    if (t >= 2) return "Camp";
+    return "Outpost";
+  }
+
+  _campPriceMultiplier(campId) {
+    const tier = this._campTier(campId);
+    return tier >= 4 ? 0.82 : tier >= 3 ? 0.88 : tier >= 2 ? 0.94 : 1.0;
+  }
+
+  _campQuestRewardMultiplier(campId) {
+    const tier = this._campTier(campId);
+    return tier >= 4 ? 1.32 : tier >= 3 ? 1.22 : tier >= 2 ? 1.10 : 1.0;
+  }
+
+  _campBlessingStats(campId, strong = false) {
+    const tier = this._campTier(campId);
+    const renown = this._campRenown(campId);
+    const basePower = strong ? 5 : 3;
+    const baseTime = strong ? 120 : 75;
+
+    const power =
+      basePower +
+      (tier - 1) * (strong ? 2 : 1) +
+      Math.floor(renown * 0.35);
+
+    const time =
+      baseTime +
+      (tier - 1) * (strong ? 28 : 18) +
+      Math.floor(renown * 3);
+
+    return { power, time };
+  }
+
+  _campSafeRadius(campId) {
+    const tier = this._campTier(campId);
+    return tier >= 4 ? 205 : tier >= 3 ? 178 : tier >= 2 ? 150 : 118;
+  }
+
+  _grantCampBlessing(campId, strong = false) {
+    const bless = this._campBlessingStats(campId, strong);
+    this.hero.state.campBuffT = Math.max(this.hero.state.campBuffT || 0, bless.time);
+    this.hero.state.campBuffPower = Math.max(this.hero.state.campBuffPower || 0, bless.power);
+    this._msg(`${this._campTierName(campId)} blessing • +${bless.power} power`, 1.2);
+  }
+
+  _grantDungeonMomentum() {
+    const floor = this.dungeon.floor || 1;
+    const power = 4 + Math.min(8, floor);
+    const time = 140;
+
+    this.hero.state.dungeonMomentumT = Math.max(this.hero.state.dungeonMomentumT || 0, time);
+    this.hero.state.dungeonMomentumPower = Math.max(this.hero.state.dungeonMomentumPower || 0, power);
+
+    this._msg(`Dungeon momentum • +${power} power`, 1.3);
+  }
+
+  _grantRoomClearRecovery() {
+    const hpGain = Math.max(6, Math.round(this.hero.maxHp * 0.08));
+    const manaGain = Math.max(8, Math.round(this.hero.maxMana * 0.12));
+
+    this.hero.hp = Math.min(this.hero.maxHp, this.hero.hp + hpGain);
+    this.hero.mana = Math.min(this.hero.maxMana, this.hero.mana + manaGain);
+    this._msg(`Room cleared • +${hpGain} HP +${manaGain} MP`, 0.9);
+  }
+
   _tickCamera(dt) {
     this.camera.x = lerp(this.camera.x, this.hero.x, 1 - Math.exp(-dt * 10));
     this.camera.y = lerp(this.camera.y, this.hero.y, 1 - Math.exp(-dt * 10));
@@ -1338,6 +1869,118 @@ export default class Game {
     return x >= vb.x0 && x <= vb.x1 && y >= vb.y0 && y <= vb.y1;
   }
 
+  _drawFxWorld(ctx, vb) {
+    for (const s of this.hitSparks) {
+      if (!this._inView(s.x, s.y, vb)) continue;
+      const alpha = clamp(s.t / s.maxT, 0, 1);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(s.x - s.vx * 0.04, s.y - s.vy * 0.04);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    for (const f of this.floatingTexts) {
+      if (!this._inView(f.x, f.y, vb)) continue;
+      const alpha = clamp(f.t / f.maxT, 0, 1);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.font = f.crit ? "bold 18px Arial" : "bold 14px Arial";
+      ctx.textAlign = "center";
+      ctx.strokeStyle = "rgba(0,0,0,0.55)";
+      ctx.lineWidth = f.crit ? 4 : 3;
+      ctx.fillStyle = f.color;
+      ctx.strokeText(f.text, f.x, f.y);
+      ctx.fillText(f.text, f.x, f.y);
+      ctx.restore();
+    }
+  }
+
+  _drawBossTelegraphWorld(ctx, vb) {
+    const boss = this.dungeon?.boss;
+    if (!this.dungeon.active || !boss || !boss.enemy?.alive) return;
+
+    const x = boss.enemy.x;
+    const y = boss.enemy.y;
+    if (!this._inView(x, y, vb)) return;
+
+    if (boss.burstTelegraphT > 0) {
+      const p = clamp(1 - boss.burstTelegraphT / boss.burstTelegraphMax, 0, 1);
+      const r = 38 + p * 86;
+      ctx.save();
+      ctx.strokeStyle = `rgba(255,120,120,${0.35 + p * 0.35})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    if (boss.slamTelegraphT > 0) {
+      const p = clamp(1 - boss.slamTelegraphT / boss.slamTelegraphMax, 0, 1);
+      const r = 26 + p * 54;
+      ctx.save();
+      ctx.fillStyle = `rgba(255,170,80,${0.08 + p * 0.12})`;
+      ctx.strokeStyle = `rgba(255,200,120,${0.35 + p * 0.3})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  _spawnHitSparks(x, y, color = "rgba(255,255,255,0.9)", count = 5, speed = 120) {
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const s = speed * (0.55 + Math.random() * 0.85);
+      this.hitSparks.push({
+        x,
+        y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s,
+        color,
+        t: 0.18 + Math.random() * 0.12,
+        maxT: 0.30,
+      });
+    }
+  }
+
+  _spawnFloatingText(x, y, text, color = "rgba(255,255,255,0.95)", crit = false) {
+    this.floatingTexts.push({
+      x,
+      y,
+      text: String(text),
+      color,
+      crit,
+      t: crit ? 0.78 : 0.62,
+      maxT: crit ? 0.78 : 0.62,
+      speed: crit ? 26 : 20,
+    });
+  }
+
+  _getHeroOffense() {
+    const st = this.hero.getStats?.() || { dmg: 8, crit: 0.05, critMult: 1.7 };
+    return {
+      dmg: (st.dmg || 8) + this._currentDamageBonus(),
+      crit: Math.max(0, st.crit || 0),
+      critMult: Math.max(1.2, st.critMult || 1.7),
+    };
+  }
+
+  _rollOutgoingDamage(baseDamage, meta = {}) {
+    const critChance = Math.max(0, meta?.critChance || 0);
+    const critMult = Math.max(1.2, meta?.critMult || 1.7);
+    const crit = Math.random() < critChance;
+    const dmg = crit ? Math.round(baseDamage * critMult) : Math.round(baseDamage);
+    return { dmg: Math.max(1, dmg), crit };
+  }
+
   _drawDungeonWorld(ctx) {
     const room = this._getRoom();
     if (!room) return;
@@ -1345,7 +1988,7 @@ export default class Game {
     const x0 = room.x - room.w * 0.5;
     const y0 = room.y - room.h * 0.5;
 
-    ctx.fillStyle = "rgba(28,28,38,1)";
+    ctx.fillStyle = room.boss ? "rgba(34,26,30,1)" : "rgba(28,28,38,1)";
     ctx.fillRect(x0, y0, room.w, room.h);
 
     const cell = 24;
@@ -1354,16 +1997,26 @@ export default class Game {
         const wx = x0 + x;
         const wy = y0 + y;
         const n = hash2((wx / cell) | 0, (wy / cell) | 0, this.dungeon.floor | 0) >>> 0;
-        ctx.fillStyle = n % 2 === 0 ? "rgba(46,46,58,1)" : "rgba(40,40,50,1)";
+        ctx.fillStyle = room.boss
+          ? (n % 2 === 0 ? "rgba(56,34,40,1)" : "rgba(48,28,34,1)")
+          : (n % 2 === 0 ? "rgba(46,46,58,1)" : "rgba(40,40,50,1)");
         ctx.fillRect(wx, wy, cell + 1, cell + 1);
       }
     }
 
-    ctx.fillStyle = "rgba(64,54,40,1)";
+    ctx.fillStyle = room.boss ? "rgba(86,58,44,1)" : "rgba(64,54,40,1)";
     ctx.fillRect(x0 - 18, y0 - 18, room.w + 36, 18);
     ctx.fillRect(x0 - 18, y0 + room.h, room.w + 36, 18);
     ctx.fillRect(x0 - 18, y0, 18, room.h);
     ctx.fillRect(x0 + room.w, y0, 18, room.h);
+
+    if (room.boss) {
+      ctx.strokeStyle = "rgba(255,130,110,0.30)";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(room.x, room.y, 78, 0, Math.PI * 2);
+      ctx.stroke();
+    }
   }
 
   _drawDungeonOverlayWorld(ctx) {
@@ -1371,7 +2024,7 @@ export default class Game {
     if (!room) return;
 
     ctx.save();
-    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.fillStyle = room.boss ? "rgba(20,0,0,0.12)" : "rgba(0,0,0,0.25)";
     ctx.fillRect(room.x - room.w * 0.5, room.y - room.h * 0.5, room.w, room.h);
     ctx.restore();
   }
@@ -1449,6 +2102,24 @@ export default class Game {
     }
   }
 
+  _handleInventoryInput() {
+    const digitPressed =
+      this.input.wasPressed("1") ? 1 :
+      this.input.wasPressed("2") ? 2 :
+      this.input.wasPressed("3") ? 3 :
+      this.input.wasPressed("4") ? 4 :
+      this.input.wasPressed("5") ? 5 :
+      this.input.wasPressed("6") ? 6 :
+      this.input.wasPressed("7") ? 7 :
+      this.input.wasPressed("8") ? 8 :
+      this.input.wasPressed("9") ? 9 :
+      0;
+
+    if (digitPressed > 0) {
+      this._equipInventoryIndex(digitPressed - 1);
+    }
+  }
+
   _handleSpells() {
     const aim = this._getAim();
 
@@ -1461,52 +2132,22 @@ export default class Game {
   _handleShopInput() {
     if (!this.shop.campId) return;
 
-    if (this.input.wasPressed("1")) {
-      this._buyPotion("hp");
-      return;
-    }
-    if (this.input.wasPressed("2")) {
-      this._buyPotion("mana");
-      return;
-    }
-    if (this.input.wasPressed("3")) {
-      this._buyStockItem(0);
-      return;
-    }
-    if (this.input.wasPressed("4")) {
-      this._buyStockItem(1);
-      return;
-    }
-    if (this.input.wasPressed("5")) {
-      this._sellInventoryIndex(0);
-      return;
-    }
-    if (this.input.wasPressed("6")) {
-      this._sellInventoryIndex(1);
-      return;
-    }
-    if (this.input.wasPressed("7")) {
-      this._sellInventoryIndex(2);
-      return;
-    }
-    if (this.input.wasPressed("8")) {
-      this._sellInventoryIndex(3);
-      return;
-    }
-    if (this.input.wasPressed("9")) {
-      this._sellInventoryIndex(4);
-      return;
-    }
+    if (this.input.wasPressed("1")) { this._buyPotion("hp"); return; }
+    if (this.input.wasPressed("2")) { this._buyPotion("mana"); return; }
+    if (this.input.wasPressed("3")) { this._buyStockItem(0); return; }
+    if (this.input.wasPressed("4")) { this._buyStockItem(1); return; }
+    if (this.input.wasPressed("5")) { this._sellInventoryIndex(0); return; }
+    if (this.input.wasPressed("6")) { this._sellInventoryIndex(1); return; }
+    if (this.input.wasPressed("7")) { this._sellInventoryIndex(2); return; }
+    if (this.input.wasPressed("8")) { this._sellInventoryIndex(3); return; }
+    if (this.input.wasPressed("9")) { this._sellInventoryIndex(4); return; }
   }
 
   _toggleShop() {
     const camp = this._cachedNearbyCamp;
     if (!camp) {
-      if (this.menu.open === "shop") {
-        this.menu.open = null;
-      } else {
-        this._msg("No camp nearby");
-      }
+      if (this.menu.open === "shop") this.menu.open = null;
+      else this._msg("No camp nearby");
       return;
     }
 
@@ -1522,10 +2163,13 @@ export default class Game {
     this._refreshShopForCamp(camp);
     this.menu.open = "shop";
     this.ui.open?.("shop");
-    this._msg(`Camp ${camp.id} shop`, 1.0);
+    this._msg(`${camp.name || `Camp ${camp.id}`} • ${this._campTierName(camp.id)} shop`, 1.1);
   }
 
   _refreshShopForCamp(camp) {
+    const renown = this._campRenown(camp.id);
+    const tier = this._campTier(camp.id);
+
     const needsRefresh =
       this.shop.campId !== camp.id ||
       this.shop.lastRefreshLevel !== this.hero.level;
@@ -1533,35 +2177,47 @@ export default class Game {
     if (!needsRefresh) return;
 
     this.shop.campId = camp.id;
-    this.shop.stockSeed = hash2(camp.id | 0, this.hero.level | 0, this.seed | 0);
+    this.shop.stockSeed = hash2(camp.id | 0, this.hero.level | 0, this.seed | 0, renown | 0);
     this.shop.refreshTier = Math.max(1, this.hero.level);
     this.shop.lastRefreshLevel = this.hero.level;
 
     const rng = new RNG(this.shop.stockSeed);
+    const rarityBoost =
+      tier >= 4 ? 0.16 :
+      tier >= 3 ? 0.10 :
+      tier >= 2 ? 0.05 :
+      0;
+
     const weaponRarityRoll = rng.float();
     const armorRarityRoll = rng.float();
 
     const weaponRarity =
-      weaponRarityRoll < 0.55 ? "common" :
-      weaponRarityRoll < 0.84 ? "uncommon" :
-      weaponRarityRoll < 0.96 ? "rare" : "epic";
+      weaponRarityRoll < 0.46 - rarityBoost ? "common" :
+      weaponRarityRoll < 0.76 - rarityBoost ? "uncommon" :
+      weaponRarityRoll < 0.92 ? "rare" :
+      "epic";
 
     const armorRarity =
-      armorRarityRoll < 0.58 ? "common" :
-      armorRarityRoll < 0.86 ? "uncommon" :
-      armorRarityRoll < 0.97 ? "rare" : "epic";
+      armorRarityRoll < 0.50 - rarityBoost ? "common" :
+      armorRarityRoll < 0.80 - rarityBoost ? "uncommon" :
+      armorRarityRoll < 0.94 ? "rare" :
+      "epic";
 
-    const weapon = makeGear("weapon", this.hero.level, weaponRarity, hash2(this.shop.stockSeed, 11));
-    const armor = makeGear("armor", this.hero.level, armorRarity, hash2(this.shop.stockSeed, 23));
+    const levelBoost = Math.floor(renown * 0.45) + Math.max(0, tier - 1);
+    const weapon = makeGear("weapon", this.hero.level + levelBoost, weaponRarity, hash2(this.shop.stockSeed, 11));
+    const armor = makeGear("armor", this.hero.level + levelBoost, armorRarity, hash2(this.shop.stockSeed, 23));
 
-    weapon.price = Math.max(20, Math.round(weapon.price * 1.15));
-    armor.price = Math.max(18, Math.round(armor.price * 1.12));
+    const priceMult = 1.15 * this._campPriceMultiplier(camp.id);
+    weapon.price = Math.max(18, Math.round(weapon.price * priceMult));
+    armor.price = Math.max(16, Math.round(armor.price * (1.12 * this._campPriceMultiplier(camp.id))));
 
     this.shop.stock = [weapon, armor];
   }
 
   _buyPotion(kind) {
-    const cost = kind === "mana" ? 16 : 14;
+    const mult = this._campPriceMultiplier(this.shop.campId);
+    const cost = Math.max(8, Math.round((kind === "mana" ? 16 : 14) * mult));
+
     if ((this.hero.gold || 0) < cost) {
       this._msg("Not enough gold");
       return;
@@ -1585,17 +2241,28 @@ export default class Game {
     }
 
     this.hero.gold -= item.price || 0;
-    this.hero.inventory.push({ ...item });
-    this._msg(`Bought ${item.name}`, 1.2);
+
+    const boughtItem = { ...item };
+    const diff = this._compareItemVsEquipped(boughtItem);
+
+    if (diff >= 1.2) {
+      this._equipItemDirect(boughtItem, true);
+      this._msg(`Bought and equipped ${boughtItem.name}`, 1.2);
+    } else {
+      this.hero.inventory.push(boughtItem);
+      this._msg(`Bought ${boughtItem.name}`, 1.2);
+    }
 
     const replacementSlot = item.slot || (index === 0 ? "weapon" : "armor");
+    const campId = this.shop.campId;
+    const levelBoost = Math.floor(this._campRenown(campId) * 0.4) + Math.max(0, this._campTier(campId) - 1);
     const replacement = makeGear(
       replacementSlot,
-      this.hero.level,
+      this.hero.level + levelBoost,
       null,
       hash2(this.shop.stockSeed, this.time * 1000 | 0, index | 0)
     );
-    replacement.price = Math.max(16, Math.round(replacement.price * 1.12));
+    replacement.price = Math.max(14, Math.round(replacement.price * (1.10 * this._campPriceMultiplier(campId))));
     this.shop.stock[index] = replacement;
 
     this._saveSoon();
@@ -1608,11 +2275,90 @@ export default class Game {
     const item = inv[index];
     if (!item) return;
 
-    const sellPrice = Math.max(4, Math.round((item.price || 10) * 0.45));
+    const tier = this._campTier(this.shop.campId);
+    const sellRate = tier >= 4 ? 0.58 : tier >= 3 ? 0.52 : tier >= 2 ? 0.48 : 0.45;
+    const sellPrice = Math.max(4, Math.round((item.price || 10) * sellRate));
+
     this.hero.gold += sellPrice;
     inv.splice(index, 1);
     this._msg(`Sold ${item.name} for ${sellPrice}G`, 1.1);
     this._saveSoon();
+  }
+
+  _gearScore(item) {
+    if (!item?.stats) return -9999;
+    const s = item.stats;
+    return (
+      (s.dmg || 0) * 2.0 +
+      (s.armor || 0) * 1.7 +
+      (s.crit || 0) * 100 +
+      (s.critMult || 0) * 65 +
+      (item.level || 1) * 0.15
+    );
+  }
+
+  _compareItemVsEquipped(item) {
+    if (!item?.slot) return -9999;
+    const current = this.hero.equip?.[item.slot];
+    if (!current?.stats) return 9999;
+    return this._gearScore(item) - this._gearScore(current);
+  }
+
+  _equipItemDirect(item, allowSwap = true) {
+    if (!item?.slot) return false;
+
+    const current = this.hero.equip?.[item.slot];
+    this.hero.equip[item.slot] = { ...item };
+
+    if (allowSwap && current?.slot) {
+      this.hero.inventory.push(current);
+    }
+
+    return true;
+  }
+
+  _equipInventoryIndex(index) {
+    const inv = this.hero.inventory || [];
+    if (index < 0 || index >= inv.length) return false;
+
+    const item = inv[index];
+    if (!item?.slot) return false;
+
+    const current = this.hero.equip?.[item.slot];
+    inv.splice(index, 1);
+    this.hero.equip[item.slot] = item;
+
+    if (current?.slot) {
+      inv.push(current);
+      const diff = this._gearScore(item) - this._gearScore(current);
+      if (diff > 0.5) this._msg(`Equipped ${item.name} • upgrade`, 1.1);
+      else if (diff < -0.5) this._msg(`Equipped ${item.name} • weaker`, 1.1);
+      else this._msg(`Equipped ${item.name}`, 1.1);
+    } else {
+      this._msg(`Equipped ${item.name}`, 1.1);
+    }
+
+    this._saveSoon();
+    return true;
+  }
+
+  _maybeAutoEquipLoot(gear) {
+    if (!gear?.slot) return;
+
+    const diff = this._compareItemVsEquipped(gear);
+
+    if (diff >= 1.2) {
+      const old = this.hero.equip?.[gear.slot];
+      this.hero.equip[gear.slot] = { ...gear };
+      if (old?.slot) this.hero.inventory.push(old);
+      this._msg(`Auto-equipped ${gear.name}`, 1.0);
+    } else if (!this.hero.equip?.[gear.slot]) {
+      this.hero.equip[gear.slot] = { ...gear };
+      this._msg(`Equipped ${gear.name}`, 1.0);
+    } else {
+      this.hero.inventory.push(gear);
+      this._msg(`Looted ${gear.name}`, 1.0);
+    }
   }
 
   _getAim() {
@@ -1637,18 +2383,27 @@ export default class Game {
       return;
     }
 
-    const dmg = this.hero.getStats?.().dmg || 8;
+    const off = this._getHeroOffense();
 
     this.projectiles.push(
       new Projectile(
         this.hero.x + dx * 16,
         this.hero.y + dy * 16,
-        dx * 320,
-        dy * 320,
-        dmg,
+        dx * 340,
+        dy * 340,
+        off.dmg,
         1.0,
         this.hero.level,
-        { friendly: true, color: "#8be9ff", type: "spark", radius: 5, hitRadius: 18 }
+        {
+          friendly: true,
+          color: "#8be9ff",
+          type: "spark",
+          radius: 5,
+          hitRadius: 18,
+          critChance: off.crit,
+          critMult: off.critMult,
+          hitColor: "rgba(139,233,255,0.95)",
+        }
       )
     );
 
@@ -1665,7 +2420,7 @@ export default class Game {
       return;
     }
 
-    const dmg = this.hero.getStats?.().dmg || 8;
+    const off = this._getHeroOffense();
 
     this.projectiles.push(
       new Projectile(
@@ -1673,16 +2428,25 @@ export default class Game {
         this.hero.y,
         0,
         0,
-        dmg,
+        off.dmg,
         0.18,
         this.hero.level,
-        { friendly: true, nova: true, radius: 12, hitRadius: 76, color: "#d6f5ff" }
+        {
+          friendly: true,
+          nova: true,
+          radius: 12,
+          hitRadius: 76,
+          color: "#d6f5ff",
+          critChance: off.crit * 0.8,
+          critMult: off.critMult,
+          hitColor: "rgba(214,245,255,0.95)",
+        }
       )
     );
 
     this.cooldowns.w = def.cd;
     this._spellMsg("Nova");
-    this._shake(0.04, 1.6);
+    this._shake(0.05, 2.0);
   }
 
   _castDash(dx, dy) {
@@ -1705,10 +2469,29 @@ export default class Game {
       if (this.world.canWalk(this.hero.x, ny)) this.hero.y = ny;
     }
 
+    this.spawnDashBurst(this.hero.x, this.hero.y, dx, dy);
+
     this.hero.state.dashT = 0.12;
     this.cooldowns.e = def.cd;
-    this._shake(0.08, 3.0);
+    this._shake(0.09, 3.2);
     this._spellMsg("Dash");
+  }
+
+  spawnDashBurst(x, y, dx, dy) {
+    for (let i = 0; i < 8; i++) {
+      const spread = (Math.random() - 0.5) * 1.2;
+      const a = Math.atan2(dy, dx) + Math.PI + spread;
+      const s = 80 + Math.random() * 90;
+      this.hitSparks.push({
+        x,
+        y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s,
+        color: "rgba(255,211,110,0.92)",
+        t: 0.20 + Math.random() * 0.14,
+        maxT: 0.34,
+      });
+    }
   }
 
   _castOrb(dx, dy) {
@@ -1720,23 +2503,33 @@ export default class Game {
       return;
     }
 
-    const dmg = this.hero.getStats?.().dmg || 8;
+    const off = this._getHeroOffense();
 
     this.projectiles.push(
       new Projectile(
         this.hero.x + dx * 18,
         this.hero.y + dy * 18,
-        dx * 180,
-        dy * 180,
-        dmg * 1.4,
+        dx * 190,
+        dy * 190,
+        off.dmg * 1.4,
         1.8,
         this.hero.level,
-        { friendly: true, color: "#c08cff", type: "orb", radius: 8, hitRadius: 24 }
+        {
+          friendly: true,
+          color: "#c08cff",
+          type: "orb",
+          radius: 8,
+          hitRadius: 24,
+          critChance: off.crit + 0.03,
+          critMult: off.critMult + 0.15,
+          hitColor: "rgba(192,140,255,0.96)",
+        }
       )
     );
 
     this.cooldowns.r = def.cd;
     this._spellMsg("Orb");
+    this._shake(0.04, 1.8);
   }
 
   _updateProjectiles(dt) {
@@ -1757,9 +2550,13 @@ export default class Game {
 
       if (p.meta?.onHitHero) {
         if (dist2(p.x, p.y, this.hero.x, this.hero.y) < (p.hitRadius || 16) ** 2) {
-          this.hero.takeDamage?.(p.dmg || 4);
+          const raw = (p.dmg || 4) * this._currentIncomingDamageMult();
+          const dealt = this.hero.takeDamage?.(raw) ?? Math.round(raw);
           p.alive = false;
-          this._shake(0.05, 1.6);
+          this._spawnHitSparks(this.hero.x, this.hero.y, "rgba(255,120,120,0.92)", 6, 130);
+          this._spawnFloatingText(this.hero.x, this.hero.y - 14, `${Math.round(dealt)}`, "rgba(255,160,160,0.96)", false);
+          this._shake(0.05, 1.8);
+          this.hitStopT = Math.max(this.hitStopT, 0.012);
           continue;
         }
       }
@@ -1768,17 +2565,35 @@ export default class Game {
         for (const e of this.enemies) {
           if (!e.alive) continue;
           if (dist2(p.x, p.y, e.x, e.y) < (p.hitRadius || 18) ** 2) {
-            e.takeDamage?.(p.dmg || 4);
+            const roll = this._rollOutgoingDamage(p.dmg || 4, p.meta || {});
+            e.takeDamage?.(roll.dmg);
+
+            const hitColor = p.meta?.hitColor || p.meta?.color || "rgba(255,255,255,0.9)";
+            this._spawnHitSparks(e.x, e.y, hitColor, roll.crit ? 10 : 6, roll.crit ? 180 : 130);
+            this._spawnFloatingText(
+              e.x,
+              e.y - 12,
+              roll.crit ? `CRIT ${roll.dmg}` : `${roll.dmg}`,
+              roll.crit ? "rgba(255,232,140,0.98)" : "rgba(245,248,255,0.96)",
+              roll.crit
+            );
+
+            if (roll.crit) {
+              this._shake(0.05, 2.8);
+              this.hitStopT = Math.max(this.hitStopT, 0.028);
+            } else {
+              this._shake(0.025, 1.2);
+              this.hitStopT = Math.max(this.hitStopT, 0.010);
+            }
 
             if (!p.meta?.pierce) p.alive = false;
 
             if (!e.alive) {
-              this._dropLoot(e.x, e.y, e.tier || 1);
-              this.hero.giveXP?.(e.xpValue?.() || 4);
-              this._onEnemyKilled(e);
+              this._spawnHitSparks(e.x, e.y, "rgba(255,235,170,0.95)", e.elite ? 14 : 8, e.elite ? 230 : 160);
+              this._onEnemyDefeated(e);
               this._killFlashT = 0.7;
               this._combatTextT = 0.65;
-              this._shake(0.05, 1.7);
+              this._shake(0.05, e.elite ? 2.8 : 1.9);
             }
             break;
           }
@@ -1787,6 +2602,43 @@ export default class Game {
     }
 
     this.projectiles = this.projectiles.filter((p) => p.alive !== false);
+  }
+
+  _onEnemyDefeated(enemy) {
+    const st = this.hero.state || {};
+    let goldBonus = enemy.elite ? 6 + enemy.tier * 2 : 0;
+
+    if (enemy.boss) {
+      goldBonus += 40 + (enemy.tier || 1) * 6;
+      this._msg(`Boss defeated • +${goldBonus} Gold`, 1.5);
+      this._spawnHitSparks(enemy.x, enemy.y, "rgba(255,170,120,0.98)", 24, 260);
+      this.hitStopT = Math.max(this.hitStopT, 0.06);
+    } else if (enemy.elite) {
+      st.eliteChainCount = (st.eliteChainT > 0 ? (st.eliteChainCount || 0) : 0) + 1;
+      st.eliteChainT = 18;
+
+      const chainGold = Math.max(0, st.eliteChainCount - 1) * 4;
+      goldBonus += chainGold;
+
+      if (chainGold > 0) {
+        this._msg(`Elite chain x${st.eliteChainCount} • +${goldBonus} Gold`, 1.2);
+      } else {
+        this._msg(`Elite defeated • +${goldBonus} Gold`, 1.2);
+      }
+
+      this.progress.eliteKills = (this.progress.eliteKills || 0) + 1;
+    }
+
+    if (goldBonus > 0) this.hero.gold += goldBonus;
+
+    const lootBonus = enemy.boss ? 4 : enemy.elite ? (enemy.lootBonus?.() || 2) : 0;
+    this._dropLoot(enemy.x, enemy.y, enemy.tier || 1, lootBonus);
+
+    const xpBase = enemy.xpValue?.() || 4;
+    const xp = enemy.boss ? Math.round(xpBase * 2.5) : xpBase + Math.max(0, (st.eliteChainCount || 0) - 1);
+    this.hero.giveXP?.(xp);
+
+    this._onEnemyKilled(enemy);
   }
 
   _updateLoot(dt) {
@@ -1821,14 +2673,7 @@ export default class Game {
         } else if (l.kind === "gear") {
           const gear = l.data;
           if (gear?.slot) {
-            const current = this.hero.equip?.[gear.slot];
-            if (!current) {
-              this.hero.equip[gear.slot] = gear;
-              this._msg(`Equipped ${gear.name}`, 1.0);
-            } else {
-              this.hero.inventory.push(gear);
-              this._msg(`Looted ${gear.name}`, 1.0);
-            }
+            this._maybeAutoEquipLoot(gear);
           }
         }
       }
@@ -1837,18 +2682,39 @@ export default class Game {
     this.loot = this.loot.filter((l) => l.alive !== false);
   }
 
-  _dropLoot(x, y, lvl) {
+  _dropLoot(x, y, lvl, bonus = 0) {
     if (this.loot.length >= this.perf.maxLoot) return;
 
-    if (Math.random() < 0.72) {
-      this.loot.push(new Loot(x, y, "gold", { amount: 4 + Math.floor(Math.random() * 6) + (lvl | 0) }));
+    const goldChance = Math.min(0.95, 0.72 + bonus * 0.08);
+    const gearChance = Math.min(0.92, 0.18 + bonus * 0.18);
+    const potionChance = Math.min(0.55, 0.09 + bonus * 0.08);
+
+    if (Math.random() < goldChance) {
+      this.loot.push(
+        new Loot(x, y, "gold", {
+          amount: 4 + Math.floor(Math.random() * 6) + (lvl | 0) + bonus * 3
+        })
+      );
     }
 
-    if (Math.random() < 0.18 && this.loot.length < this.perf.maxLoot) {
-      this.loot.push(new Loot(x, y, "gear", makeGear("weapon", lvl, null, hash2(x | 0, y | 0, lvl | 0))));
+    if (Math.random() < gearChance && this.loot.length < this.perf.maxLoot) {
+      let rarity = null;
+      let slot = Math.random() < 0.62 ? "weapon" : "armor";
+
+      if (bonus >= 2) {
+        const r = Math.random();
+        rarity = r < 0.18 ? "epic" : r < 0.60 ? "rare" : "uncommon";
+        if (Math.random() < 0.25) {
+          slot = Math.random() < 0.5 ? "ring" : "boots";
+        }
+      }
+
+      this.loot.push(
+        new Loot(x, y, "gear", makeGear(slot, lvl + bonus, rarity, hash2(x | 0, y | 0, lvl | 0, bonus | 0)))
+      );
     }
 
-    if (Math.random() < 0.09 && this.loot.length < this.perf.maxLoot) {
+    if (Math.random() < potionChance && this.loot.length < this.perf.maxLoot) {
       this.loot.push(new Loot(x, y, "potion", { potionType: Math.random() < 0.5 ? "hp" : "mana" }));
     }
   }
@@ -1887,7 +2753,9 @@ export default class Game {
       roll < 0.47 ? "caster" :
       "blob";
 
-    const e = new Enemy(x, y, this.hero.level, kind, hash2(x | 0, y | 0, this.time | 0));
+    const elite = Math.random() < 0.08 + Math.min(0.08, this.hero.level * 0.003);
+
+    const e = new Enemy(x, y, this.hero.level, kind, hash2(x | 0, y | 0, this.time | 0), elite);
     e.home = { x, y };
     e.campId = null;
     this.enemies.push(e);
@@ -1905,23 +2773,34 @@ export default class Game {
     if (this.dungeon.active) return;
 
     for (const camp of camps) {
-      const heroNear = dist2(this.hero.x, this.hero.y, camp.x, camp.y) < this.perf.campAggroRadius * this.perf.campAggroRadius;
+      const tier = this._campTier(camp.id);
+      const safeRadius = this._campSafeRadius(camp.id);
+      const heroNear = dist2(this.hero.x, this.hero.y, camp.x, camp.y) < (safeRadius + 95) * (safeRadius + 95);
 
       let campCount = 0;
+      let campEliteCount = 0;
       for (const e of this.enemies) {
         if (!e.alive) continue;
-        if (e.campId === camp.id) campCount++;
+        if (e.campId === camp.id) {
+          campCount++;
+          if (e.elite) campEliteCount++;
+        }
       }
 
-      const desired = heroNear ? 3 : 2;
+      const desired =
+        tier >= 4 ? 1 :
+        tier >= 3 ? (heroNear ? 2 : 1) :
+        heroNear ? 3 : 2;
+
       if (campCount >= desired) continue;
 
       const missing = desired - campCount;
       for (let i = 0; i < missing; i++) {
         if (this.enemies.length >= this.perf.maxEnemies) break;
 
+        const minR = safeRadius + 18;
         const ang = Math.random() * Math.PI * 2;
-        const rr = 72 + Math.random() * 56;
+        const rr = minR + 42 + Math.random() * 56;
         const ex = camp.x + Math.cos(ang) * rr;
         const ey = camp.y + Math.sin(ang) * rr;
 
@@ -1936,12 +2815,49 @@ export default class Game {
           roll < 0.46 ? "caster" :
           "blob";
 
-        const e = new Enemy(ex, ey, Math.max(1, this.hero.level), kind, hash2(ex | 0, ey | 0, camp.id | 0));
+        const eliteChance =
+          tier >= 4 ? 0.01 :
+          tier >= 3 ? 0.03 :
+          campEliteCount > 0 ? 0.02 : (heroNear ? 0.14 : 0.10);
+
+        const elite = Math.random() < eliteChance;
+
+        const e = new Enemy(ex, ey, Math.max(1, this.hero.level), kind, hash2(ex | 0, ey | 0, camp.id | 0), elite);
         e.home = { x: camp.x, y: camp.y };
         e.campId = camp.id;
         this.enemies.push(e);
+        if (elite) campEliteCount++;
       }
     }
+  }
+
+  _applyCampSafeZones(dt) {
+    void dt;
+    if (this.dungeon.active) return;
+
+    for (const camp of this.world?.camps || []) {
+      const safeRadius = this._campSafeRadius(camp.id);
+      const safeR2 = safeRadius * safeRadius;
+
+      for (const e of this.enemies) {
+        if (!e?.alive) continue;
+        const d2 = dist2(e.x, e.y, camp.x, camp.y);
+        if (d2 <= safeR2) {
+          const dx = e.x - camp.x;
+          const dy = e.y - camp.y;
+          const n = norm(dx, dy);
+          e.x += n.x * 10;
+          e.y += n.y * 10;
+
+          if (this._campTier(camp.id) >= 3 && d2 < (safeRadius - 28) * (safeRadius - 28)) {
+            e.alive = false;
+            e.dead = true;
+          }
+        }
+      }
+    }
+
+    this.enemies = this.enemies.filter((e) => e.alive !== false);
   }
 
   _applyEnemyTouchDamage(e) {
@@ -1958,7 +2874,12 @@ export default class Game {
     if (this._touchDamageCd > 0) return;
     this._touchDamageCd = this.perf.touchDamageTick;
 
-    this.hero.takeDamage?.((e.touchDps || 3) * this.perf.touchDamageTick);
+    let raw = (e.touchDps || 3) * this.perf.touchDamageTick;
+    if (e.boss) raw *= 1.15;
+    const dealt = this.hero.takeDamage?.(raw * this._currentIncomingDamageMult()) ?? Math.round(raw);
+    this._spawnHitSparks(this.hero.x, this.hero.y, "rgba(255,110,110,0.88)", 5, 110);
+    this._spawnFloatingText(this.hero.x, this.hero.y - 12, `${Math.round(dealt)}`, "rgba(255,160,160,0.95)", false);
+    this.hitStopT = Math.max(this.hitStopT, 0.010);
   }
 
   _updateOverworldEnemies(dt) {
@@ -1995,12 +2916,363 @@ export default class Game {
       this._applyEnemyTouchDamage(e);
     }
 
+    if (room.boss) {
+      this._updateBossEncounter(dt, room);
+    }
+
     this.enemies = this.enemies.filter((e) => e.alive !== false);
 
     if (this.enemies.length === 0) {
-      if (room.exits.next) this._advanceDungeon();
-      else this._completeDungeon();
+      if (room.exits.next) {
+        this._grantRoomClearRecovery();
+        this._advanceDungeon();
+      } else {
+        this._completeDungeon();
+      }
     }
+  }
+
+  _enterDungeon(dg) {
+    if (this.dungeon.active) return;
+
+    this.hero.state.sailing = false;
+    this.dungeon.active = true;
+    this.dungeon.floor = 1;
+    this.dungeon.seed = hash2(dg.x | 0, dg.y | 0, this.seed | 0);
+    this.dungeon.rooms = this._buildDungeon();
+    this.dungeon.currentRoomIndex = 0;
+    this.dungeon.visited = new Set([0]);
+    this.dungeon.boss = null;
+    this.dungeon.rewardTier = 0;
+
+    const room = this._getRoom();
+    this.hero.x = room.x;
+    this.hero.y = room.y;
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+
+    this.enemies = [];
+    this.projectiles = [];
+    this.loot = [];
+
+    this._spawnDungeonEnemies(room);
+    this._msg("Entered Dungeon");
+    this._shake(0.14, 4);
+    this._spawnSuppressionT = 1.5;
+    if (this.menu.open === "shop") this.menu.open = null;
+  }
+
+  _buildDungeon() {
+    const rooms = [];
+    const roomCount = 6;
+
+    for (let i = 0; i < roomCount; i++) {
+      const isBoss = i === roomCount - 1;
+      const prev = i === 0 ? null : rooms[i - 1];
+
+      const dir = i === 0 ? { x: 0, y: 0 } : (i % 2 === 0 ? { x: 1, y: 0 } : { x: 0, y: 1 });
+
+      const x = i === 0 ? 0 : prev.x + dir.x * 520;
+      const y = i === 0 ? 0 : prev.y + dir.y * 360;
+
+      rooms.push({
+        id: i,
+        x,
+        y,
+        w: isBoss ? 560 : 420,
+        h: isBoss ? 360 : 260,
+        boss: isBoss,
+        exits: { next: i < roomCount - 1, prev: i > 0 }
+      });
+    }
+
+    return rooms;
+  }
+
+  _getRoom() {
+    return this.dungeon.rooms[this.dungeon.currentRoomIndex];
+  }
+
+  _spawnDungeonEnemies(room) {
+    this.enemies = [];
+    this.dungeon.boss = null;
+
+    if (room.boss) {
+      const boss = new Enemy(
+        room.x,
+        room.y - 12,
+        this.hero.level + 3,
+        "brute",
+        hash2(room.id | 0, this.seed | 0, 991),
+        true
+      );
+      boss.boss = true;
+      boss.maxHp = Math.round(boss.maxHp * 1.7);
+      boss.hp = boss.maxHp;
+      boss.touchDps *= 1.2;
+      boss.r += 5;
+      boss.radius = boss.r;
+      boss.home = { x: room.x, y: room.y };
+      boss.campId = null;
+      this.enemies.push(boss);
+
+      this.dungeon.boss = {
+        enemy: boss,
+        phase: 1,
+        phase2Triggered: false,
+        burstCd: 2.4,
+        burstTelegraphT: 0,
+        burstTelegraphMax: 0.9,
+        slamCd: 4.8,
+        slamTelegraphT: 0,
+        slamTelegraphMax: 0.75,
+        summonCd: 6.0,
+        summonCount: 0,
+      };
+
+      this._msg("Boss Chamber");
+      return;
+    }
+
+    const count = 3 + Math.min(4, this.dungeon.floor);
+
+    for (let i = 0; i < count; i++) {
+      const ex = room.x + (Math.random() * (room.w - 120) - (room.w - 120) * 0.5);
+      const ey = room.y + (Math.random() * (room.h - 120) - (room.h - 120) * 0.5);
+
+      const roll = Math.random();
+      const kind =
+        roll < 0.18 ? "brute" :
+        roll < 0.36 ? "stalker" :
+        roll < 0.48 ? "caster" :
+        "blob";
+
+      const elite = Math.random() < 0.16 + Math.min(0.10, this.dungeon.floor * 0.02);
+      const e = new Enemy(ex, ey, this.hero.level, kind, hash2(ex | 0, ey | 0, room.id | 0), elite);
+      e.home = { x: ex, y: ey };
+      e.campId = null;
+      this.enemies.push(e);
+    }
+  }
+
+  _updateBossEncounter(dt, room) {
+    const bossState = this.dungeon.boss;
+    const boss = bossState?.enemy;
+    if (!boss || !boss.alive) return;
+
+    const hpPct = boss.hp / Math.max(1, boss.maxHp);
+
+    if (!bossState.phase2Triggered && hpPct <= 0.55) {
+      bossState.phase2Triggered = true;
+      bossState.phase = 2;
+      boss.touchDps *= 1.18;
+      boss.speed *= 1.08;
+      this._summonBossAdds(3, room);
+      this._spawnHitSparks(boss.x, boss.y, "rgba(255,170,120,0.96)", 18, 220);
+      this._msg("Boss enraged!");
+      this._shake(0.14, 4.6);
+    }
+
+    bossState.burstCd -= dt;
+    bossState.slamCd -= dt;
+    bossState.summonCd -= dt;
+
+    if (bossState.burstTelegraphT > 0) {
+      bossState.burstTelegraphT -= dt;
+      if (bossState.burstTelegraphT <= 0) {
+        this._bossRadialBurst(boss);
+        bossState.burstCd = bossState.phase >= 2 ? 2.4 : 3.4;
+      }
+    } else if (bossState.burstCd <= 0) {
+      bossState.burstTelegraphT = bossState.burstTelegraphMax;
+      this._msg("Boss burst!");
+    }
+
+    if (bossState.slamTelegraphT > 0) {
+      bossState.slamTelegraphT -= dt;
+      if (bossState.slamTelegraphT <= 0) {
+        this._bossSlam(boss);
+        bossState.slamCd = bossState.phase >= 2 ? 4.4 : 5.8;
+      }
+    } else if (bossState.slamCd <= 0) {
+      bossState.slamTelegraphT = bossState.slamTelegraphMax;
+      this._msg("Boss slam!");
+    }
+
+    if (bossState.summonCd <= 0 && bossState.summonCount < (bossState.phase >= 2 ? 3 : 1)) {
+      const addCount = bossState.phase >= 2 ? 2 : 1;
+      this._summonBossAdds(addCount, room);
+      bossState.summonCd = bossState.phase >= 2 ? 7.5 : 9.5;
+      bossState.summonCount++;
+    }
+  }
+
+  _bossRadialBurst(boss) {
+    const bolts = 12;
+    for (let i = 0; i < bolts; i++) {
+      const a = (i / bolts) * Math.PI * 2;
+      const dx = Math.cos(a);
+      const dy = Math.sin(a);
+      this.projectiles.push(
+        new Projectile(
+          boss.x + dx * 16,
+          boss.y + dy * 16,
+          dx * 210,
+          dy * 210,
+          8 + boss.tier * 2,
+          1.5,
+          boss.tier,
+          {
+            color: "rgba(255,140,120,0.95)",
+            radius: 5,
+            type: "enemy_bolt",
+            hitRadius: 18,
+            onHitHero: true,
+            friendly: false,
+          }
+        )
+      );
+    }
+
+    this._spawnHitSparks(boss.x, boss.y, "rgba(255,150,120,0.96)", 16, 220);
+    this._shake(0.08, 3.4);
+  }
+
+  _bossSlam(boss) {
+    const dx = this.hero.x - boss.x;
+    const dy = this.hero.y - boss.y;
+    const n = norm(dx, dy);
+
+    const leap = 52;
+    boss.x += n.x * leap;
+    boss.y += n.y * leap;
+
+    const slamR2 = 80 * 80;
+    if (dist2(boss.x, boss.y, this.hero.x, this.hero.y) < slamR2) {
+      const raw = (14 + boss.tier * 2.5) * this._currentIncomingDamageMult();
+      const dealt = this.hero.takeDamage?.(raw) ?? Math.round(raw);
+      this._spawnFloatingText(this.hero.x, this.hero.y - 14, `${Math.round(dealt)}`, "rgba(255,170,150,0.98)", false);
+      this._spawnHitSparks(this.hero.x, this.hero.y, "rgba(255,150,120,0.92)", 8, 160);
+      this.hitStopT = Math.max(this.hitStopT, 0.018);
+    }
+
+    this._spawnHitSparks(boss.x, boss.y, "rgba(255,190,120,0.96)", 18, 240);
+    this._shake(0.10, 4.0);
+  }
+
+  _summonBossAdds(count, room) {
+    for (let i = 0; i < count; i++) {
+      if (this.enemies.length >= this.perf.maxEnemies + 4) break;
+
+      const a = Math.random() * Math.PI * 2;
+      const r = 80 + Math.random() * 56;
+      const ex = room.x + Math.cos(a) * r;
+      const ey = room.y + Math.sin(a) * r;
+
+      const kindRoll = Math.random();
+      const kind = kindRoll < 0.34 ? "stalker" : kindRoll < 0.68 ? "caster" : "blob";
+      const elite = this.dungeon.boss?.phase >= 2 && Math.random() < 0.22;
+
+      const e = new Enemy(ex, ey, this.hero.level + 1, kind, hash2(ex | 0, ey | 0, room.id | 0, this.time | 0), elite);
+      e.home = { x: room.x, y: room.y };
+      e.campId = null;
+      this.enemies.push(e);
+    }
+
+    this._msg("Boss summons reinforcements");
+    this._shake(0.06, 2.8);
+  }
+
+  _advanceDungeon() {
+    this.dungeon.currentRoomIndex++;
+    this.dungeon.floor = Math.max(this.dungeon.floor, this.dungeon.currentRoomIndex + 1);
+
+    const room = this._getRoom();
+    if (!room) return;
+
+    this.hero.x = room.x;
+    this.hero.y = room.y;
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+
+    this._spawnDungeonEnemies(room);
+    this._msg(room.boss ? "Final Chamber" : "Deeper...");
+    this._shake(0.08, 3);
+  }
+
+  _grantDungeonChestReward() {
+    const floor = this.dungeon.floor || 1;
+    const rarityRoll = Math.random();
+
+    const rarity =
+      floor >= 6 && rarityRoll > 0.80 ? "epic" :
+      floor >= 4 && rarityRoll > 0.50 ? "rare" :
+      rarityRoll > 0.35 ? "uncommon" :
+      "common";
+
+    const slotRoll = Math.random();
+    const slot =
+      slotRoll < 0.40 ? "weapon" :
+      slotRoll < 0.68 ? "armor" :
+      slotRoll < 0.84 ? "ring" :
+      "boots";
+
+    const gear = makeGear(
+      slot,
+      this.hero.level + Math.max(1, Math.floor(floor * 0.75)),
+      rarity,
+      hash2(this.seed | 0, this.hero.level | 0, floor | 0, this.time | 0)
+    );
+
+    const bonusGold = 20 + floor * 8 + (this.dungeon.boss?.phase2Triggered ? 14 : 0);
+    this.hero.gold += bonusGold;
+
+    this.hero.potions.hp = (this.hero.potions.hp || 0) + 1;
+    if (Math.random() < 0.8) this.hero.potions.mana = (this.hero.potions.mana || 0) + 1;
+
+    this._maybeAutoEquipLoot(gear);
+    this._msg(`Boss chest: ${gear.name} • +${bonusGold} Gold`, 1.6);
+  }
+
+  _completeDungeon() {
+    this._msg("Dungeon Cleared!");
+    this.hero.gold += 40 + this.dungeon.floor * 10;
+    this.hero.giveXP?.(25 + this.dungeon.floor * 10);
+
+    this.progress.dungeonBest = Math.max(this.progress.dungeonBest || 0, this.dungeon.floor);
+
+    this._grantDungeonChestReward();
+    this._grantDungeonMomentum();
+
+    this.dungeon.active = false;
+    this.dungeon.boss = null;
+
+    const dg = this.world?.dungeons?.[0];
+    if (dg) {
+      this.hero.x = dg.x;
+      this.hero.y = dg.y + 60;
+      this.hero.vx = 0;
+      this.hero.vy = 0;
+    }
+
+    this.enemies = [];
+    this.projectiles = [];
+    this.loot = [];
+
+    this._shake(0.14, 4);
+    this._saveSoon();
+    this._spawnSuppressionT = 2.0;
+  }
+
+  _moveHeroDungeon(nx, ny) {
+    const room = this._getRoom();
+    if (!room) return;
+
+    const halfW = room.w * 0.5 - 12;
+    const halfH = room.h * 0.5 - 12;
+
+    this.hero.x = clamp(nx, room.x - halfW, room.x + halfW);
+    this.hero.y = clamp(ny, room.y - halfH, room.y + halfH);
   }
 
   _autoCloseShopIfNeeded() {
@@ -2064,6 +3336,42 @@ export default class Game {
     }
   }
 
+  _activeCampQuests(campId) {
+    return (this.quests || []).filter((q) => q.campId === campId && !q.turnedIn);
+  }
+
+  _campQuestCapacity(campId) {
+    const tier = this._campTier(campId);
+    return tier >= 4 ? 4 : tier >= 3 ? 3 : tier >= 2 ? 3 : 2;
+  }
+
+  _campRestBonus(campId) {
+    const tier = this._campTier(campId);
+    return this.progress?.campRestBonusClaimed?.[campId] === true || tier < 2;
+  }
+
+  _grantCampRestSupplies(campId) {
+    const tier = this._campTier(campId);
+    if (tier < 2) return;
+    if (this.progress?.campRestBonusClaimed?.[campId]) return;
+
+    if (!this.progress.campRestBonusClaimed) this.progress.campRestBonusClaimed = {};
+    this.progress.campRestBonusClaimed[campId] = true;
+
+    this.hero.potions.hp = (this.hero.potions.hp || 0) + 1;
+    if (tier >= 3) this.hero.potions.mana = (this.hero.potions.mana || 0) + 1;
+
+    if (tier >= 4 && Math.random() < 0.45) {
+      const slot = Math.random() < 0.5 ? "ring" : "boots";
+      const gear = makeGear(slot, this.hero.level + 1, "uncommon", hash2(campId | 0, this.time | 0, this.seed | 0));
+      this.hero.inventory.push(gear);
+      this._msg(`${this._campTierName(campId)} stores • received ${gear.name}`, 1.5);
+      return;
+    }
+
+    this._msg(`${this._campTierName(campId)} stores replenished`, 1.2);
+  }
+
   _interact() {
     if (this.hero.state?.sailing) {
       const dock = this._cachedNearbyDock || this._nearestDock(100);
@@ -2108,30 +3416,72 @@ export default class Game {
   _interactCamp(camp) {
     this.progress.visitedCamps?.add?.(camp.id);
 
-    const existing = this.quests.find((q) => q.campId === camp.id && !q.turnedIn);
+    const renown = this._campRenown(camp.id);
+    const tier = this._campTier(camp.id);
+    const tierName = this._campTierName(camp.id);
+    const active = this._activeCampQuests(camp.id);
+    const completed = active.find((q) => q.done);
 
-    this.hero.hp = Math.min(this.hero.maxHp, this.hero.hp + 20);
-    this.hero.mana = Math.min(this.hero.maxMana, this.hero.mana + 20);
+    const healPct = tier >= 4 ? 1.0 : tier >= 3 ? 0.85 : tier >= 2 ? 0.65 : 0.35;
+    const manaPct = tier >= 4 ? 1.0 : tier >= 3 ? 0.90 : tier >= 2 ? 0.70 : 0.35;
 
-    if (existing && existing.done) {
-      existing.turnedIn = true;
-      this.hero.gold += existing.rewardGold || 0;
-      this.hero.giveXP?.(existing.rewardXp || 0);
-      this.questTurnIn = { id: existing.id, name: existing.name };
-      this._msg(`Quest complete: +${existing.rewardGold} Gold +${existing.rewardXp} XP`, 1.8);
+    this.hero.hp = Math.min(this.hero.maxHp, this.hero.hp + Math.round(this.hero.maxHp * healPct));
+    this.hero.mana = Math.min(this.hero.maxMana, this.hero.mana + Math.round(this.hero.maxMana * manaPct));
+
+    if (completed) {
+      completed.turnedIn = true;
+
+      const rewardMult = this._campQuestRewardMultiplier(camp.id);
+      const rewardGold = Math.round((completed.rewardGold || 0) * rewardMult);
+      const rewardXp = Math.round((completed.rewardXp || 0) * rewardMult);
+
+      this.hero.gold += rewardGold;
+      this.hero.giveXP?.(rewardXp);
+
+      const renownGain = completed.eliteOnly ? 2 : 1;
+      this.progress.campRenown[camp.id] = renown + renownGain;
+      if (this.progress.campRestBonusClaimed) this.progress.campRestBonusClaimed[camp.id] = false;
+      this.questTurnIn = { id: completed.id, name: completed.name };
+
+      this.hero.hp = this.hero.maxHp;
+      this.hero.mana = this.hero.maxMana;
+
+      this._grantCampBlessing(camp.id, true);
+      this._grantCampRestSupplies(camp.id);
+
+      if (tier >= 3 && Math.random() < 0.30) {
+        const bonusGold = 10 + tier * 4;
+        this.hero.gold += bonusGold;
+        this._msg(`${tierName} reward cache • +${bonusGold} Gold`, 1.3);
+      } else {
+        this._msg(`Quest complete: +${rewardGold} Gold +${rewardXp} XP`, 1.8);
+      }
+
+      this._refreshShopForCamp(camp);
       this._saveSoon();
       return;
     }
 
-    if (existing && !existing.done) {
-      this._msg(`Rested at camp • ${existing.have}/${existing.need} ${existing.target}`, 1.5);
+    const currentActive = this._activeCampQuests(camp.id);
+    const capacity = this._campQuestCapacity(camp.id);
+
+    if (currentActive.length < capacity) {
+      const quest = this._createCampQuest(camp);
+      this.quests.push(quest);
+      this._msg(`New quest: ${quest.name}`, 1.6);
+      this._saveSoon();
       return;
     }
 
-    const quest = this._createCampQuest(camp);
-    this.quests.push(quest);
-    this._msg(`New quest: ${quest.name}`, 1.6);
-    this._saveSoon();
+    this._grantCampBlessing(camp.id, false);
+    this._grantCampRestSupplies(camp.id);
+
+    const first = currentActive[0];
+    if (first) {
+      this._msg(`${camp.name || `Camp ${camp.id}`} • ${tierName} • ${first.have}/${first.need} ${first.target}`, 1.5);
+    } else {
+      this._msg(`${camp.name || `Camp ${camp.id}`} • ${tierName}`, 1.2);
+    }
   }
 
   _handleFastTravelInput() {
@@ -2183,7 +3533,7 @@ export default class Game {
 
   _updateZoneMessages(dt) {
     if (this.dungeon.active) {
-      this.zoneMsg = `Dungeon Floor ${this.dungeon.floor}`;
+      this.zoneMsg = this.dungeon.boss?.enemy?.alive ? `Boss Floor ${this.dungeon.floor}` : `Dungeon Floor ${this.dungeon.floor}`;
       this.zoneMsgT = 1.5;
       return;
     }
@@ -2201,7 +3551,7 @@ export default class Game {
     }
 
     if (this._cachedNearbyCamp) {
-      this.zoneMsg = "Camp";
+      this.zoneMsg = `${this._cachedNearbyCamp.name || "Camp"} • ${this._campTierName(this._cachedNearbyCamp.id)}`;
       this.zoneMsgT = 1.0;
       return;
     }
@@ -2291,6 +3641,18 @@ export default class Game {
       const dy = l.y - this.hero.y;
       return dx * dx + dy * dy < farLootR2;
     });
+
+    this.hitSparks = this.hitSparks.filter((s) => {
+      const dx = s.x - this.hero.x;
+      const dy = s.y - this.hero.y;
+      return dx * dx + dy * dy < farProjR2;
+    });
+
+    this.floatingTexts = this.floatingTexts.filter((f) => {
+      const dx = f.x - this.hero.x;
+      const dy = f.y - this.hero.y;
+      return dx * dx + dy * dy < farProjR2;
+    });
   }
 
   _shake(t, mag) {
@@ -2328,9 +3690,12 @@ export default class Game {
   _ensureCampQuests() {
     const camps = this.world?.camps || [];
     for (const camp of camps) {
-      const exists = this.quests.some((q) => q.campId === camp.id && !q.turnedIn);
-      if (!exists && this.progress?.visitedCamps?.has?.(camp.id)) {
-        this.quests.push(this._createCampQuest(camp));
+      const existing = this._activeCampQuests(camp.id);
+      const cap = this._campQuestCapacity(camp.id);
+      while (existing.length < 1 && this.progress?.visitedCamps?.has?.(camp.id) && existing.length < cap) {
+        const q = this._createCampQuest(camp);
+        this.quests.push(q);
+        existing.push(q);
       }
     }
   }
@@ -2338,16 +3703,27 @@ export default class Game {
   _createCampQuest(camp) {
     const types = ["blob", "stalker", "caster"];
     const target = types[Math.floor(Math.random() * types.length)];
-    const need = 3 + Math.floor(Math.random() * 3);
-    const rewardGold = 18 + need * 6 + this.hero.level * 2;
-    const rewardXp = 14 + need * 5 + this.hero.level * 2;
+    const tier = this._campTier(camp.id);
+    const eliteQuest = this.hero.level >= 4 && Math.random() < (tier >= 3 ? 0.38 : 0.28);
+    const need = eliteQuest
+      ? 1 + Math.floor(Math.random() * (tier >= 3 ? 3 : 2))
+      : 3 + Math.floor(Math.random() * (tier >= 4 ? 4 : 3));
+
+    const mult = this._campQuestRewardMultiplier(camp.id);
+    const rewardGold = Math.round(((eliteQuest ? 34 : 18) + need * (eliteQuest ? 12 : 6) + this.hero.level * 2) * mult);
+    const rewardXp = Math.round(((eliteQuest ? 28 : 14) + need * (eliteQuest ? 10 : 5) + this.hero.level * 2) * mult);
 
     return {
       id: this._questIdCounter++,
       type: "kill",
       campId: camp.id,
-      name: `Camp ${camp.id}: Hunt ${target}s`,
-      desc: `Defeat ${need} ${target}${need > 1 ? "s" : ""} near Camp ${camp.id}. Return to camp for payment.`,
+      eliteOnly: eliteQuest,
+      name: eliteQuest
+        ? `${camp.name || `Camp ${camp.id}`}: Elite ${target} bounty`
+        : `${camp.name || `Camp ${camp.id}`}: Hunt ${target}s`,
+      desc: eliteQuest
+        ? `Defeat ${need} elite ${target}${need > 1 ? "s" : ""} near ${camp.name || `Camp ${camp.id}`}.`
+        : `Defeat ${need} ${target}${need > 1 ? "s" : ""} near ${camp.name || `Camp ${camp.id}`}.`,
       target,
       need,
       have: 0,
@@ -2363,6 +3739,7 @@ export default class Game {
       if (q.turnedIn || q.done) continue;
       if (q.type !== "kill") continue;
       if (q.target !== enemy.kind) continue;
+      if (q.eliteOnly && !enemy.elite) continue;
 
       q.have = Math.min(q.need, (q.have || 0) + 1);
       if (q.have >= q.need) {
@@ -2379,7 +3756,7 @@ export default class Game {
       }
     }
 
-    this.quests = this.quests.slice(-12);
+    this.quests = this.quests.slice(-16);
   }
 
   _saveGame() {
@@ -2430,6 +3807,8 @@ export default class Game {
         discoveredWaystones: new Set(data.progress.discoveredWaystones || []),
         discoveredDocks: new Set(data.progress.discoveredDocks || []),
         visitedCamps: new Set(data.progress.visitedCamps || []),
+        campRenown: data.progress.campRenown || {},
+        campRestBonusClaimed: data.progress.campRestBonusClaimed || {},
       };
     }
 
@@ -2468,12 +3847,14 @@ export default class Game {
         if (this.world?._isNearWater?.(ex, ey, 48)) continue;
 
         const kind = i === 0 ? "blob" : "stalker";
+        const elite = i === 1 && Math.random() < 0.12;
         const e = new Enemy(
           ex,
           ey,
           Math.max(1, this.hero.level),
           kind,
-          hash2(ex | 0, ey | 0, camp.id | 0)
+          hash2(ex | 0, ey | 0, camp.id | 0),
+          elite
         );
         e.home = { x: camp.x, y: camp.y };
         e.campId = camp.id;
@@ -3496,12 +4877,7 @@ export default class Save {
 }
 ===== ./src/ui.js =====
 // src/ui.js
-// v59 RPG SHOP UI PASS (FULL FILE)
-// Focus:
-// - add camp shop menu
-// - keep quest / map / inventory panels
-// - stronger RPG camp feedback
-// - compatible with current game.js
+// v74 LOOT + REWARD PRESENTATION PASS (FULL FILE)
 
 import { clamp } from "./util.js";
 
@@ -3556,6 +4932,8 @@ export default class UI {
     this._syncViewFromCanvas();
 
     this._drawHUD(ctx, game);
+    this._drawRewardBuffs(ctx, game);
+    this._drawBossBar(ctx, game);
     this._drawSpellBar(ctx, game);
     this._drawMinimap(ctx, game);
     this._drawHelp(ctx, game);
@@ -3571,7 +4949,7 @@ export default class UI {
     else if (open === "map") this._drawMap(ctx, game);
     else if (open === "quests") this._drawQuests(ctx, game);
     else if (open === "shop") this._drawShop(ctx, game);
-    else if (open === "options") this._drawOptions(ctx, game);
+    else if (open === "options") this._drawOptions(ctx);
   }
 
   _syncViewFromCanvas() {
@@ -3599,12 +4977,12 @@ export default class UI {
 
     const x = 14;
     const y = 12;
-    const panelW = 388;
-    const panelH = 146;
+    const panelW = 418;
+    const panelH = 166;
 
     ctx.save();
 
-    this._panel(ctx, x, y, panelW, panelH, 16, "rgba(10,12,18,0.78)");
+    this._panel(ctx, x, y, panelW, panelH, 16, "rgba(10,12,18,0.80)");
 
     ctx.fillStyle = "rgba(246,248,252,0.96)";
     ctx.font = "bold 13px Arial";
@@ -3613,13 +4991,13 @@ export default class UI {
     const bx = x + 14;
     let by = y + 34;
 
-    this._bar(ctx, bx, by, 264, 15, hpP, "HP", `${Math.round(hero?.hp || 0)}/${Math.round(st.maxHp || 0)}`, "rgba(220,76,104,0.98)");
+    this._bar(ctx, bx, by, 276, 15, hpP, "HP", `${Math.round(hero?.hp || 0)}/${Math.round(st.maxHp || 0)}`, "rgba(220,76,104,0.98)");
     by += 25;
-    this._bar(ctx, bx, by, 264, 15, mpP, "MP", `${Math.round(hero?.mana || 0)}/${Math.round(st.maxMana || 0)}`, "rgba(82,150,255,0.98)");
+    this._bar(ctx, bx, by, 276, 15, mpP, "MP", `${Math.round(hero?.mana || 0)}/${Math.round(st.maxMana || 0)}`, "rgba(82,150,255,0.98)");
     by += 25;
-    this._bar(ctx, bx, by, 264, 12, xpP, "XP", `${Math.round(hero?.xp || 0)}/${Math.round(hero?.nextXp || 0)}`, "rgba(228,196,92,0.98)");
+    this._bar(ctx, bx, by, 276, 12, xpP, "XP", `${Math.round(hero?.xp || 0)}/${Math.round(hero?.nextXp || 0)}`, "rgba(228,196,92,0.98)");
 
-    const rx = x + 295;
+    const rx = x + 306;
     ctx.fillStyle = "rgba(222,230,244,0.90)";
     ctx.font = "13px Arial";
     ctx.fillText(`Lv ${hero?.level || 1}`, rx, y + 39);
@@ -3630,22 +5008,130 @@ export default class UI {
 
     ctx.fillStyle = "rgba(198,208,226,0.82)";
     ctx.font = "12px Arial";
-    ctx.fillText(`1 HP x${hero?.potions?.hp || 0}   2 MP x${hero?.potions?.mana || 0}`, x + 14, y + 131);
+    ctx.fillText(`1 HP x${hero?.potions?.hp || 0}   2 MP x${hero?.potions?.mana || 0}`, x + 14, y + 138);
+
+    const bossAlive = !!game?.dungeon?.boss?.enemy?.alive;
+    const activeQuest = (game?.quests || []).find(q => !q.turnedIn && !q.done);
+    const readyQuest = (game?.quests || []).find(q => !q.turnedIn && q.done);
 
     if (hero?.state?.sailing) {
       this._chip(ctx, x + panelW - 92, y + 10, 76, 18, "SAILING", "rgba(76,152,226,0.95)");
+    } else if (bossAlive) {
+      this._chip(ctx, x + panelW - 108, y + 10, 92, 18, "BOSS FLOOR", "rgba(206,102,86,0.96)");
     } else if (game?.dungeon?.active) {
       this._chip(ctx, x + panelW - 100, y + 10, 84, 18, `FLOOR ${game?.dungeon?.floor || 1}`, "rgba(144,96,220,0.95)");
     } else if (game?.menu?.open === "shop") {
       this._chip(ctx, x + panelW - 88, y + 10, 72, 18, "SHOP", "rgba(218,166,88,0.94)");
+    } else if (readyQuest) {
+      this._chip(ctx, x + panelW - 116, y + 10, 100, 18, "TURN-IN READY", "rgba(122,214,128,0.95)");
+    } else if (activeQuest?.eliteOnly) {
+      this._chip(ctx, x + panelW - 108, y + 10, 92, 18, "ELITE BOUNTY", "rgba(235,160,88,0.95)");
+    } else if (activeQuest) {
+      this._chip(ctx, x + panelW - 96, y + 10, 80, 18, "QUEST", "rgba(88,166,98,0.94)");
     } else {
-      const activeQuest = (game?.quests || []).find(q => !q.turnedIn && !q.done);
-      if (activeQuest) {
-        this._chip(ctx, x + panelW - 96, y + 10, 80, 18, "QUEST", "rgba(88,166,98,0.94)");
-      } else {
-        this._chip(ctx, x + panelW - 108, y + 10, 92, 18, "OVERWORLD", "rgba(88,166,98,0.94)");
-      }
+      this._chip(ctx, x + panelW - 108, y + 10, 92, 18, "OVERWORLD", "rgba(88,166,98,0.94)");
     }
+
+    ctx.restore();
+  }
+
+  _drawRewardBuffs(ctx, game) {
+    const st = game?.hero?.state || {};
+    const entries = [];
+
+    if ((st.campBuffT || 0) > 0) {
+      entries.push({
+        title: "Camp Blessing",
+        value: `+${st.campBuffPower || 0} power`,
+        time: `${Math.ceil(st.campBuffT || 0)}s`,
+        color: "rgba(112,196,112,0.95)",
+        fill: "rgba(26,48,28,0.90)",
+      });
+    }
+
+    if ((st.dungeonMomentumT || 0) > 0) {
+      entries.push({
+        title: "Dungeon Momentum",
+        value: `+${st.dungeonMomentumPower || 0} power`,
+        time: `${Math.ceil(st.dungeonMomentumT || 0)}s`,
+        color: "rgba(154,124,255,0.96)",
+        fill: "rgba(26,22,44,0.90)",
+      });
+    }
+
+    if ((st.eliteChainT || 0) > 0 && (st.eliteChainCount || 0) > 0) {
+      entries.push({
+        title: `Elite Chain x${st.eliteChainCount || 0}`,
+        value: `bonus run pressure`,
+        time: `${Math.ceil(st.eliteChainT || 0)}s`,
+        color: "rgba(255,180,102,0.96)",
+        fill: "rgba(48,28,14,0.90)",
+      });
+    }
+
+    if (!entries.length) return;
+
+    const x = 14;
+    let y = 186;
+
+    ctx.save();
+    for (const e of entries) {
+      this._panel(ctx, x, y, 210, 42, 12, e.fill);
+      ctx.fillStyle = e.color;
+      ctx.font = "bold 13px Arial";
+      ctx.fillText(e.title, x + 12, y + 16);
+      ctx.fillStyle = "rgba(232,238,252,0.90)";
+      ctx.font = "12px Arial";
+      ctx.fillText(e.value, x + 12, y + 32);
+
+      ctx.textAlign = "right";
+      ctx.fillStyle = "rgba(245,248,255,0.95)";
+      ctx.font = "bold 12px Arial";
+      ctx.fillText(e.time, x + 196, y + 24);
+      ctx.textAlign = "left";
+
+      y += 48;
+    }
+    ctx.restore();
+  }
+
+  _drawBossBar(ctx, game) {
+    const boss = game?.dungeon?.boss?.enemy;
+    if (!game?.dungeon?.active || !boss?.alive) return;
+
+    const hpP = clamp((boss.hp || 0) / Math.max(1, boss.maxHp || 1), 0, 1);
+    const phase = game?.dungeon?.boss?.phase || 1;
+
+    const w = Math.min(520, Math.max(340, Math.floor(this.w * 0.44)));
+    const h = 52;
+    const x = ((this.w - w) * 0.5) | 0;
+    const y = 48;
+
+    ctx.save();
+    this._panel(ctx, x, y, w, h, 14, "rgba(28,8,8,0.86)");
+
+    ctx.fillStyle = "rgba(255,214,190,0.96)";
+    ctx.font = "bold 15px Arial";
+    ctx.fillText("Dungeon Boss", x + 14, y + 18);
+
+    this._chip(ctx, x + w - 84, y + 10, 68, 18, `PHASE ${phase}`, phase >= 2 ? "rgba(220,112,80,0.96)" : "rgba(168,92,86,0.94)");
+
+    const barX = x + 14;
+    const barY = y + 28;
+    const barW = w - 28;
+    const barH = 14;
+
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    roundRectFill(ctx, barX, barY, barW, barH, 8);
+
+    ctx.fillStyle = phase >= 2 ? "rgba(236,96,86,0.98)" : "rgba(208,82,102,0.98)";
+    roundRectFill(ctx, barX, barY, Math.max(0, barW * hpP), barH, 8);
+
+    ctx.textAlign = "right";
+    ctx.fillStyle = "rgba(248,248,252,0.96)";
+    ctx.font = "bold 11px Arial";
+    ctx.fillText(`${Math.round(boss.hp || 0)} / ${Math.round(boss.maxHp || 0)}`, x + w - 16, y + 18);
+    ctx.textAlign = "left";
 
     ctx.restore();
   }
@@ -3787,10 +5273,14 @@ export default class UI {
 
     for (const c of game?.world?.camps || []) {
       if (distSq(hx, hy, c.x, c.y) < 100 * 100) {
-        const quest = (game?.quests || []).find(q => q.campId === c.id && !q.turnedIn);
-        if (quest?.done) text = "Press F to turn in quest • H to open shop";
-        else if (quest) text = "Press F to rest at camp • H to open shop";
-        else text = "Press F to take quest • H to open shop";
+        const campQuests = (game?.quests || []).filter(q => q.campId === c.id && !q.turnedIn);
+        const ready = campQuests.find(q => q.done);
+        const elite = campQuests.find(q => q.eliteOnly && !q.done);
+
+        if (ready) text = "Press F to turn in quest • H to open shop";
+        else if (elite) text = "Elite bounty posted • Press F at camp • H for shop";
+        else if (campQuests.length) text = "Press F to rest at camp • H to open shop";
+        else text = "Press F to check camp board • H to open shop";
         break;
       }
     }
@@ -3826,7 +5316,7 @@ export default class UI {
 
     if (!text) return;
 
-    const w = Math.min(500, Math.max(250, Math.floor(this.w * 0.52)));
+    const w = Math.min(520, Math.max(250, Math.floor(this.w * 0.56)));
     const h = 34;
     const x = ((this.w - w) * 0.5) | 0;
     const y = this.h - 128;
@@ -3870,10 +5360,10 @@ export default class UI {
     const inv = Array.isArray(hero?.inventory) ? hero.inventory : [];
     const equip = hero?.equip || {};
 
-    const x = Math.max(20, ((this.w - 820) * 0.5) | 0);
-    const y = Math.max(20, ((this.h - 500) * 0.5) | 0);
-    const w = Math.min(820, this.w - 40);
-    const h = Math.min(500, this.h - 40);
+    const x = Math.max(20, ((this.w - 860) * 0.5) | 0);
+    const y = Math.max(20, ((this.h - 520) * 0.5) | 0);
+    const w = Math.min(860, this.w - 40);
+    const h = Math.min(520, this.h - 40);
 
     ctx.save();
     this._bigPanel(ctx, x, y, w, h, "Inventory");
@@ -3896,7 +5386,7 @@ export default class UI {
     const cols = 2;
     const gap = 10;
     const cellW = Math.floor((rightW - 26 - gap) / cols);
-    const cellH = 72;
+    const cellH = 86;
     const startX = rightX + 12;
     const startY = y + 74;
 
@@ -3905,7 +5395,7 @@ export default class UI {
       const row = Math.floor(i / cols);
       const cx = startX + col * (cellW + gap);
       const cy = startY + row * (cellH + 8);
-      this._itemCard(ctx, cx, cy, cellW, cellH, inv[i], `${i + 1}`);
+      this._itemCard(ctx, cx, cy, cellW, cellH, inv[i], hero, `${i + 1}`);
     }
 
     if (inv.length === 0) {
@@ -3913,6 +5403,10 @@ export default class UI {
       ctx.font = "14px Arial";
       ctx.fillText("Backpack is empty.", rightX + 14, y + 76);
     }
+
+    ctx.fillStyle = "rgba(198,208,226,0.76)";
+    ctx.font = "12px Arial";
+    ctx.fillText("Press 1-9 to equip backpack items while this panel is open.", rightX + 12, y + h - 20);
 
     ctx.restore();
   }
@@ -3957,11 +5451,14 @@ export default class UI {
   _drawGod(ctx, game) {
     const hero = game?.hero;
     const stats = hero?.getStats?.() || {};
+    const campRenown = game?.progress?.campRenown || {};
+    const renownTotal = Object.values(campRenown).reduce((a, b) => a + (b || 0), 0);
+    const st = hero?.state || {};
 
-    const x = Math.max(60, ((this.w - 560) * 0.5) | 0);
-    const y = Math.max(32, ((this.h - 360) * 0.5) | 0);
-    const w = Math.min(560, this.w - 120);
-    const h = Math.min(360, this.h - 64);
+    const x = Math.max(54, ((this.w - 640) * 0.5) | 0);
+    const y = Math.max(26, ((this.h - 440) * 0.5) | 0);
+    const w = Math.min(640, this.w - 108);
+    const h = Math.min(440, this.h - 52);
 
     ctx.save();
     this._bigPanel(ctx, x, y, w, h, "God Menu");
@@ -3975,8 +5472,13 @@ export default class UI {
       `Armor: ${Math.round(stats.armor || 0)}`,
       `Crit: ${Math.round((stats.crit || 0) * 100)}%`,
       `Dungeon Best: ${game?.progress?.dungeonBest || 0}`,
+      `Elite Kills: ${game?.progress?.eliteKills || 0}`,
       `Waystones: ${countSetLike(game?.progress?.discoveredWaystones)}`,
       `Docks: ${countSetLike(game?.progress?.discoveredDocks)}`,
+      `Camp Renown Total: ${renownTotal}`,
+      `Camp Blessing: ${(st.campBuffT || 0) > 0 ? `${Math.ceil(st.campBuffT)}s` : "inactive"}`,
+      `Dungeon Momentum: ${(st.dungeonMomentumT || 0) > 0 ? `${Math.ceil(st.dungeonMomentumT)}s` : "inactive"}`,
+      `Elite Chain: ${(st.eliteChainT || 0) > 0 ? `x${st.eliteChainCount} (${Math.ceil(st.eliteChainT)}s)` : "inactive"}`,
     ];
 
     let ty = y + 72;
@@ -3984,8 +5486,12 @@ export default class UI {
     ctx.font = "15px Arial";
     for (const line of lines) {
       ctx.fillText(line, x + 22, ty);
-      ty += 28;
+      ty += 24;
     }
+
+    ctx.fillStyle = "rgba(204,214,232,0.78)";
+    ctx.font = "12px Arial";
+    ctx.fillText("Camp renown improves camp quality over time.", x + 22, y + h - 20);
 
     ctx.restore();
   }
@@ -3993,6 +5499,8 @@ export default class UI {
   _drawMap(ctx, game) {
     const mini = game?.world?.getMinimapCanvas?.();
     const discovered = [...(game?.progress?.discoveredWaystones || [])];
+    const eliteKills = game?.progress?.eliteKills || 0;
+    const bossAlive = !!game?.dungeon?.boss?.enemy?.alive;
 
     const x = Math.max(20, ((this.w - 860) * 0.5) | 0);
     const y = Math.max(20, ((this.h - 560) * 0.5) | 0);
@@ -4046,6 +5554,10 @@ export default class UI {
     ctx.fillText("1-9 = fast travel", sideX + 12, ty);
     ty += 20;
     ctx.fillText(`Unlocked stones: ${discovered.length}`, sideX + 12, ty);
+    ty += 20;
+    ctx.fillText(`Elite kills: ${eliteKills}`, sideX + 12, ty);
+    ty += 20;
+    ctx.fillText(`Dungeon state: ${bossAlive ? "boss active" : game?.dungeon?.active ? "in run" : "idle"}`, sideX + 12, ty);
 
     ty += 28;
     ctx.fillStyle = "rgba(232,238,252,0.94)";
@@ -4070,10 +5582,10 @@ export default class UI {
   _drawQuests(ctx, game) {
     const quests = Array.isArray(game?.quests) ? game.quests : [];
 
-    const x = Math.max(60, ((this.w - 700) * 0.5) | 0);
-    const y = Math.max(26, ((this.h - 460) * 0.5) | 0);
-    const w = Math.min(700, this.w - 120);
-    const h = Math.min(460, this.h - 52);
+    const x = Math.max(46, ((this.w - 760) * 0.5) | 0);
+    const y = Math.max(24, ((this.h - 500) * 0.5) | 0);
+    const w = Math.min(760, this.w - 92);
+    const h = Math.min(500, this.h - 48);
 
     ctx.save();
     this._bigPanel(ctx, x, y, w, h, "Quests");
@@ -4081,28 +5593,52 @@ export default class UI {
     let ty = y + 72;
     for (let i = 0; i < quests.length && i < 8; i++) {
       const q = quests[i];
-      this._panel(ctx, x + 16, ty - 16, w - 32, 68, 10, "rgba(14,20,30,0.72)");
+      const cardH = 82;
+      this._panel(ctx, x + 16, ty - 16, w - 32, cardH, 10, "rgba(14,20,30,0.72)");
 
-      ctx.fillStyle = q?.turnedIn
+      const titleColor = q?.turnedIn
         ? "rgba(170,170,170,0.80)"
         : q?.done
         ? "rgba(160,240,160,0.95)"
+        : q?.eliteOnly
+        ? "rgba(255,198,132,0.96)"
         : "rgba(236,240,248,0.94)";
+
+      ctx.fillStyle = titleColor;
       ctx.font = "bold 14px Arial";
       ctx.fillText(q?.name || `Quest ${i + 1}`, x + 28, ty);
 
+      const campLabel = `Camp ${q?.campId ?? "?"}`;
+      this._smallBadge(ctx, x + w - 132, ty - 13, 92, 18, campLabel, "rgba(70,108,150,0.95)");
+
+      if (q?.eliteOnly) {
+        this._smallBadge(ctx, x + w - 234, ty - 13, 88, 18, "ELITE", "rgba(205,132,64,0.96)");
+      }
+
       ctx.fillStyle = "rgba(204,214,232,0.82)";
       ctx.font = "12px Arial";
-      ctx.fillText((q?.desc || "").slice(0, 90), x + 28, ty + 16);
+      ctx.fillText((q?.desc || "").slice(0, 96), x + 28, ty + 16);
 
       ctx.fillStyle = "rgba(232,238,252,0.90)";
       ctx.fillText(
         `Progress: ${q?.have || 0}/${q?.need || 0} • Reward: ${q?.rewardGold || 0}G / ${q?.rewardXp || 0}XP`,
         x + 28,
-        ty + 34
+        ty + 36
       );
 
-      ty += 76;
+      ctx.fillStyle = q?.turnedIn
+        ? "rgba(170,170,170,0.78)"
+        : q?.done
+        ? "rgba(160,240,160,0.95)"
+        : "rgba(198,208,226,0.78)";
+      ctx.font = "12px Arial";
+      ctx.fillText(
+        q?.turnedIn ? "Status: turned in" : q?.done ? "Status: ready to turn in" : "Status: active",
+        x + 28,
+        ty + 55
+      );
+
+      ty += 90;
     }
 
     if (!quests.length) {
@@ -4119,11 +5655,12 @@ export default class UI {
     const hero = game?.hero;
     const stock = Array.isArray(shop.stock) ? shop.stock : [];
     const inv = Array.isArray(hero?.inventory) ? hero.inventory : [];
+    const renown = shop?.campId != null ? (game?.progress?.campRenown?.[shop.campId] || 0) : 0;
 
-    const x = Math.max(40, ((this.w - 760) * 0.5) | 0);
-    const y = Math.max(24, ((this.h - 500) * 0.5) | 0);
-    const w = Math.min(760, this.w - 80);
-    const h = Math.min(500, this.h - 48);
+    const x = Math.max(40, ((this.w - 780) * 0.5) | 0);
+    const y = Math.max(24, ((this.h - 520) * 0.5) | 0);
+    const w = Math.min(780, this.w - 80);
+    const h = Math.min(520, this.h - 48);
 
     ctx.save();
     this._bigPanel(ctx, x, y, w, h, `Camp Shop${shop.campId ? ` • Camp ${shop.campId}` : ""}`);
@@ -4131,11 +5668,14 @@ export default class UI {
     ctx.fillStyle = "rgba(232,238,252,0.94)";
     ctx.font = "bold 14px Arial";
     ctx.fillText(`Gold: ${hero?.gold || 0}`, x + 20, y + 60);
+    ctx.fillStyle = "rgba(198,208,226,0.80)";
+    ctx.font = "12px Arial";
+    ctx.fillText(`Camp renown: ${renown}`, x + 120, y + 60);
 
     const leftX = x + 18;
     const leftY = y + 84;
-    const leftW = 320;
-    const rightX = x + 354;
+    const leftW = 332;
+    const rightX = x + 368;
     const rightY = y + 84;
     const rightW = w - (rightX - x) - 18;
 
@@ -4149,19 +5689,21 @@ export default class UI {
         hotkey: "3",
         name: stock[0]?.name || "Weapon",
         price: stock[0]?.price || 0,
-        desc: stock[0] ? itemStatText(stock[0]) : "No stock"
+        desc: stock[0] ? itemStatText(stock[0]) : "No stock",
+        compare: stock[0] ? compareText(stock[0], hero?.equip || {}) : ""
       },
       {
         hotkey: "4",
         name: stock[1]?.name || "Armor",
         price: stock[1]?.price || 0,
-        desc: stock[1] ? itemStatText(stock[1]) : "No stock"
+        desc: stock[1] ? itemStatText(stock[1]) : "No stock",
+        compare: stock[1] ? compareText(stock[1], hero?.equip || {}) : ""
       },
     ];
 
     let by = leftY + 36;
     for (const row of buyRows) {
-      this._panel(ctx, leftX + 10, by, leftW - 20, 62, 10, "rgba(12,18,26,0.72)");
+      this._panel(ctx, leftX + 10, by, leftW - 20, 70, 10, "rgba(12,18,26,0.72)");
       this._hotkeyChip(ctx, leftX + 18, by + 10, row.hotkey);
       ctx.fillStyle = "rgba(242,246,255,0.95)";
       ctx.font = "bold 14px Arial";
@@ -4169,10 +5711,14 @@ export default class UI {
       ctx.fillStyle = "rgba(204,214,232,0.82)";
       ctx.font = "12px Arial";
       ctx.fillText(row.desc, leftX + 52, by + 39);
+      if (row.compare) {
+        ctx.fillStyle = compareColor(row.compare);
+        ctx.fillText(row.compare, leftX + 52, by + 55);
+      }
       ctx.fillStyle = "rgba(255,224,150,0.94)";
       ctx.font = "bold 13px Arial";
-      ctx.fillText(`${row.price}G`, leftX + leftW - 78, by + 28);
-      by += 72;
+      ctx.fillText(`${row.price}G`, leftX + leftW - 82, by + 28);
+      by += 80;
     }
 
     let sy = rightY + 36;
@@ -4181,7 +5727,7 @@ export default class UI {
       const item = inv[i];
       const sellPrice = Math.max(4, Math.round((item?.price || 10) * 0.45));
 
-      this._panel(ctx, rightX + 10, sy, rightW - 20, 62, 10, "rgba(12,18,26,0.72)");
+      this._panel(ctx, rightX + 10, sy, rightW - 20, 70, 10, "rgba(12,18,26,0.72)");
       this._hotkeyChip(ctx, rightX + 18, sy + 10, String(i + 5));
       ctx.fillStyle = rarityTextColor(item?.rarity);
       ctx.font = "bold 14px Arial";
@@ -4189,10 +5735,17 @@ export default class UI {
       ctx.fillStyle = "rgba(204,214,232,0.82)";
       ctx.font = "12px Arial";
       ctx.fillText(itemStatText(item), rightX + 52, sy + 39);
+
+      const cmp = compareText(item, hero?.equip || {});
+      if (cmp) {
+        ctx.fillStyle = compareColor(cmp);
+        ctx.fillText(cmp, rightX + 52, sy + 55);
+      }
+
       ctx.fillStyle = "rgba(160,235,160,0.95)";
       ctx.font = "bold 13px Arial";
-      ctx.fillText(`${sellPrice}G`, rightX + rightW - 78, sy + 28);
-      sy += 72;
+      ctx.fillText(`${sellPrice}G`, rightX + rightW - 82, sy + 28);
+      sy += 80;
     }
 
     if (sellCount === 0) {
@@ -4243,10 +5796,10 @@ export default class UI {
     ctx.fillText(item?.name || "Gear", x + 10, y + 29);
 
     ctx.fillStyle = "rgba(214,222,238,0.72)";
-    ctx.fillText(this._itemStatText(item), x + w - 122, y + 29);
+    ctx.fillText(itemStatText(item), x + w - 126, y + 29);
   }
 
-  _itemCard(ctx, x, y, w, h, item, hotkey = "") {
+  _itemCard(ctx, x, y, w, h, item, hero, hotkey = "") {
     this._panel(ctx, x, y, w, h, 12, "rgba(12,18,26,0.72)");
 
     if (hotkey) {
@@ -4269,11 +5822,18 @@ export default class UI {
 
     ctx.fillStyle = "rgba(222,230,244,0.82)";
     ctx.font = "12px Arial";
-    ctx.fillText(this._itemStatText(item), x + 10, y + 51);
+    ctx.fillText(itemStatText(item), x + 10, y + 50);
+
+    const cmp = compareText(item, hero?.equip || {});
+    if (cmp) {
+      ctx.fillStyle = compareColor(cmp);
+      ctx.font = "11px Arial";
+      ctx.fillText(cmp, x + 10, y + 65);
+    }
 
     ctx.fillStyle = "rgba(196,206,226,0.72)";
     ctx.font = "11px Arial";
-    ctx.fillText(`Lv ${item?.level || 1}`, x + 10, y + 66);
+    ctx.fillText(`Lv ${item?.level || 1}`, x + 10, y + 80);
   }
 
   _skillRow(ctx, x, y, w, index, def, cd, selected) {
@@ -4318,9 +5878,14 @@ export default class UI {
     ctx.textAlign = "left";
   }
 
-  _itemStatText(item) {
-    if (!item || !item.stats) return "";
-    return itemStatText(item);
+  _smallBadge(ctx, x, y, w, h, text, color) {
+    ctx.fillStyle = color;
+    roundRectFill(ctx, x, y, w, h, 8);
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.font = "bold 10px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(text, x + w * 0.5, y + 12);
+    ctx.textAlign = "left";
   }
 
   _panel(ctx, x, y, w, h, r = 12, fill = "rgba(10,14,20,0.75)") {
@@ -4387,6 +5952,34 @@ function itemStatText(item) {
   if (s.armor) parts.push(`ARM ${Math.round(s.armor)}`);
   if (s.crit) parts.push(`CRIT ${Math.round(s.crit * 100)}%`);
   return parts.join(" • ") || "No stats";
+}
+
+function compareText(item, equip) {
+  if (!item || !item.slot || !item.stats) return "";
+  const current = equip?.[item.slot];
+  if (!current?.stats) return "Empty slot";
+
+  const cur = current.stats;
+  const next = item.stats;
+
+  const dmgDiff = Math.round((next.dmg || 0) - (cur.dmg || 0));
+  const armDiff = Math.round((next.armor || 0) - (cur.armor || 0));
+  const critDiff = Math.round(((next.crit || 0) - (cur.crit || 0)) * 100);
+
+  const parts = [];
+  if (dmgDiff) parts.push(`DMG ${dmgDiff > 0 ? "+" : ""}${dmgDiff}`);
+  if (armDiff) parts.push(`ARM ${armDiff > 0 ? "+" : ""}${armDiff}`);
+  if (critDiff) parts.push(`CRIT ${critDiff > 0 ? "+" : ""}${critDiff}%`);
+
+  return parts.join(" • ") || "Similar";
+}
+
+function compareColor(text) {
+  if (!text) return "rgba(204,214,232,0.82)";
+  if (text === "Empty slot") return "rgba(160,235,160,0.95)";
+  if (text.includes("+")) return "rgba(160,235,160,0.95)";
+  if (text.includes("-")) return "rgba(255,170,170,0.95)";
+  return "rgba(204,214,232,0.82)";
 }
 
 function rarityTextColor(rarity) {
@@ -4743,760 +6336,1007 @@ export function circleHit(ax, ay, ar, bx, by, br) {
 }
 ===== ./src/world.js =====
 // src/world.js
-// v58 VISIBLE WORLD PASS (FULL FILE)
-// Focus:
-// - much safer spawn
-// - fewer ugly trapped water pockets
-// - more usable shorelines
-// - better dock placement
-// - stronger rescue when player loads/stuck in bad terrain
-// - keep compatibility with current game.js
+// v77 WORLD VISUAL EVOLUTION FOR CAMP TIERS (FULL FILE)
 
-import { fbm, hash2, RNG } from "./util.js";
+import { hash2, RNG } from "./util.js";
 
 export default class World {
   constructor(seed = 1, opts = {}) {
     this.seed = seed | 0;
+    this.viewW = opts.viewW || 960;
+    this.viewH = opts.viewH || 540;
 
-    this.viewW = Math.max(320, opts.viewW | 0 || 960);
-    this.viewH = Math.max(240, opts.viewH | 0 || 540);
-
-    this.tileSize = opts.tileSize || 24;
-    this.chunkTiles = opts.chunkTiles || 32;
-    this.chunkSize = this.tileSize * this.chunkTiles;
+    this.tile = 32;
     this.boundsRadius = 5200;
 
+    this.spawn = { x: 0, y: 0 };
     this.mapMode = "small";
-    this.revealRadius = 260;
-    this.revealSoftRadius = 360;
-
-    this._chunks = new Map();
-    this._queued = new Set();
-    this._buildQueue = [];
-
-    this._minimap = null;
-    this._minimapDirty = true;
-    this._miniTimer = 0;
-
-    this._revealedSmall = new Set();
-    this._revealedLarge = new Set();
 
     this.camps = [];
-    this.waystones = [];
     this.docks = [];
+    this.waystones = [];
     this.dungeons = [];
 
-    this.spawn = { x: 0, y: 0 };
+    this._miniCanvas = document.createElement("canvas");
+    this._miniCanvas.width = 220;
+    this._miniCanvas.height = 220;
+    this._miniDirty = true;
 
-    this._heroRescueCd = 0;
-    this._lastRevealX = null;
-    this._lastRevealY = null;
+    this._zoneCache = new Map();
 
-    this._poiRng = new RNG(hash2(this.seed, 777));
-
-    this._initPOIs();
-    this.revealAround(this.spawn.x, this.spawn.y, this.revealSoftRadius);
-    this._queueAround(this.spawn.x, this.spawn.y, 2);
+    this._generatePOIs();
+    this.spawn = this._findSafeLandPatchNear(0, 0, 420) || { x: 0, y: 0 };
+    this._rebuildMinimap();
   }
 
   setViewSize(w, h) {
-    this.viewW = Math.max(320, w | 0 || this.viewW);
-    this.viewH = Math.max(240, h | 0 || this.viewH);
+    this.viewW = w | 0;
+    this.viewH = h | 0;
   }
 
   toggleMapScale() {
     this.mapMode = this.mapMode === "small" ? "large" : "small";
-    this._minimapDirty = true;
+    this._miniDirty = true;
   }
 
   update(dt, hero) {
-    if (!hero) return;
-
-    this._queueAround(hero.x, hero.y, 2);
-
-    let builds = 0;
-    while (this._buildQueue.length && builds < 3) {
-      const key = this._buildQueue.shift();
-      this._queued.delete(key);
-
-      if (!this._chunks.has(key)) {
-        const [cx, cy] = key.split(",").map(Number);
-        this._buildChunk(cx, cy);
-      }
-      builds++;
-    }
-
-    if (
-      this._lastRevealX == null ||
-      this._lastRevealY == null ||
-      Math.abs(hero.x - this._lastRevealX) > 80 ||
-      Math.abs(hero.y - this._lastRevealY) > 80
-    ) {
-      this.revealAround(hero.x, hero.y, this.revealSoftRadius);
-      this._lastRevealX = hero.x;
-      this._lastRevealY = hero.y;
-    }
-
-    this._heroRescueCd = Math.max(0, this._heroRescueCd - dt);
-
-    if (!hero.state?.sailing && this._heroRescueCd <= 0) {
-      if (!this.canWalk(hero.x, hero.y) || this._isTrappedInWaterPocket(hero.x, hero.y)) {
-        const rescue =
-          this._findSafeLandPatchNear(hero.x, hero.y, 700) ||
-          this._findNearbyLand(hero.x, hero.y, 700, false, true) ||
-          this._findSafeLandPatchNear(this.spawn.x, this.spawn.y, 700) ||
-          this.spawn ||
-          { x: 0, y: 0 };
-
-        hero.x = rescue.x;
-        hero.y = rescue.y;
-        hero.vx = 0;
-        hero.vy = 0;
-        if (hero.state) hero.state.sailing = false;
-
-        this._heroRescueCd = 2.4;
-        this.revealAround(hero.x, hero.y, this.revealSoftRadius);
-      }
-    }
-
-    this._miniTimer += dt;
-    if (this._miniTimer >= 0.24) {
-      this._miniTimer = 0;
-      this._minimapDirty = true;
-    }
+    void dt;
+    void hero;
   }
 
-  draw(ctx, camera) {
-    if (!ctx || !camera) return;
+  /* ===========================
+     WORLD QUERIES
+  =========================== */
 
-    const camX = camera.x ?? 0;
-    const camY = camera.y ?? 0;
-
-    const halfW = this.viewW * 0.5;
-    const halfH = this.viewH * 0.5;
-    const pad = 128;
-
-    const x0 = camX - halfW - pad;
-    const x1 = camX + halfW + pad;
-    const y0 = camY - halfH - pad;
-    const y1 = camY + halfH + pad;
-
-    const tx0 = Math.floor(x0 / this.tileSize);
-    const tx1 = Math.ceil(x1 / this.tileSize);
-    const ty0 = Math.floor(y0 / this.tileSize);
-    const ty1 = Math.ceil(y1 / this.tileSize);
-
-    for (let ty = ty0; ty <= ty1; ty++) {
-      const wy = ty * this.tileSize;
-      for (let tx = tx0; tx <= tx1; tx++) {
-        const wx = tx * this.tileSize;
-        const tile = this._sampleTile(wx, wy);
-        ctx.fillStyle = this._tileColor(tile, wx, wy);
-        ctx.fillRect(wx, wy, this.tileSize + 1, this.tileSize + 1);
-        this._drawTileDecor(ctx, tile, wx, wy);
-      }
-    }
-
-    this._drawPOIs(ctx);
-  }
-
-  canWalk(x, y) {
-    return this._sampleTile(x, y) !== "water";
+  isWater(x, y) {
+    const n = this._terrainNoise(x, y);
+    const river = this._riverField(x, y);
+    return n < -0.16 || river < 0.09;
   }
 
   isSolid(x, y) {
-    return !this.canWalk(x, y);
+    if (Math.abs(x) > this.boundsRadius || Math.abs(y) > this.boundsRadius) return true;
+    return this.isWater(x, y);
   }
 
-  isWater(x, y) {
-    return this._sampleTile(x, y) === "water";
-  }
-
-  getGroundType(x, y) {
-    return this._sampleTile(x, y);
+  canWalk(x, y) {
+    if (Math.abs(x) > this.boundsRadius || Math.abs(y) > this.boundsRadius) return false;
+    return !this.isWater(x, y);
   }
 
   getMoveModifier(x, y) {
-    const t = this._sampleTile(x, y);
-    if (t === "road") return 1.10;
-    if (t === "sand") return 0.90;
-    if (t === "forest") return 0.84;
-    if (t === "rock") return 0.88;
-    return 1.0;
+    if (this.isWater(x, y)) return 0.84;
+
+    const biome = this.getZoneName(x, y);
+    if (biome === "High Meadow") return 1.04;
+    if (biome === "Old Road") return 1.08;
+    if (biome === "Stone Flats") return 0.98;
+    if (biome === "Whisper Grass") return 0.96;
+    if (biome === "Ash Fields") return 0.93;
+
+    return 1;
   }
 
   getZoneName(x, y) {
-    const t = this._sampleTile(x, y);
-    if (t === "water") return "Open Water";
-    if (t === "sand") return "Shoreline";
-    if (t === "forest") return "Deep Forest";
-    if (t === "rock") return "Stone Fields";
-    if (t === "road") return "Old Road";
-    return "Greenwild";
+    const kx = ((x / 180) | 0);
+    const ky = ((y / 180) | 0);
+    const key = `${kx},${ky}`;
+    if (this._zoneCache.has(key)) return this._zoneCache.get(key);
+
+    const h = Math.abs(hash2(kx, ky, this.seed)) % 1000;
+    let name = "Green Reach";
+
+    if (this._isNearCamp(x, y, 220)) name = "Camp Grounds";
+    else if (this._isNearDungeon(x, y, 240)) name = "Ruin Approach";
+    else if (this._isNearDock(x, y, 220)) name = "Shoreline";
+    else if (this._isNearWaystone(x, y, 220)) name = "Waystone Rise";
+    else if (this._isNearWater(x, y, 90)) name = "Riverbank";
+    else if (h < 130) name = "Whisper Grass";
+    else if (h < 250) name = "Old Road";
+    else if (h < 390) name = "Stone Flats";
+    else if (h < 540) name = "High Meadow";
+    else if (h < 700) name = "Ash Fields";
+    else if (h < 860) name = "Pine Verge";
+    else name = "Green Reach";
+
+    this._zoneCache.set(key, name);
+    return name;
   }
 
-  getMinimapCanvas() {
-    if (!this._minimap || this._minimapDirty) {
-      this._rebuildMinimap();
-    }
-    return this._minimap;
-  }
-
-  isRevealed(wx, wy, mode = this.mapMode) {
-    const set = mode === "large" ? this._revealedLarge : this._revealedSmall;
-    const size = mode === "large" ? 96 : 160;
-    const key = `${Math.floor(wx / size)},${Math.floor(wy / size)}`;
-    return set.has(key);
-  }
-
-  revealAround(x, y, radius) {
-    const addTo = (bucketSize, set) => {
-      const r = Math.max(bucketSize, radius | 0);
-      const x0 = Math.floor((x - r) / bucketSize);
-      const x1 = Math.floor((x + r) / bucketSize);
-      const y0 = Math.floor((y - r) / bucketSize);
-      const y1 = Math.floor((y + r) / bucketSize);
-
-      for (let by = y0; by <= y1; by++) {
-        for (let bx = x0; bx <= x1; bx++) {
-          const cx = bx * bucketSize + bucketSize * 0.5;
-          const cy = by * bucketSize + bucketSize * 0.5;
-          const dx = cx - x;
-          const dy = cy - y;
-          if (dx * dx + dy * dy <= r * r) {
-            set.add(`${bx},${by}`);
-          }
-        }
-      }
-    };
-
-    addTo(160, this._revealedSmall);
-    addTo(96, this._revealedLarge);
-    this._minimapDirty = true;
-  }
-
-  _tileColor(tile, x, y) {
-    const n = (hash2((x / this.tileSize) | 0, (y / this.tileSize) | 0, this.seed) >>> 0) & 7;
-
-    if (tile === "water") {
-      return n < 2 ? "#276caa" : n < 5 ? "#2f80c2" : "#3893d8";
-    }
-    if (tile === "sand") {
-      return n < 3 ? "#cab97f" : "#dbc98f";
-    }
-    if (tile === "road") {
-      return n < 3 ? "#798695" : "#8b98a6";
-    }
-    if (tile === "rock") {
-      return n < 3 ? "#70757d" : "#7d848d";
-    }
-    if (tile === "forest") {
-      return n < 3 ? "#2f5d33" : n < 6 ? "#386c3c" : "#2b542f";
-    }
-    return n < 3 ? "#63a34f" : n < 6 ? "#6fb55a" : "#7bc366";
-  }
-
-  _drawTileDecor(ctx, tile, wx, wy) {
-    const h = hash2((wx / this.tileSize) | 0, (wy / this.tileSize) | 0, this.seed) >>> 0;
-
-    if (tile === "grass") {
-      if (h % 17 === 0) {
-        ctx.fillStyle = "rgba(40,98,34,0.56)";
-        ctx.fillRect(wx + 7, wy + 7, 2, 7);
-        ctx.fillRect(wx + 10, wy + 5, 2, 9);
-      }
-      if (h % 29 === 0) {
-        ctx.fillStyle = "rgba(90,140,68,0.28)";
-        ctx.fillRect(wx + 14, wy + 4, 4, 3);
-      }
-    } else if (tile === "forest") {
-      if (h % 6 === 0) {
-        ctx.fillStyle = "rgba(26,58,30,0.88)";
-        ctx.beginPath();
-        ctx.arc(wx + 12, wy + 12, 7, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.fillStyle = "rgba(34,74,38,0.84)";
-        ctx.beginPath();
-        ctx.arc(wx + 8, wy + 13, 5.5, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.beginPath();
-        ctx.arc(wx + 15, wy + 9, 5.2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    } else if (tile === "rock") {
-      if (h % 9 === 0) {
-        ctx.fillStyle = "rgba(90,96,108,0.55)";
-        ctx.fillRect(wx + 6, wy + 7, 8, 5);
-      }
-    } else if (tile === "water") {
-      if (h % 15 === 0) {
-        ctx.fillStyle = "rgba(255,255,255,0.08)";
-        ctx.fillRect(wx + 6, wy + 11, 8, 1);
-      }
-      if (h % 31 === 0) {
-        ctx.fillStyle = "rgba(255,255,255,0.05)";
-        ctx.fillRect(wx + 11, wy + 7, 4, 1);
-      }
-    } else if (tile === "sand") {
-      if (h % 23 === 0) {
-        ctx.fillStyle = "rgba(186,166,104,0.24)";
-        ctx.fillRect(wx + 9, wy + 9, 5, 2);
-      }
-    }
-  }
-
-  _drawPOIs(ctx) {
-    for (const d of this.docks) {
-      ctx.fillStyle = "rgba(110,82,52,0.95)";
-      ctx.fillRect(d.x - 12, d.y - 4, 24, 8);
-      ctx.fillRect(d.x - 6, d.y - 10, 12, 6);
-      ctx.strokeStyle = "rgba(50,34,20,0.85)";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(d.x - 12, d.y - 4, 24, 8);
-    }
-
-    for (const w of this.waystones) {
-      ctx.fillStyle = "rgba(214,198,116,0.95)";
-      ctx.fillRect(w.x - 6, w.y - 18, 12, 20);
-      ctx.fillStyle = "rgba(255,235,140,0.85)";
-      ctx.fillRect(w.x - 3, w.y - 14, 6, 8);
-      ctx.fillStyle = "rgba(0,0,0,0.18)";
-      ctx.beginPath();
-      ctx.ellipse(w.x, w.y + 8, 10, 4, 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    for (const c of this.camps) {
-      ctx.fillStyle = "rgba(126,74,52,0.96)";
-      ctx.beginPath();
-      ctx.moveTo(c.x, c.y - 10);
-      ctx.lineTo(c.x + 12, c.y + 8);
-      ctx.lineTo(c.x - 12, c.y + 8);
-      ctx.closePath();
-      ctx.fill();
-
-      ctx.fillStyle = "rgba(255,120,78,0.9)";
-      ctx.beginPath();
-      ctx.arc(c.x, c.y + 12, 4, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    for (const d of this.dungeons) {
-      ctx.fillStyle = "rgba(70,56,84,0.96)";
-      ctx.beginPath();
-      ctx.arc(d.x, d.y, 14, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "rgba(154,126,214,0.95)";
-      ctx.beginPath();
-      ctx.arc(d.x, d.y, 7, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  _rebuildMinimap() {
-    const size = 220;
-    const c = document.createElement("canvas");
-    c.width = size;
-    c.height = size;
-    const ctx = c.getContext("2d");
-
-    ctx.clearRect(0, 0, size, size);
-    ctx.fillStyle = "rgba(10,14,20,1)";
-    ctx.fillRect(0, 0, size, size);
-
-    const half = this.mapMode === "large"
-      ? Math.max(4000, this.boundsRadius)
-      : Math.max(2000, this.boundsRadius * 0.5);
-    const span = half * 2;
-
-    for (let py = 0; py < size; py++) {
-      for (let px = 0; px < size; px++) {
-        const wx = -half + (px / size) * span;
-        const wy = -half + (py / size) * span;
-
-        if (!this.isRevealed(wx, wy, this.mapMode)) {
-          ctx.fillStyle = "#0b1016";
-          ctx.fillRect(px, py, 1, 1);
-          continue;
-        }
-
-        const tile = this._sampleTile(wx, wy);
-        let color = "#5fa44f";
-        if (tile === "water") color = "#2d79bd";
-        else if (tile === "sand") color = "#d6c68c";
-        else if (tile === "road") color = "#8592a0";
-        else if (tile === "rock") color = "#767c86";
-        else if (tile === "forest") color = "#37653a";
-
-        ctx.fillStyle = color;
-        ctx.fillRect(px, py, 1, 1);
-      }
-    }
-
-    const plot = (wx, wy, color, r = 2) => {
-      if (!this.isRevealed(wx, wy, this.mapMode)) return;
-      const px = ((wx + half) / span) * size;
-      const py = ((wy + half) / span) * size;
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(px, py, r, 0, Math.PI * 2);
-      ctx.fill();
-    };
-
-    for (const w of this.waystones) plot(w.x, w.y, "#f5dc6a", 2.8);
-    for (const d of this.docks) plot(d.x, d.y, "#79dbff", 2.5);
-    for (const c2 of this.camps) plot(c2.x, c2.y, "#ff7b6a", 2.2);
-    for (const dg of this.dungeons) plot(dg.x, dg.y, "#b68cff", 3);
-
-    this._minimap = c;
-    this._minimapDirty = false;
-  }
-
-  _sampleTile(x, y) {
-    if (x < -this.boundsRadius || x > this.boundsRadius) return "water";
-    if (y < -this.boundsRadius || y > this.boundsRadius) return "water";
-
-    const landA = fbm((x + this.seed * 0.11) * 0.00042, (y - this.seed * 0.07) * 0.00042, 4);
-    const landB = fbm((x - this.seed * 0.05) * 0.00078, (y + this.seed * 0.09) * 0.00078, 4);
-    const med = fbm((x + this.seed * 0.03) * 0.0019, (y + this.seed * 0.04) * 0.0019, 3);
-    const rockN = fbm((x - this.seed * 0.02) * 0.0053, (y + this.seed * 0.05) * 0.0053, 2);
-    const forestN = fbm((x + this.seed * 0.27) * 0.00165, (y - this.seed * 0.18) * 0.00165, 3);
-
-    const warpX = fbm((x + this.seed * 0.13) * 0.00072, (y - this.seed * 0.21) * 0.00072, 3) * 240;
-    const warpY = fbm((x - this.seed * 0.19) * 0.00072, (y + this.seed * 0.16) * 0.00072, 3) * 240;
-
-    const wx = x + warpX;
-    const wy = y + warpY;
-
-    const bandA = Math.abs(Math.sin(wx * 0.00094 + this.seed * 0.00017));
-    const bandB = Math.abs(Math.sin(wy * 0.00105 - this.seed * 0.00013));
-    const bandC = Math.abs(Math.sin((wx + wy) * 0.00058 + this.seed * 0.00009));
-
-    const lakeN = fbm((x + this.seed * 0.23) * 0.00095, (y - this.seed * 0.18) * 0.00095, 3);
-    const shoreNoise = fbm((x - this.seed * 0.12) * 0.0034, (y + this.seed * 0.08) * 0.0034, 2);
-
-    let land = landA * 0.60 + landB * 0.40;
-    land += med * 0.07;
-
-    if (bandA < 0.11) land -= 0.31;
-    else if (bandA < 0.15) land -= 0.13;
-
-    if (bandB < 0.10) land -= 0.22;
-    else if (bandB < 0.135) land -= 0.09;
-
-    if (bandC < 0.13) land -= 0.34;
-    else if (bandC < 0.17) land -= 0.14;
-
-    if (lakeN < -0.45) land -= 0.24;
-    else if (lakeN < -0.35) land -= 0.12;
-
-    const roadWarpX = fbm((x + this.seed * 0.41) * 0.00094, (y - this.seed * 0.27) * 0.00094, 2) * 88;
-    const roadWarpY = fbm((x - this.seed * 0.37) * 0.00094, (y + this.seed * 0.33) * 0.00094, 2) * 88;
-    const rx = x + roadWarpX;
-    const ry = y + roadWarpY;
-
-    const roadA = Math.abs(Math.sin(rx * 0.0017 + this.seed * 0.00021));
-    const roadB = Math.abs(Math.sin((rx - ry) * 0.00108 - this.seed * 0.00017));
-    const roadField = fbm((x + this.seed * 0.09) * 0.0035, (y - this.seed * 0.06) * 0.0035, 2);
-
-    if (land < 0.09) return "water";
-    if (land < 0.18 + shoreNoise * 0.02) return "sand";
-
-    if ((roadA < 0.008 || roadB < 0.007) && roadField > 0.31 && land > 0.47) {
-      return "road";
-    }
-
-    if (rockN > 0.65 && land > 0.34) return "rock";
-    if (forestN > 0.17 && land > 0.22) return "forest";
-    return "grass";
-  }
-
-  _chunkKey(cx, cy) {
-    return `${cx},${cy}`;
-  }
-
-  _queueAround(wx, wy, radiusChunks = 2) {
-    const ccx = Math.floor(wx / this.chunkSize);
-    const ccy = Math.floor(wy / this.chunkSize);
-
-    for (let cy = ccy - radiusChunks; cy <= ccy + radiusChunks; cy++) {
-      for (let cx = ccx - radiusChunks; cx <= ccx + radiusChunks; cx++) {
-        const key = this._chunkKey(cx, cy);
-        if (this._chunks.has(key) || this._queued.has(key)) continue;
-        this._queued.add(key);
-        this._buildQueue.push(key);
-      }
-    }
-  }
-
-  _buildChunk(cx, cy) {
-    const key = this._chunkKey(cx, cy);
-    this._chunks.set(key, { cx, cy });
-  }
-
-  _initPOIs() {
-    this.spawn = this._findGoodSpawn();
-
-    let wid = 1;
-    const waystoneRings = [520, 1250, 2050, 2950, 3850];
-    for (let ringIndex = 0; ringIndex < waystoneRings.length; ringIndex++) {
-      const ring = waystoneRings[ringIndex];
-      const count = 4 + ringIndex;
-
-      for (let i = 0; i < count; i++) {
-        const a = (i / count) * Math.PI * 2 + ringIndex * 0.17;
-        const sx = this.spawn.x + Math.cos(a) * ring;
-        const sy = this.spawn.y + Math.sin(a) * ring;
-
-        const p =
-          this._findWaystoneLandNear(sx, sy, 320) ||
-          this._findSafeLandPatchNear(sx, sy, 320) ||
-          this._findNearbyLand(sx, sy, 320, false, true);
-
-        if (!p) continue;
-        this.waystones.push({ id: wid++, x: p.x, y: p.y });
-      }
-    }
-
-    let did = 1;
-    const dockAngles = [0.35, 1.95, 3.7, 5.15];
-    for (const a of dockAngles) {
-      const sx = this.spawn.x + Math.cos(a) * 820;
-      const sy = this.spawn.y + Math.sin(a) * 820;
-      const shore = this._findNearbyShore(sx, sy, 440);
-      if (!shore) continue;
-      this.docks.push({ id: did++, x: shore.x, y: shore.y });
-    }
-
-    let cid = 1;
-    const campAngles = [0.9, 2.4, 4.4];
-    for (const a of campAngles) {
-      const sx = this.spawn.x + Math.cos(a) * 980;
-      const sy = this.spawn.y + Math.sin(a) * 980;
-      const cp =
-        this._findSafeLandPatchNear(sx, sy, 340) ||
-        this._findNearbyLand(sx, sy, 340, false, true);
-      if (!cp) continue;
-      this.camps.push({ id: cid++, x: cp.x, y: cp.y });
-    }
-
-    const dg =
-      this._findSafeLandPatchNear(this.spawn.x + 420, this.spawn.y + 220, 500) ||
-      this._findNearbyLand(this.spawn.x + 420, this.spawn.y + 220, 500, false, true) || {
-        x: this.spawn.x + 360,
-        y: this.spawn.y + 220,
-      };
-
-    this.dungeons.push({ id: 1, x: dg.x, y: dg.y, name: "Deep Ruin" });
-  }
-
-  _findGoodSpawn() {
-    const radii = [0, 48, 96, 144, 192, 240, 320, 420, 560, 720, 900, 1200];
-
-    for (const r of radii) {
-      const samples = r <= 240 ? 40 : 72;
-      for (let i = 0; i < samples; i++) {
-        const a = (i / samples) * Math.PI * 2 + r * 0.0007;
-        const x = Math.cos(a) * r;
-        const y = Math.sin(a) * r;
-
-        if (this._isSpawnCandidate(x, y)) {
-          return { x, y };
-        }
-      }
-    }
-
-    const fallback = this._findSafeLandPatchNear(0, 0, 1800);
-    if (fallback) return fallback;
-
-    return { x: 0, y: 0 };
-  }
-
-  _isSpawnCandidate(x, y) {
-    const t = this._sampleTile(x, y);
-    if (!(t === "grass" || t === "road")) return false;
-
-    if (this._isNearWater(x, y, 170)) return false;
-    if (!this._hasWalkablePatch(x, y, 72)) return false;
-    if (!this._hasWalkablePatch(x, y, 136)) return false;
-    if (this._isTrappedByNarrowLand(x, y)) return false;
-
-    return true;
-  }
-
-  _hasWalkablePatch(x, y, radius = 64) {
-    for (let r = 0; r <= radius; r += 16) {
-      const count = r === 0 ? 1 : 16;
-      for (let i = 0; i < count; i++) {
-        const a = count === 1 ? 0 : (i / count) * Math.PI * 2;
-        const px = x + Math.cos(a) * r;
-        const py = y + Math.sin(a) * r;
-        if (!this.canWalk(px, py)) return false;
-      }
-    }
-    return true;
-  }
-
-  _isNearWater(x, y, dist = 72) {
-    const step = this.tileSize;
-    for (let r = step; r <= dist; r += step) {
-      for (let i = 0; i < 16; i++) {
-        const a = (i / 16) * Math.PI * 2;
-        const px = x + Math.cos(a) * r;
-        const py = y + Math.sin(a) * r;
-        if (this._sampleTile(px, py) === "water") return true;
+  _isNearWater(x, y, r = 64) {
+    const step = Math.max(12, (r / 3) | 0);
+    for (let oy = -r; oy <= r; oy += step) {
+      for (let ox = -r; ox <= r; ox += step) {
+        if (ox * ox + oy * oy > r * r) continue;
+        if (this.isWater(x + ox, y + oy)) return true;
       }
     }
     return false;
   }
 
-  _isTrappedInWaterPocket(x, y) {
-    if (this.canWalk(x, y)) return false;
+  _isNearCamp(x, y, r = 120) {
+    const r2 = r * r;
+    for (const c of this.camps) {
+      const dx = x - c.x;
+      const dy = y - c.y;
+      if (dx * dx + dy * dy <= r2) return true;
+    }
+    return false;
+  }
 
-    let waterCount = 0;
-    let samples = 0;
-    for (let r = 16; r <= 120; r += 16) {
-      for (let i = 0; i < 20; i++) {
-        const a = (i / 20) * Math.PI * 2;
+  _isNearDock(x, y, r = 120) {
+    const r2 = r * r;
+    for (const d of this.docks) {
+      const dx = x - d.x;
+      const dy = y - d.y;
+      if (dx * dx + dy * dy <= r2) return true;
+    }
+    return false;
+  }
+
+  _isNearWaystone(x, y, r = 120) {
+    const r2 = r * r;
+    for (const w of this.waystones) {
+      const dx = x - w.x;
+      const dy = y - w.y;
+      if (dx * dx + dy * dy <= r2) return true;
+    }
+    return false;
+  }
+
+  _isNearDungeon(x, y, r = 120) {
+    const r2 = r * r;
+    for (const d of this.dungeons) {
+      const dx = x - d.x;
+      const dy = y - d.y;
+      if (dx * dx + dy * dy <= r2) return true;
+    }
+    return false;
+  }
+
+  _findNearbyLand(x, y, radius = 220, allowWater = false, requireDryPatch = false) {
+    if (!allowWater && this.canWalk(x, y)) {
+      if (!requireDryPatch || !this._isNearWater(x, y, 22)) return { x, y };
+    }
+
+    const step = 18;
+    for (let r = step; r <= radius; r += step) {
+      for (let a = 0; a < Math.PI * 2; a += Math.PI / 12) {
         const px = x + Math.cos(a) * r;
         const py = y + Math.sin(a) * r;
-        if (this._sampleTile(px, py) === "water") waterCount++;
-        samples++;
+        if (!allowWater && !this.canWalk(px, py)) continue;
+        if (requireDryPatch && this._isNearWater(px, py, 18)) continue;
+        return { x: px, y: py };
       }
     }
 
-    return samples > 0 && waterCount / samples > 0.55;
+    return null;
   }
 
-  _isTrappedByNarrowLand(x, y) {
-    let blockedArcs = 0;
-    const testR = 88;
+  _findSafeLandPatchNear(x, y, radius = 300) {
+    if (this.canWalk(x, y) && !this._isNearWater(x, y, 18)) return { x, y };
 
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2;
-      const px = x + Math.cos(a) * testR;
-      const py = y + Math.sin(a) * testR;
-      if (!this.canWalk(px, py)) blockedArcs++;
-    }
-
-    return blockedArcs >= 4;
-  }
-
-  _findSafeLandPatchNear(x, y, maxR = 240) {
-    for (let r = 0; r <= maxR; r += 16) {
-      const samples = r === 0 ? 1 : 40;
-      for (let i = 0; i < samples; i++) {
-        const a = samples === 1 ? 0 : (i / samples) * Math.PI * 2;
+    const step = 20;
+    for (let r = step; r <= radius; r += step) {
+      for (let a = 0; a < Math.PI * 2; a += Math.PI / 14) {
         const px = x + Math.cos(a) * r;
         const py = y + Math.sin(a) * r;
-        if (this._isSpawnCandidate(px, py)) {
-          return { x: px, y: py };
-        }
+        if (!this.canWalk(px, py)) continue;
+        if (this._isNearWater(px, py, 18)) continue;
+        return { x: px, y: py };
+      }
+    }
+
+    return this._findNearbyLand(x, y, radius, false, false);
+  }
+
+  /* ===========================
+     POI GENERATION
+  =========================== */
+
+  _generatePOIs() {
+    this.camps = [];
+    this.docks = [];
+    this.waystones = [];
+    this.dungeons = [];
+
+    const rng = new RNG(hash2(this.seed, 777));
+
+    const campTargets = [
+      { x: -1200, y: -480 },
+      { x: 980, y: -860 },
+      { x: -1040, y: 980 },
+      { x: 1240, y: 820 },
+      { x: 120, y: 1320 },
+    ];
+
+    const wayTargets = [
+      { x: -1800, y: -220 },
+      { x: 1720, y: -180 },
+      { x: -260, y: 1760 },
+      { x: 420, y: -1680 },
+    ];
+
+    const dungeonTargets = [
+      { x: 1880, y: 1180 },
+      { x: -1960, y: 1240 },
+      { x: 1420, y: -1660 },
+    ];
+
+    const dockTargets = [
+      { x: -2300, y: 220 },
+      { x: 2260, y: -140 },
+      { x: 160, y: 2360 },
+    ];
+
+    for (let i = 0; i < campTargets.length; i++) {
+      const p = this._snapToLand(
+        campTargets[i].x + rng.range(-120, 120),
+        campTargets[i].y + rng.range(-120, 120),
+        420
+      );
+      if (!p) continue;
+      this.camps.push({
+        id: i + 1,
+        x: p.x,
+        y: p.y,
+        name: ["Oak Camp", "Stone Camp", "Pine Camp", "River Camp", "Dust Camp"][i] || `Camp ${i + 1}`,
+      });
+    }
+
+    for (let i = 0; i < wayTargets.length; i++) {
+      const p = this._snapToLand(wayTargets[i].x, wayTargets[i].y, 420);
+      if (!p) continue;
+      this.waystones.push({
+        id: i + 1,
+        x: p.x,
+        y: p.y,
+        name: `Waystone ${i + 1}`,
+      });
+    }
+
+    for (let i = 0; i < dungeonTargets.length; i++) {
+      const p = this._snapToLand(dungeonTargets[i].x, dungeonTargets[i].y, 520);
+      if (!p) continue;
+      this.dungeons.push({
+        id: i + 1,
+        x: p.x,
+        y: p.y,
+        name: ["Sunken Gate", "Ash Ruin", "Broken Crypt"][i] || `Dungeon ${i + 1}`,
+      });
+    }
+
+    for (let i = 0; i < dockTargets.length; i++) {
+      const p = this._snapDockToShore(dockTargets[i].x, dockTargets[i].y, 620);
+      if (!p) continue;
+      this.docks.push({
+        id: i + 1,
+        x: p.x,
+        y: p.y,
+        name: ["West Dock", "East Dock", "South Dock"][i] || `Dock ${i + 1}`,
+      });
+    }
+  }
+
+  _snapToLand(x, y, radius = 400) {
+    return this._findSafeLandPatchNear(x, y, radius);
+  }
+
+  _snapDockToShore(x, y, radius = 500) {
+    const step = 22;
+    for (let r = 0; r <= radius; r += step) {
+      for (let a = 0; a < Math.PI * 2; a += Math.PI / 18) {
+        const px = x + Math.cos(a) * r;
+        const py = y + Math.sin(a) * r;
+        if (!this.canWalk(px, py)) continue;
+
+        const nearWater =
+          this.isWater(px + 28, py) ||
+          this.isWater(px - 28, py) ||
+          this.isWater(px, py + 28) ||
+          this.isWater(px, py - 28);
+
+        if (nearWater) return { x: px, y: py };
       }
     }
     return null;
   }
 
-  _findNearbyLand(x, y, maxR = 240, allowNearWater = true, avoidWaterStrong = false) {
-    let best = null;
-    let bestScore = Infinity;
+  /* ===========================
+     DRAW
+  =========================== */
 
-    for (let r = 0; r <= maxR; r += 16) {
-      for (let i = 0; i < 32; i++) {
-        const a = (i / 32) * Math.PI * 2;
-        const px = x + Math.cos(a) * r;
-        const py = y + Math.sin(a) * r;
-        const t = this._sampleTile(px, py);
+  draw(ctx, camera) {
+    const vb = this._viewBounds(camera);
 
-        if (!(t === "grass" || t === "rock" || t === "sand" || t === "road" || t === "forest")) continue;
-        if (!allowNearWater && this._isNearWater(px, py, 80)) continue;
-        if (avoidWaterStrong && this._isNearWater(px, py, 120)) continue;
+    this._drawGround(ctx, vb);
+    this._drawWater(ctx, vb);
+    this._drawRoadHints(ctx, vb);
+    this._drawPOIs(ctx, vb);
+  }
 
-        const score = r + (t === "grass" || t === "road" ? 0 : 12);
-        if (score < bestScore) {
-          bestScore = score;
-          best = { x: px, y: py };
+  _viewBounds(camera) {
+    const halfW = this.viewW * 0.5;
+    const halfH = this.viewH * 0.5;
+    return {
+      x0: camera.x - halfW - 120,
+      y0: camera.y - halfH - 120,
+      x1: camera.x + halfW + 120,
+      y1: camera.y + halfH + 120,
+    };
+  }
+
+  _drawGround(ctx, vb) {
+    const t = this.tile;
+    const x0 = Math.floor(vb.x0 / t) * t;
+    const y0 = Math.floor(vb.y0 / t) * t;
+    const x1 = Math.ceil(vb.x1 / t) * t;
+    const y1 = Math.ceil(vb.y1 / t) * t;
+
+    for (let y = y0; y <= y1; y += t) {
+      for (let x = x0; x <= x1; x += t) {
+        const water = this.isWater(x + t * 0.5, y + t * 0.5);
+        if (water) continue;
+
+        const zone = this.getZoneName(x, y);
+        ctx.fillStyle = this._groundColor(zone, x, y);
+        ctx.fillRect(x, y, t + 1, t + 1);
+
+        const n = Math.abs(hash2((x / t) | 0, (y / t) | 0, this.seed + 66)) % 100;
+        if (n < 8) this._drawGrassTuft(ctx, x + 10, y + 22);
+        else if (n > 94) this._drawPebble(ctx, x + 16, y + 18);
+      }
+    }
+  }
+
+  _drawWater(ctx, vb) {
+    const t = this.tile;
+    const x0 = Math.floor(vb.x0 / t) * t;
+    const y0 = Math.floor(vb.y0 / t) * t;
+    const x1 = Math.ceil(vb.x1 / t) * t;
+    const y1 = Math.ceil(vb.y1 / t) * t;
+
+    for (let y = y0; y <= y1; y += t) {
+      for (let x = x0; x <= x1; x += t) {
+        if (!this.isWater(x + t * 0.5, y + t * 0.5)) continue;
+
+        const n = this._terrainNoise(x, y);
+        ctx.fillStyle = n < -0.28 ? "#2b6ba0" : "#3d84b8";
+        ctx.fillRect(x, y, t + 1, t + 1);
+
+        const foam = Math.abs(hash2((x / t) | 0, (y / t) | 0, 9182)) % 100;
+        if (foam < 14) {
+          ctx.fillStyle = "rgba(255,255,255,0.12)";
+          ctx.fillRect(x + 4, y + 6, 12, 2);
+          ctx.fillRect(x + 16, y + 18, 8, 2);
         }
       }
     }
+  }
 
+  _drawRoadHints(ctx, vb) {
+    const camps = this.camps;
+    const ways = this.waystones;
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(194,170,120,0.14)";
+    ctx.lineWidth = 18;
+    ctx.lineCap = "round";
+
+    for (const c of camps) {
+      const nearestWay = this._nearestPOI(c.x, c.y, ways);
+      if (!nearestWay) continue;
+      if (!segmentIntersectsView(c.x, c.y, nearestWay.x, nearestWay.y, vb)) continue;
+
+      ctx.beginPath();
+      ctx.moveTo(c.x, c.y);
+      ctx.lineTo(nearestWay.x, nearestWay.y);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  _drawPOIs(ctx, vb) {
+    for (const c of this.camps) {
+      if (!pointInView(c.x, c.y, vb, 220)) continue;
+      this._drawCamp(ctx, c);
+    }
+
+    for (const w of this.waystones) {
+      if (!pointInView(w.x, w.y, vb, 120)) continue;
+      this._drawWaystone(ctx, w);
+    }
+
+    for (const d of this.docks) {
+      if (!pointInView(d.x, d.y, vb, 120)) continue;
+      this._drawDock(ctx, d);
+    }
+
+    for (const dg of this.dungeons) {
+      if (!pointInView(dg.x, dg.y, vb, 180)) continue;
+      this._drawDungeonEntrance(ctx, dg);
+    }
+  }
+
+  _drawCamp(ctx, camp) {
+    const tier = this._campTier(camp.id);
+    const scale = tier >= 4 ? 1.34 : tier >= 3 ? 1.20 : tier >= 2 ? 1.08 : 1.0;
+
+    ctx.save();
+    ctx.translate(camp.x, camp.y);
+
+    this._drawCampGround(ctx, tier);
+
+    if (tier === 1) {
+      this._drawCampOutpost(ctx, camp, scale);
+    } else if (tier === 2) {
+      this._drawCampTier2(ctx, camp, scale);
+    } else if (tier === 3) {
+      this._drawCampTier3(ctx, camp, scale);
+    } else {
+      this._drawCampTier4(ctx, camp, scale);
+    }
+
+    ctx.fillStyle = "#dfe8f5";
+    ctx.font = "bold 12px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(`${camp.name || `Camp ${camp.id}`} • ${this._campTierName(camp.id)}`, 0, -54 - (tier - 1) * 4);
+
+    ctx.restore();
+  }
+
+  _drawCampGround(ctx, tier) {
+    const rx = tier >= 4 ? 82 : tier >= 3 ? 70 : tier >= 2 ? 58 : 46;
+    const ry = tier >= 4 ? 26 : tier >= 3 ? 22 : tier >= 2 ? 18 : 12;
+
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.beginPath();
+    ctx.ellipse(0, 20, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    const ringColor =
+      tier >= 4 ? "rgba(194,166,126,0.24)" :
+      tier >= 3 ? "rgba(176,150,112,0.22)" :
+      tier >= 2 ? "rgba(160,136,100,0.18)" :
+      "rgba(140,118,86,0.14)";
+
+    ctx.strokeStyle = ringColor;
+    ctx.lineWidth = tier >= 4 ? 5 : tier >= 3 ? 4 : tier >= 2 ? 3 : 2;
+    ctx.beginPath();
+    ctx.ellipse(0, 20, rx - 6, ry - 3, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  _drawCampOutpost(ctx, camp, scale) {
+    this._drawTent(ctx, -18 * scale, 0, 0.88 * scale, "#b78b52");
+    this._drawCampfire(ctx, 10 * scale, 8 * scale, 1.0, false);
+    this._drawCrate(ctx, 26 * scale, 8 * scale, 1.0);
+    this._drawBanner(ctx, -2 * scale, -8 * scale, "#d9c787", 1.0);
+    void camp;
+  }
+
+  _drawCampTier2(ctx, camp, scale) {
+    this._drawTent(ctx, -26 * scale, 2 * scale, 0.94 * scale, "#be8d58");
+    this._drawTent(ctx, 24 * scale, 4 * scale, 0.88 * scale, "#b8844c");
+    this._drawCampfire(ctx, 0, 8 * scale, 1.1, false);
+    this._drawCrate(ctx, -2 * scale, 24 * scale, 1.1);
+    this._drawBanner(ctx, -36 * scale, -6 * scale, "#b8d987", 1.0);
+    this._drawBanner(ctx, 36 * scale, -4 * scale, "#87c0d9", 1.0);
+    void camp;
+  }
+
+  _drawCampTier3(ctx, camp, scale) {
+    this._drawLowWall(ctx, scale);
+    this._drawMainHall(ctx, 0, 0, 1.0 * scale);
+    this._drawTent(ctx, -40 * scale, 10 * scale, 0.80 * scale, "#c49660");
+    this._drawTent(ctx, 42 * scale, 10 * scale, 0.80 * scale, "#b68454");
+    this._drawCampfire(ctx, 0, 16 * scale, 1.18, true);
+    this._drawBanner(ctx, -52 * scale, -10 * scale, "#c7d971", 1.1);
+    this._drawBanner(ctx, 52 * scale, -10 * scale, "#9ec7ff", 1.1);
+    this._drawCrate(ctx, -18 * scale, 28 * scale, 1.15);
+    this._drawCrate(ctx, 18 * scale, 28 * scale, 1.15);
+    void camp;
+  }
+
+  _drawCampTier4(ctx, camp, scale) {
+    this._drawStrongholdWall(ctx, scale);
+    this._drawTower(ctx, -56 * scale, -8 * scale, 0.94 * scale);
+    this._drawTower(ctx, 56 * scale, -8 * scale, 0.94 * scale);
+    this._drawMainHall(ctx, 0, -2 * scale, 1.18 * scale);
+    this._drawCampfire(ctx, 0, 18 * scale, 1.28, true);
+    this._drawBanner(ctx, -66 * scale, -16 * scale, "#ffe08a", 1.15);
+    this._drawBanner(ctx, 66 * scale, -16 * scale, "#ff9f87", 1.15);
+    this._drawCrate(ctx, -22 * scale, 34 * scale, 1.18);
+    this._drawCrate(ctx, 22 * scale, 34 * scale, 1.18);
+    this._drawFencePost(ctx, -32 * scale, 26 * scale, 1.0);
+    this._drawFencePost(ctx, 32 * scale, 26 * scale, 1.0);
+    void camp;
+  }
+
+  _drawTent(ctx, x, y, scale = 1, roof = "#b78b52") {
+    ctx.save();
+    ctx.translate(x, y);
+
+    ctx.fillStyle = "rgba(0,0,0,0.14)";
+    ctx.beginPath();
+    ctx.ellipse(0, 14 * scale, 18 * scale, 6 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#8d6b3b";
+    ctx.fillRect(-16 * scale, 0, 32 * scale, 10 * scale);
+
+    ctx.fillStyle = roof;
+    ctx.beginPath();
+    ctx.moveTo(-20 * scale, 0);
+    ctx.lineTo(0, -18 * scale);
+    ctx.lineTo(20 * scale, 0);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "#6c4b2c";
+    ctx.fillRect(-3 * scale, 3 * scale, 6 * scale, 7 * scale);
+
+    ctx.restore();
+  }
+
+  _drawCampfire(ctx, x, y, scale = 1, strong = false) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    ctx.fillStyle = strong ? "rgba(255,214,140,0.25)" : "rgba(255,210,120,0.16)";
+    ctx.beginPath();
+    ctx.arc(0, 0, (strong ? 24 : 18) * scale, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#6d5237";
+    ctx.fillRect(-10 * scale, 4 * scale, 20 * scale, 4 * scale);
+    ctx.fillRect(-2 * scale, -2 * scale, 4 * scale, 12 * scale);
+
+    ctx.fillStyle = strong ? "#ffb44d" : "#d48b3f";
+    ctx.beginPath();
+    ctx.arc(0, 2 * scale, 6 * scale, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = strong ? "rgba(255,220,140,0.42)" : "rgba(255,210,120,0.32)";
+    ctx.beginPath();
+    ctx.arc(0, 0, 10 * scale, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  _drawCrate(ctx, x, y, scale = 1) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.fillStyle = "#8c6a3e";
+    ctx.fillRect(-6 * scale, -6 * scale, 12 * scale, 12 * scale);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(-6 * scale, -6 * scale, 12 * scale, 12 * scale);
+    ctx.restore();
+  }
+
+  _drawBanner(ctx, x, y, color = "#d9c787", scale = 1) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.strokeStyle = "#7a6748";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, 16 * scale);
+    ctx.lineTo(0, -10 * scale);
+    ctx.stroke();
+
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(0, -8 * scale);
+    ctx.lineTo(12 * scale, -5 * scale);
+    ctx.lineTo(0, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  _drawLowWall(ctx, scale = 1) {
+    ctx.save();
+    ctx.fillStyle = "#90714c";
+    ctx.fillRect(-54 * scale, 18 * scale, 108 * scale, 8 * scale);
+    ctx.fillRect(-58 * scale, 2 * scale, 8 * scale, 24 * scale);
+    ctx.fillRect(50 * scale, 2 * scale, 8 * scale, 24 * scale);
+    ctx.restore();
+  }
+
+  _drawStrongholdWall(ctx, scale = 1) {
+    ctx.save();
+    ctx.fillStyle = "#8e7761";
+    ctx.fillRect(-68 * scale, 16 * scale, 136 * scale, 10 * scale);
+    ctx.fillRect(-72 * scale, -6 * scale, 10 * scale, 32 * scale);
+    ctx.fillRect(62 * scale, -6 * scale, 10 * scale, 32 * scale);
+
+    ctx.fillStyle = "#6a5946";
+    for (let i = -58; i <= 58; i += 16) {
+      ctx.fillRect(i * scale, 10 * scale, 8 * scale, 6 * scale);
+    }
+    ctx.restore();
+  }
+
+  _drawMainHall(ctx, x, y, scale = 1) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    ctx.fillStyle = "rgba(0,0,0,0.16)";
+    ctx.beginPath();
+    ctx.ellipse(0, 18 * scale, 34 * scale, 10 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#8d6b3b";
+    ctx.fillRect(-28 * scale, -2 * scale, 56 * scale, 20 * scale);
+
+    ctx.fillStyle = "#b78b52";
+    ctx.beginPath();
+    ctx.moveTo(-34 * scale, -2 * scale);
+    ctx.lineTo(0, -26 * scale);
+    ctx.lineTo(34 * scale, -2 * scale);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "#67472c";
+    ctx.fillRect(-6 * scale, 4 * scale, 12 * scale, 14 * scale);
+
+    ctx.fillStyle = "rgba(255,226,150,0.22)";
+    ctx.fillRect(-4 * scale, 7 * scale, 8 * scale, 6 * scale);
+
+    ctx.restore();
+  }
+
+  _drawTower(ctx, x, y, scale = 1) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    ctx.fillStyle = "rgba(0,0,0,0.14)";
+    ctx.beginPath();
+    ctx.ellipse(0, 18 * scale, 14 * scale, 5 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#8e7761";
+    ctx.fillRect(-10 * scale, -12 * scale, 20 * scale, 30 * scale);
+
+    ctx.fillStyle = "#6a5946";
+    ctx.fillRect(-12 * scale, -16 * scale, 24 * scale, 6 * scale);
+    ctx.fillRect(-8 * scale, -4 * scale, 4 * scale, 4 * scale);
+    ctx.fillRect(4 * scale, -4 * scale, 4 * scale, 4 * scale);
+
+    ctx.restore();
+  }
+
+  _drawFencePost(ctx, x, y, scale = 1) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.fillStyle = "#7d603e";
+    ctx.fillRect(-2 * scale, -10 * scale, 4 * scale, 12 * scale);
+    ctx.restore();
+  }
+
+  _drawWaystone(ctx, stone) {
+    ctx.save();
+    ctx.translate(stone.x, stone.y);
+
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.beginPath();
+    ctx.ellipse(0, 16, 22, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#6e7e9a";
+    ctx.beginPath();
+    ctx.moveTo(-12, 14);
+    ctx.lineTo(-8, -18);
+    ctx.lineTo(0, -28);
+    ctx.lineTo(8, -18);
+    ctx.lineTo(12, 14);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(196,220,255,0.95)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, -22);
+    ctx.lineTo(0, 8);
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(150,210,255,0.18)";
+    ctx.beginPath();
+    ctx.arc(0, -10, 22, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  _drawDock(ctx, dock) {
+    ctx.save();
+    ctx.translate(dock.x, dock.y);
+
+    ctx.fillStyle = "#8c6a3e";
+    ctx.fillRect(-18, -8, 36, 16);
+    ctx.fillRect(-10, 8, 6, 12);
+    ctx.fillRect(4, 8, 6, 12);
+
+    ctx.strokeStyle = "rgba(255,255,255,0.14)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-14, -2);
+    ctx.lineTo(14, -2);
+    ctx.moveTo(-14, 3);
+    ctx.lineTo(14, 3);
+    ctx.stroke();
+
+    ctx.fillStyle = "#dfe8f5";
+    ctx.font = "bold 12px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(dock.name || `Dock ${dock.id}`, 0, -16);
+
+    ctx.restore();
+  }
+
+  _drawDungeonEntrance(ctx, dg) {
+    ctx.save();
+    ctx.translate(dg.x, dg.y);
+
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.beginPath();
+    ctx.ellipse(0, 20, 48, 12, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#554b45";
+    ctx.fillRect(-34, -10, 68, 30);
+
+    ctx.fillStyle = "#2a2424";
+    ctx.beginPath();
+    ctx.arc(0, 8, 18, Math.PI, 0, false);
+    ctx.lineTo(18, 8);
+    ctx.lineTo(-18, 8);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(255,150,110,0.35)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(0, 8, 26, Math.PI, 0, false);
+    ctx.stroke();
+
+    ctx.fillStyle = "#dfe8f5";
+    ctx.font = "bold 12px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(dg.name || `Dungeon ${dg.id}`, 0, -18);
+
+    ctx.restore();
+  }
+
+  /* ===========================
+     MINIMAP
+  =========================== */
+
+  getMinimapCanvas() {
+    if (this._miniDirty) this._rebuildMinimap();
+    return this._miniCanvas;
+  }
+
+  _rebuildMinimap() {
+    const c = this._miniCanvas;
+    const ctx = c.getContext("2d");
+    const w = c.width;
+    const h = c.height;
+
+    ctx.clearRect(0, 0, w, h);
+
+    const span = this.mapMode === "large"
+      ? Math.max(8000, this.boundsRadius * 2)
+      : Math.max(4000, this.boundsRadius);
+
+    const half = span * 0.5;
+
+    for (let py = 0; py < h; py += 2) {
+      for (let px = 0; px < w; px += 2) {
+        const wx = (px / w) * span - half;
+        const wy = (py / h) * span - half;
+        const water = this.isWater(wx, wy);
+
+        if (water) ctx.fillStyle = "#356e9c";
+        else {
+          const zone = this.getZoneName(wx, wy);
+          ctx.fillStyle = this._miniGroundColor(zone);
+        }
+
+        ctx.fillRect(px, py, 2, 2);
+      }
+    }
+
+    for (const c0 of this.camps) {
+      this._miniPoint(ctx, c0.x, c0.y, span, "#f3c46e", 3);
+    }
+    for (const w0 of this.waystones) {
+      this._miniPoint(ctx, w0.x, w0.y, span, "#bde4ff", 2.5);
+    }
+    for (const d0 of this.docks) {
+      this._miniPoint(ctx, d0.x, d0.y, span, "#d6c3a1", 2.5);
+    }
+    for (const dg of this.dungeons) {
+      this._miniPoint(ctx, dg.x, dg.y, span, "#ff9f87", 3);
+    }
+
+    this._miniDirty = false;
+  }
+
+  _miniPoint(ctx, x, y, span, color, r) {
+    const c = this._miniCanvas;
+    const px = ((x + span * 0.5) / span) * c.width;
+    const py = ((y + span * 0.5) / span) * c.height;
+
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  /* ===========================
+     CAMP TIERS
+  =========================== */
+
+  _campRenown(campId) {
+    return this._campProgress(campId);
+  }
+
+  _campProgress(campId) {
+    const h = Math.abs(hash2(campId | 0, this.seed | 0, 431)) % 7;
+    return h;
+  }
+
+  _campTier(campId) {
+    const renown = this._campRenown(campId);
+    if (renown >= 6) return 4;
+    if (renown >= 4) return 3;
+    if (renown >= 2) return 2;
+    return 1;
+  }
+
+  _campTierName(campId) {
+    const t = this._campTier(campId);
+    if (t >= 4) return "Stronghold";
+    if (t >= 3) return "Keep";
+    if (t >= 2) return "Camp";
+    return "Outpost";
+  }
+
+  /* ===========================
+     NOISE / COLORS
+  =========================== */
+
+  _terrainNoise(x, y) {
+    const s1 = this._valueNoise(x * 0.0018, y * 0.0018, this.seed);
+    const s2 = this._valueNoise(x * 0.0045, y * 0.0045, this.seed + 19) * 0.45;
+    const s3 = this._valueNoise(x * 0.0100, y * 0.0100, this.seed + 101) * 0.18;
+    return s1 + s2 + s3 - 0.5;
+  }
+
+  _riverField(x, y) {
+    const bend = Math.sin((x + this.seed * 0.1) * 0.00125) * 260;
+    const bend2 = Math.sin((x - this.seed * 0.08) * 0.0021) * 140;
+    const centerY = bend + bend2;
+    const d = Math.abs(y - centerY);
+    return d / 220;
+  }
+
+  _valueNoise(x, y, seed) {
+    const xi = Math.floor(x);
+    const yi = Math.floor(y);
+    const xf = x - xi;
+    const yf = y - yi;
+
+    const a = this._hashFloat(xi, yi, seed);
+    const b = this._hashFloat(xi + 1, yi, seed);
+    const c = this._hashFloat(xi, yi + 1, seed);
+    const d = this._hashFloat(xi + 1, yi + 1, seed);
+
+    const ux = xf * xf * (3 - 2 * xf);
+    const uy = yf * yf * (3 - 2 * yf);
+
+    const ab = lerpNum(a, b, ux);
+    const cd = lerpNum(c, d, ux);
+    return lerpNum(ab, cd, uy);
+  }
+
+  _hashFloat(x, y, seed) {
+    const h = hash2(x | 0, y | 0, seed | 0) >>> 0;
+    return (h % 100000) / 100000;
+  }
+
+  _groundColor(zone, x, y) {
+    const alt = Math.abs(hash2((x / 32) | 0, (y / 32) | 0, this.seed + 66)) % 12;
+
+    if (zone === "Whisper Grass") return alt < 6 ? "#5f9a59" : "#679f61";
+    if (zone === "Old Road") return alt < 6 ? "#8b845f" : "#948c68";
+    if (zone === "Stone Flats") return alt < 6 ? "#7b876f" : "#869177";
+    if (zone === "High Meadow") return alt < 6 ? "#73ad63" : "#7cb56b";
+    if (zone === "Ash Fields") return alt < 6 ? "#7e7a67" : "#87836f";
+    if (zone === "Pine Verge") return alt < 6 ? "#547d4e" : "#5c8555";
+    if (zone === "Camp Grounds") return alt < 6 ? "#8b7d58" : "#958764";
+    if (zone === "Ruin Approach") return alt < 6 ? "#706a60" : "#7a7468";
+    if (zone === "Waystone Rise") return alt < 6 ? "#6d8a73" : "#76947c";
+    if (zone === "Shoreline") return alt < 6 ? "#8f9368" : "#989d72";
+    if (zone === "Riverbank") return alt < 6 ? "#6f9b65" : "#78a46d";
+
+    return alt < 6 ? "#69995d" : "#72a265";
+  }
+
+  _miniGroundColor(zone) {
+    if (zone === "Whisper Grass") return "#679f61";
+    if (zone === "Old Road") return "#948c68";
+    if (zone === "Stone Flats") return "#869177";
+    if (zone === "High Meadow") return "#7cb56b";
+    if (zone === "Ash Fields") return "#87836f";
+    if (zone === "Pine Verge") return "#5c8555";
+    if (zone === "Camp Grounds") return "#958764";
+    if (zone === "Ruin Approach") return "#7a7468";
+    if (zone === "Waystone Rise") return "#76947c";
+    if (zone === "Shoreline") return "#989d72";
+    if (zone === "Riverbank") return "#78a46d";
+    return "#72a265";
+  }
+
+  _drawGrassTuft(ctx, x, y) {
+    ctx.strokeStyle = "rgba(36,76,32,0.45)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x - 2, y - 6);
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + 1, y - 8);
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + 3, y - 6);
+    ctx.stroke();
+  }
+
+  _drawPebble(ctx, x, y) {
+    ctx.fillStyle = "rgba(40,52,44,0.18)";
+    ctx.beginPath();
+    ctx.arc(x, y, 2, 0, Math.PI * 2);
+    ctx.arc(x + 4, y + 1, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  _nearestPOI(x, y, arr) {
+    let best = null;
+    let bestD = Infinity;
+    for (const p of arr) {
+      const dx = p.x - x;
+      const dy = p.y - y;
+      const d = dx * dx + dy * dy;
+      if (d < bestD) {
+        bestD = d;
+        best = p;
+      }
+    }
     return best;
   }
+}
 
-  _findWaystoneLandNear(x, y, maxR = 260) {
-    let best = null;
-    let bestScore = Infinity;
+/* ===========================
+   HELPERS
+=========================== */
 
-    for (let r = 0; r <= maxR; r += 16) {
-      const samples = r === 0 ? 1 : 48;
-      for (let i = 0; i < samples; i++) {
-        const a = samples === 1 ? 0 : (i / samples) * Math.PI * 2;
-        const px = x + Math.cos(a) * r;
-        const py = y + Math.sin(a) * r;
-        const t = this._sampleTile(px, py);
+function lerpNum(a, b, t) {
+  return a + (b - a) * t;
+}
 
-        if (!(t === "grass" || t === "road")) continue;
-        if (this._isNearWater(px, py, 110)) continue;
-        if (!this._hasWalkablePatch(px, py, 56)) continue;
+function pointInView(x, y, vb, pad = 0) {
+  return x >= vb.x0 - pad && x <= vb.x1 + pad && y >= vb.y0 - pad && y <= vb.y1 + pad;
+}
 
-        const score = r;
-        if (score < bestScore) {
-          bestScore = score;
-          best = { x: px, y: py };
-        }
-      }
-    }
+function segmentIntersectsView(x1, y1, x2, y2, vb) {
+  const minX = Math.min(x1, x2);
+  const maxX = Math.max(x1, x2);
+  const minY = Math.min(y1, y2);
+  const maxY = Math.max(y1, y2);
 
-    return best;
-  }
-
-  _findNearbyShore(x, y, maxR = 240) {
-    let best = null;
-    let bestScore = Infinity;
-
-    for (let r = 0; r <= maxR; r += 16) {
-      for (let i = 0; i < 48; i++) {
-        const a = (i / 48) * Math.PI * 2;
-        const px = x + Math.cos(a) * r;
-        const py = y + Math.sin(a) * r;
-        const t = this._sampleTile(px, py);
-
-        if (t !== "sand" && t !== "grass" && t !== "road") continue;
-
-        const waterTouch =
-          this.isWater(px + 24, py) ||
-          this.isWater(px - 24, py) ||
-          this.isWater(px, py + 24) ||
-          this.isWater(px, py - 24);
-
-        if (!waterTouch) continue;
-
-        const landBehind =
-          this.canWalk(px + 40, py) ||
-          this.canWalk(px - 40, py) ||
-          this.canWalk(px, py + 40) ||
-          this.canWalk(px, py - 40);
-
-        if (!landBehind) continue;
-
-        const usable =
-          this.canWalk(px + 18, py) ||
-          this.canWalk(px - 18, py) ||
-          this.canWalk(px, py + 18) ||
-          this.canWalk(px, py - 18);
-
-        if (!usable) continue;
-
-        const score = r + (t === "sand" ? 0 : 18);
-        if (score < bestScore) {
-          bestScore = score;
-          best = { x: px, y: py };
-        }
-      }
-    }
-
-    return best || this._findNearbyLand(x, y, maxR, true, false);
-  }
+  if (maxX < vb.x0 || minX > vb.x1 || maxY < vb.y0 || minY > vb.y1) return false;
+  return true;
 }
