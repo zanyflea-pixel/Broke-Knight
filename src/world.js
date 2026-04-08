@@ -1,758 +1,1005 @@
 // src/world.js
-// v58 VISIBLE WORLD PASS (FULL FILE)
-// Focus:
-// - much safer spawn
-// - fewer ugly trapped water pockets
-// - more usable shorelines
-// - better dock placement
-// - stronger rescue when player loads/stuck in bad terrain
-// - keep compatibility with current game.js
+// v77 WORLD VISUAL EVOLUTION FOR CAMP TIERS (FULL FILE)
 
-import { fbm, hash2, RNG } from "./util.js";
+import { hash2, RNG } from "./util.js";
 
 export default class World {
   constructor(seed = 1, opts = {}) {
     this.seed = seed | 0;
+    this.viewW = opts.viewW || 960;
+    this.viewH = opts.viewH || 540;
 
-    this.viewW = Math.max(320, opts.viewW | 0 || 960);
-    this.viewH = Math.max(240, opts.viewH | 0 || 540);
-
-    this.tileSize = opts.tileSize || 24;
-    this.chunkTiles = opts.chunkTiles || 32;
-    this.chunkSize = this.tileSize * this.chunkTiles;
+    this.tile = 32;
     this.boundsRadius = 5200;
 
+    this.spawn = { x: 0, y: 0 };
     this.mapMode = "small";
-    this.revealRadius = 260;
-    this.revealSoftRadius = 360;
-
-    this._chunks = new Map();
-    this._queued = new Set();
-    this._buildQueue = [];
-
-    this._minimap = null;
-    this._minimapDirty = true;
-    this._miniTimer = 0;
-
-    this._revealedSmall = new Set();
-    this._revealedLarge = new Set();
 
     this.camps = [];
-    this.waystones = [];
     this.docks = [];
+    this.waystones = [];
     this.dungeons = [];
 
-    this.spawn = { x: 0, y: 0 };
+    this._miniCanvas = document.createElement("canvas");
+    this._miniCanvas.width = 220;
+    this._miniCanvas.height = 220;
+    this._miniDirty = true;
 
-    this._heroRescueCd = 0;
-    this._lastRevealX = null;
-    this._lastRevealY = null;
+    this._zoneCache = new Map();
 
-    this._poiRng = new RNG(hash2(this.seed, 777));
-
-    this._initPOIs();
-    this.revealAround(this.spawn.x, this.spawn.y, this.revealSoftRadius);
-    this._queueAround(this.spawn.x, this.spawn.y, 2);
+    this._generatePOIs();
+    this.spawn = this._findSafeLandPatchNear(0, 0, 420) || { x: 0, y: 0 };
+    this._rebuildMinimap();
   }
 
   setViewSize(w, h) {
-    this.viewW = Math.max(320, w | 0 || this.viewW);
-    this.viewH = Math.max(240, h | 0 || this.viewH);
+    this.viewW = w | 0;
+    this.viewH = h | 0;
   }
 
   toggleMapScale() {
     this.mapMode = this.mapMode === "small" ? "large" : "small";
-    this._minimapDirty = true;
+    this._miniDirty = true;
   }
 
   update(dt, hero) {
-    if (!hero) return;
-
-    this._queueAround(hero.x, hero.y, 2);
-
-    let builds = 0;
-    while (this._buildQueue.length && builds < 3) {
-      const key = this._buildQueue.shift();
-      this._queued.delete(key);
-
-      if (!this._chunks.has(key)) {
-        const [cx, cy] = key.split(",").map(Number);
-        this._buildChunk(cx, cy);
-      }
-      builds++;
-    }
-
-    if (
-      this._lastRevealX == null ||
-      this._lastRevealY == null ||
-      Math.abs(hero.x - this._lastRevealX) > 80 ||
-      Math.abs(hero.y - this._lastRevealY) > 80
-    ) {
-      this.revealAround(hero.x, hero.y, this.revealSoftRadius);
-      this._lastRevealX = hero.x;
-      this._lastRevealY = hero.y;
-    }
-
-    this._heroRescueCd = Math.max(0, this._heroRescueCd - dt);
-
-    if (!hero.state?.sailing && this._heroRescueCd <= 0) {
-      if (!this.canWalk(hero.x, hero.y) || this._isTrappedInWaterPocket(hero.x, hero.y)) {
-        const rescue =
-          this._findSafeLandPatchNear(hero.x, hero.y, 700) ||
-          this._findNearbyLand(hero.x, hero.y, 700, false, true) ||
-          this._findSafeLandPatchNear(this.spawn.x, this.spawn.y, 700) ||
-          this.spawn ||
-          { x: 0, y: 0 };
-
-        hero.x = rescue.x;
-        hero.y = rescue.y;
-        hero.vx = 0;
-        hero.vy = 0;
-        if (hero.state) hero.state.sailing = false;
-
-        this._heroRescueCd = 2.4;
-        this.revealAround(hero.x, hero.y, this.revealSoftRadius);
-      }
-    }
-
-    this._miniTimer += dt;
-    if (this._miniTimer >= 0.24) {
-      this._miniTimer = 0;
-      this._minimapDirty = true;
-    }
+    void dt;
+    void hero;
   }
 
-  draw(ctx, camera) {
-    if (!ctx || !camera) return;
+  /* ===========================
+     WORLD QUERIES
+  =========================== */
 
-    const camX = camera.x ?? 0;
-    const camY = camera.y ?? 0;
-
-    const halfW = this.viewW * 0.5;
-    const halfH = this.viewH * 0.5;
-    const pad = 128;
-
-    const x0 = camX - halfW - pad;
-    const x1 = camX + halfW + pad;
-    const y0 = camY - halfH - pad;
-    const y1 = camY + halfH + pad;
-
-    const tx0 = Math.floor(x0 / this.tileSize);
-    const tx1 = Math.ceil(x1 / this.tileSize);
-    const ty0 = Math.floor(y0 / this.tileSize);
-    const ty1 = Math.ceil(y1 / this.tileSize);
-
-    for (let ty = ty0; ty <= ty1; ty++) {
-      const wy = ty * this.tileSize;
-      for (let tx = tx0; tx <= tx1; tx++) {
-        const wx = tx * this.tileSize;
-        const tile = this._sampleTile(wx, wy);
-        ctx.fillStyle = this._tileColor(tile, wx, wy);
-        ctx.fillRect(wx, wy, this.tileSize + 1, this.tileSize + 1);
-        this._drawTileDecor(ctx, tile, wx, wy);
-      }
-    }
-
-    this._drawPOIs(ctx);
-  }
-
-  canWalk(x, y) {
-    return this._sampleTile(x, y) !== "water";
+  isWater(x, y) {
+    const n = this._terrainNoise(x, y);
+    const river = this._riverField(x, y);
+    return n < -0.16 || river < 0.09;
   }
 
   isSolid(x, y) {
-    return !this.canWalk(x, y);
+    if (Math.abs(x) > this.boundsRadius || Math.abs(y) > this.boundsRadius) return true;
+    return this.isWater(x, y);
   }
 
-  isWater(x, y) {
-    return this._sampleTile(x, y) === "water";
-  }
-
-  getGroundType(x, y) {
-    return this._sampleTile(x, y);
+  canWalk(x, y) {
+    if (Math.abs(x) > this.boundsRadius || Math.abs(y) > this.boundsRadius) return false;
+    return !this.isWater(x, y);
   }
 
   getMoveModifier(x, y) {
-    const t = this._sampleTile(x, y);
-    if (t === "road") return 1.10;
-    if (t === "sand") return 0.90;
-    if (t === "forest") return 0.84;
-    if (t === "rock") return 0.88;
-    return 1.0;
+    if (this.isWater(x, y)) return 0.84;
+
+    const biome = this.getZoneName(x, y);
+    if (biome === "High Meadow") return 1.04;
+    if (biome === "Old Road") return 1.08;
+    if (biome === "Stone Flats") return 0.98;
+    if (biome === "Whisper Grass") return 0.96;
+    if (biome === "Ash Fields") return 0.93;
+
+    return 1;
   }
 
   getZoneName(x, y) {
-    const t = this._sampleTile(x, y);
-    if (t === "water") return "Open Water";
-    if (t === "sand") return "Shoreline";
-    if (t === "forest") return "Deep Forest";
-    if (t === "rock") return "Stone Fields";
-    if (t === "road") return "Old Road";
-    return "Greenwild";
+    const kx = ((x / 180) | 0);
+    const ky = ((y / 180) | 0);
+    const key = `${kx},${ky}`;
+    if (this._zoneCache.has(key)) return this._zoneCache.get(key);
+
+    const h = Math.abs(hash2(kx, ky, this.seed)) % 1000;
+    let name = "Green Reach";
+
+    if (this._isNearCamp(x, y, 220)) name = "Camp Grounds";
+    else if (this._isNearDungeon(x, y, 240)) name = "Ruin Approach";
+    else if (this._isNearDock(x, y, 220)) name = "Shoreline";
+    else if (this._isNearWaystone(x, y, 220)) name = "Waystone Rise";
+    else if (this._isNearWater(x, y, 90)) name = "Riverbank";
+    else if (h < 130) name = "Whisper Grass";
+    else if (h < 250) name = "Old Road";
+    else if (h < 390) name = "Stone Flats";
+    else if (h < 540) name = "High Meadow";
+    else if (h < 700) name = "Ash Fields";
+    else if (h < 860) name = "Pine Verge";
+    else name = "Green Reach";
+
+    this._zoneCache.set(key, name);
+    return name;
   }
 
-  getMinimapCanvas() {
-    if (!this._minimap || this._minimapDirty) {
-      this._rebuildMinimap();
-    }
-    return this._minimap;
-  }
-
-  isRevealed(wx, wy, mode = this.mapMode) {
-    const set = mode === "large" ? this._revealedLarge : this._revealedSmall;
-    const size = mode === "large" ? 96 : 160;
-    const key = `${Math.floor(wx / size)},${Math.floor(wy / size)}`;
-    return set.has(key);
-  }
-
-  revealAround(x, y, radius) {
-    const addTo = (bucketSize, set) => {
-      const r = Math.max(bucketSize, radius | 0);
-      const x0 = Math.floor((x - r) / bucketSize);
-      const x1 = Math.floor((x + r) / bucketSize);
-      const y0 = Math.floor((y - r) / bucketSize);
-      const y1 = Math.floor((y + r) / bucketSize);
-
-      for (let by = y0; by <= y1; by++) {
-        for (let bx = x0; bx <= x1; bx++) {
-          const cx = bx * bucketSize + bucketSize * 0.5;
-          const cy = by * bucketSize + bucketSize * 0.5;
-          const dx = cx - x;
-          const dy = cy - y;
-          if (dx * dx + dy * dy <= r * r) {
-            set.add(`${bx},${by}`);
-          }
-        }
-      }
-    };
-
-    addTo(160, this._revealedSmall);
-    addTo(96, this._revealedLarge);
-    this._minimapDirty = true;
-  }
-
-  _tileColor(tile, x, y) {
-    const n = (hash2((x / this.tileSize) | 0, (y / this.tileSize) | 0, this.seed) >>> 0) & 7;
-
-    if (tile === "water") {
-      return n < 2 ? "#276caa" : n < 5 ? "#2f80c2" : "#3893d8";
-    }
-    if (tile === "sand") {
-      return n < 3 ? "#cab97f" : "#dbc98f";
-    }
-    if (tile === "road") {
-      return n < 3 ? "#798695" : "#8b98a6";
-    }
-    if (tile === "rock") {
-      return n < 3 ? "#70757d" : "#7d848d";
-    }
-    if (tile === "forest") {
-      return n < 3 ? "#2f5d33" : n < 6 ? "#386c3c" : "#2b542f";
-    }
-    return n < 3 ? "#63a34f" : n < 6 ? "#6fb55a" : "#7bc366";
-  }
-
-  _drawTileDecor(ctx, tile, wx, wy) {
-    const h = hash2((wx / this.tileSize) | 0, (wy / this.tileSize) | 0, this.seed) >>> 0;
-
-    if (tile === "grass") {
-      if (h % 17 === 0) {
-        ctx.fillStyle = "rgba(40,98,34,0.56)";
-        ctx.fillRect(wx + 7, wy + 7, 2, 7);
-        ctx.fillRect(wx + 10, wy + 5, 2, 9);
-      }
-      if (h % 29 === 0) {
-        ctx.fillStyle = "rgba(90,140,68,0.28)";
-        ctx.fillRect(wx + 14, wy + 4, 4, 3);
-      }
-    } else if (tile === "forest") {
-      if (h % 6 === 0) {
-        ctx.fillStyle = "rgba(26,58,30,0.88)";
-        ctx.beginPath();
-        ctx.arc(wx + 12, wy + 12, 7, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.fillStyle = "rgba(34,74,38,0.84)";
-        ctx.beginPath();
-        ctx.arc(wx + 8, wy + 13, 5.5, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.beginPath();
-        ctx.arc(wx + 15, wy + 9, 5.2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    } else if (tile === "rock") {
-      if (h % 9 === 0) {
-        ctx.fillStyle = "rgba(90,96,108,0.55)";
-        ctx.fillRect(wx + 6, wy + 7, 8, 5);
-      }
-    } else if (tile === "water") {
-      if (h % 15 === 0) {
-        ctx.fillStyle = "rgba(255,255,255,0.08)";
-        ctx.fillRect(wx + 6, wy + 11, 8, 1);
-      }
-      if (h % 31 === 0) {
-        ctx.fillStyle = "rgba(255,255,255,0.05)";
-        ctx.fillRect(wx + 11, wy + 7, 4, 1);
-      }
-    } else if (tile === "sand") {
-      if (h % 23 === 0) {
-        ctx.fillStyle = "rgba(186,166,104,0.24)";
-        ctx.fillRect(wx + 9, wy + 9, 5, 2);
-      }
-    }
-  }
-
-  _drawPOIs(ctx) {
-    for (const d of this.docks) {
-      ctx.fillStyle = "rgba(110,82,52,0.95)";
-      ctx.fillRect(d.x - 12, d.y - 4, 24, 8);
-      ctx.fillRect(d.x - 6, d.y - 10, 12, 6);
-      ctx.strokeStyle = "rgba(50,34,20,0.85)";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(d.x - 12, d.y - 4, 24, 8);
-    }
-
-    for (const w of this.waystones) {
-      ctx.fillStyle = "rgba(214,198,116,0.95)";
-      ctx.fillRect(w.x - 6, w.y - 18, 12, 20);
-      ctx.fillStyle = "rgba(255,235,140,0.85)";
-      ctx.fillRect(w.x - 3, w.y - 14, 6, 8);
-      ctx.fillStyle = "rgba(0,0,0,0.18)";
-      ctx.beginPath();
-      ctx.ellipse(w.x, w.y + 8, 10, 4, 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    for (const c of this.camps) {
-      ctx.fillStyle = "rgba(126,74,52,0.96)";
-      ctx.beginPath();
-      ctx.moveTo(c.x, c.y - 10);
-      ctx.lineTo(c.x + 12, c.y + 8);
-      ctx.lineTo(c.x - 12, c.y + 8);
-      ctx.closePath();
-      ctx.fill();
-
-      ctx.fillStyle = "rgba(255,120,78,0.9)";
-      ctx.beginPath();
-      ctx.arc(c.x, c.y + 12, 4, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    for (const d of this.dungeons) {
-      ctx.fillStyle = "rgba(70,56,84,0.96)";
-      ctx.beginPath();
-      ctx.arc(d.x, d.y, 14, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "rgba(154,126,214,0.95)";
-      ctx.beginPath();
-      ctx.arc(d.x, d.y, 7, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  _rebuildMinimap() {
-    const size = 220;
-    const c = document.createElement("canvas");
-    c.width = size;
-    c.height = size;
-    const ctx = c.getContext("2d");
-
-    ctx.clearRect(0, 0, size, size);
-    ctx.fillStyle = "rgba(10,14,20,1)";
-    ctx.fillRect(0, 0, size, size);
-
-    const half = this.mapMode === "large"
-      ? Math.max(4000, this.boundsRadius)
-      : Math.max(2000, this.boundsRadius * 0.5);
-    const span = half * 2;
-
-    for (let py = 0; py < size; py++) {
-      for (let px = 0; px < size; px++) {
-        const wx = -half + (px / size) * span;
-        const wy = -half + (py / size) * span;
-
-        if (!this.isRevealed(wx, wy, this.mapMode)) {
-          ctx.fillStyle = "#0b1016";
-          ctx.fillRect(px, py, 1, 1);
-          continue;
-        }
-
-        const tile = this._sampleTile(wx, wy);
-        let color = "#5fa44f";
-        if (tile === "water") color = "#2d79bd";
-        else if (tile === "sand") color = "#d6c68c";
-        else if (tile === "road") color = "#8592a0";
-        else if (tile === "rock") color = "#767c86";
-        else if (tile === "forest") color = "#37653a";
-
-        ctx.fillStyle = color;
-        ctx.fillRect(px, py, 1, 1);
-      }
-    }
-
-    const plot = (wx, wy, color, r = 2) => {
-      if (!this.isRevealed(wx, wy, this.mapMode)) return;
-      const px = ((wx + half) / span) * size;
-      const py = ((wy + half) / span) * size;
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(px, py, r, 0, Math.PI * 2);
-      ctx.fill();
-    };
-
-    for (const w of this.waystones) plot(w.x, w.y, "#f5dc6a", 2.8);
-    for (const d of this.docks) plot(d.x, d.y, "#79dbff", 2.5);
-    for (const c2 of this.camps) plot(c2.x, c2.y, "#ff7b6a", 2.2);
-    for (const dg of this.dungeons) plot(dg.x, dg.y, "#b68cff", 3);
-
-    this._minimap = c;
-    this._minimapDirty = false;
-  }
-
-  _sampleTile(x, y) {
-    if (x < -this.boundsRadius || x > this.boundsRadius) return "water";
-    if (y < -this.boundsRadius || y > this.boundsRadius) return "water";
-
-    const landA = fbm((x + this.seed * 0.11) * 0.00042, (y - this.seed * 0.07) * 0.00042, 4);
-    const landB = fbm((x - this.seed * 0.05) * 0.00078, (y + this.seed * 0.09) * 0.00078, 4);
-    const med = fbm((x + this.seed * 0.03) * 0.0019, (y + this.seed * 0.04) * 0.0019, 3);
-    const rockN = fbm((x - this.seed * 0.02) * 0.0053, (y + this.seed * 0.05) * 0.0053, 2);
-    const forestN = fbm((x + this.seed * 0.27) * 0.00165, (y - this.seed * 0.18) * 0.00165, 3);
-
-    const warpX = fbm((x + this.seed * 0.13) * 0.00072, (y - this.seed * 0.21) * 0.00072, 3) * 240;
-    const warpY = fbm((x - this.seed * 0.19) * 0.00072, (y + this.seed * 0.16) * 0.00072, 3) * 240;
-
-    const wx = x + warpX;
-    const wy = y + warpY;
-
-    const bandA = Math.abs(Math.sin(wx * 0.00094 + this.seed * 0.00017));
-    const bandB = Math.abs(Math.sin(wy * 0.00105 - this.seed * 0.00013));
-    const bandC = Math.abs(Math.sin((wx + wy) * 0.00058 + this.seed * 0.00009));
-
-    const lakeN = fbm((x + this.seed * 0.23) * 0.00095, (y - this.seed * 0.18) * 0.00095, 3);
-    const shoreNoise = fbm((x - this.seed * 0.12) * 0.0034, (y + this.seed * 0.08) * 0.0034, 2);
-
-    let land = landA * 0.60 + landB * 0.40;
-    land += med * 0.07;
-
-    if (bandA < 0.11) land -= 0.31;
-    else if (bandA < 0.15) land -= 0.13;
-
-    if (bandB < 0.10) land -= 0.22;
-    else if (bandB < 0.135) land -= 0.09;
-
-    if (bandC < 0.13) land -= 0.34;
-    else if (bandC < 0.17) land -= 0.14;
-
-    if (lakeN < -0.45) land -= 0.24;
-    else if (lakeN < -0.35) land -= 0.12;
-
-    const roadWarpX = fbm((x + this.seed * 0.41) * 0.00094, (y - this.seed * 0.27) * 0.00094, 2) * 88;
-    const roadWarpY = fbm((x - this.seed * 0.37) * 0.00094, (y + this.seed * 0.33) * 0.00094, 2) * 88;
-    const rx = x + roadWarpX;
-    const ry = y + roadWarpY;
-
-    const roadA = Math.abs(Math.sin(rx * 0.0017 + this.seed * 0.00021));
-    const roadB = Math.abs(Math.sin((rx - ry) * 0.00108 - this.seed * 0.00017));
-    const roadField = fbm((x + this.seed * 0.09) * 0.0035, (y - this.seed * 0.06) * 0.0035, 2);
-
-    if (land < 0.09) return "water";
-    if (land < 0.18 + shoreNoise * 0.02) return "sand";
-
-    if ((roadA < 0.008 || roadB < 0.007) && roadField > 0.31 && land > 0.47) {
-      return "road";
-    }
-
-    if (rockN > 0.65 && land > 0.34) return "rock";
-    if (forestN > 0.17 && land > 0.22) return "forest";
-    return "grass";
-  }
-
-  _chunkKey(cx, cy) {
-    return `${cx},${cy}`;
-  }
-
-  _queueAround(wx, wy, radiusChunks = 2) {
-    const ccx = Math.floor(wx / this.chunkSize);
-    const ccy = Math.floor(wy / this.chunkSize);
-
-    for (let cy = ccy - radiusChunks; cy <= ccy + radiusChunks; cy++) {
-      for (let cx = ccx - radiusChunks; cx <= ccx + radiusChunks; cx++) {
-        const key = this._chunkKey(cx, cy);
-        if (this._chunks.has(key) || this._queued.has(key)) continue;
-        this._queued.add(key);
-        this._buildQueue.push(key);
-      }
-    }
-  }
-
-  _buildChunk(cx, cy) {
-    const key = this._chunkKey(cx, cy);
-    this._chunks.set(key, { cx, cy });
-  }
-
-  _initPOIs() {
-    this.spawn = this._findGoodSpawn();
-
-    let wid = 1;
-    const waystoneRings = [520, 1250, 2050, 2950, 3850];
-    for (let ringIndex = 0; ringIndex < waystoneRings.length; ringIndex++) {
-      const ring = waystoneRings[ringIndex];
-      const count = 4 + ringIndex;
-
-      for (let i = 0; i < count; i++) {
-        const a = (i / count) * Math.PI * 2 + ringIndex * 0.17;
-        const sx = this.spawn.x + Math.cos(a) * ring;
-        const sy = this.spawn.y + Math.sin(a) * ring;
-
-        const p =
-          this._findWaystoneLandNear(sx, sy, 320) ||
-          this._findSafeLandPatchNear(sx, sy, 320) ||
-          this._findNearbyLand(sx, sy, 320, false, true);
-
-        if (!p) continue;
-        this.waystones.push({ id: wid++, x: p.x, y: p.y });
-      }
-    }
-
-    let did = 1;
-    const dockAngles = [0.35, 1.95, 3.7, 5.15];
-    for (const a of dockAngles) {
-      const sx = this.spawn.x + Math.cos(a) * 820;
-      const sy = this.spawn.y + Math.sin(a) * 820;
-      const shore = this._findNearbyShore(sx, sy, 440);
-      if (!shore) continue;
-      this.docks.push({ id: did++, x: shore.x, y: shore.y });
-    }
-
-    let cid = 1;
-    const campAngles = [0.9, 2.4, 4.4];
-    for (const a of campAngles) {
-      const sx = this.spawn.x + Math.cos(a) * 980;
-      const sy = this.spawn.y + Math.sin(a) * 980;
-      const cp =
-        this._findSafeLandPatchNear(sx, sy, 340) ||
-        this._findNearbyLand(sx, sy, 340, false, true);
-      if (!cp) continue;
-      this.camps.push({ id: cid++, x: cp.x, y: cp.y });
-    }
-
-    const dg =
-      this._findSafeLandPatchNear(this.spawn.x + 420, this.spawn.y + 220, 500) ||
-      this._findNearbyLand(this.spawn.x + 420, this.spawn.y + 220, 500, false, true) || {
-        x: this.spawn.x + 360,
-        y: this.spawn.y + 220,
-      };
-
-    this.dungeons.push({ id: 1, x: dg.x, y: dg.y, name: "Deep Ruin" });
-  }
-
-  _findGoodSpawn() {
-    const radii = [0, 48, 96, 144, 192, 240, 320, 420, 560, 720, 900, 1200];
-
-    for (const r of radii) {
-      const samples = r <= 240 ? 40 : 72;
-      for (let i = 0; i < samples; i++) {
-        const a = (i / samples) * Math.PI * 2 + r * 0.0007;
-        const x = Math.cos(a) * r;
-        const y = Math.sin(a) * r;
-
-        if (this._isSpawnCandidate(x, y)) {
-          return { x, y };
-        }
-      }
-    }
-
-    const fallback = this._findSafeLandPatchNear(0, 0, 1800);
-    if (fallback) return fallback;
-
-    return { x: 0, y: 0 };
-  }
-
-  _isSpawnCandidate(x, y) {
-    const t = this._sampleTile(x, y);
-    if (!(t === "grass" || t === "road")) return false;
-
-    if (this._isNearWater(x, y, 170)) return false;
-    if (!this._hasWalkablePatch(x, y, 72)) return false;
-    if (!this._hasWalkablePatch(x, y, 136)) return false;
-    if (this._isTrappedByNarrowLand(x, y)) return false;
-
-    return true;
-  }
-
-  _hasWalkablePatch(x, y, radius = 64) {
-    for (let r = 0; r <= radius; r += 16) {
-      const count = r === 0 ? 1 : 16;
-      for (let i = 0; i < count; i++) {
-        const a = count === 1 ? 0 : (i / count) * Math.PI * 2;
-        const px = x + Math.cos(a) * r;
-        const py = y + Math.sin(a) * r;
-        if (!this.canWalk(px, py)) return false;
-      }
-    }
-    return true;
-  }
-
-  _isNearWater(x, y, dist = 72) {
-    const step = this.tileSize;
-    for (let r = step; r <= dist; r += step) {
-      for (let i = 0; i < 16; i++) {
-        const a = (i / 16) * Math.PI * 2;
-        const px = x + Math.cos(a) * r;
-        const py = y + Math.sin(a) * r;
-        if (this._sampleTile(px, py) === "water") return true;
+  _isNearWater(x, y, r = 64) {
+    const step = Math.max(12, (r / 3) | 0);
+    for (let oy = -r; oy <= r; oy += step) {
+      for (let ox = -r; ox <= r; ox += step) {
+        if (ox * ox + oy * oy > r * r) continue;
+        if (this.isWater(x + ox, y + oy)) return true;
       }
     }
     return false;
   }
 
-  _isTrappedInWaterPocket(x, y) {
-    if (this.canWalk(x, y)) return false;
+  _isNearCamp(x, y, r = 120) {
+    const r2 = r * r;
+    for (const c of this.camps) {
+      const dx = x - c.x;
+      const dy = y - c.y;
+      if (dx * dx + dy * dy <= r2) return true;
+    }
+    return false;
+  }
 
-    let waterCount = 0;
-    let samples = 0;
-    for (let r = 16; r <= 120; r += 16) {
-      for (let i = 0; i < 20; i++) {
-        const a = (i / 20) * Math.PI * 2;
+  _isNearDock(x, y, r = 120) {
+    const r2 = r * r;
+    for (const d of this.docks) {
+      const dx = x - d.x;
+      const dy = y - d.y;
+      if (dx * dx + dy * dy <= r2) return true;
+    }
+    return false;
+  }
+
+  _isNearWaystone(x, y, r = 120) {
+    const r2 = r * r;
+    for (const w of this.waystones) {
+      const dx = x - w.x;
+      const dy = y - w.y;
+      if (dx * dx + dy * dy <= r2) return true;
+    }
+    return false;
+  }
+
+  _isNearDungeon(x, y, r = 120) {
+    const r2 = r * r;
+    for (const d of this.dungeons) {
+      const dx = x - d.x;
+      const dy = y - d.y;
+      if (dx * dx + dy * dy <= r2) return true;
+    }
+    return false;
+  }
+
+  _findNearbyLand(x, y, radius = 220, allowWater = false, requireDryPatch = false) {
+    if (!allowWater && this.canWalk(x, y)) {
+      if (!requireDryPatch || !this._isNearWater(x, y, 22)) return { x, y };
+    }
+
+    const step = 18;
+    for (let r = step; r <= radius; r += step) {
+      for (let a = 0; a < Math.PI * 2; a += Math.PI / 12) {
         const px = x + Math.cos(a) * r;
         const py = y + Math.sin(a) * r;
-        if (this._sampleTile(px, py) === "water") waterCount++;
-        samples++;
+        if (!allowWater && !this.canWalk(px, py)) continue;
+        if (requireDryPatch && this._isNearWater(px, py, 18)) continue;
+        return { x: px, y: py };
       }
     }
 
-    return samples > 0 && waterCount / samples > 0.55;
+    return null;
   }
 
-  _isTrappedByNarrowLand(x, y) {
-    let blockedArcs = 0;
-    const testR = 88;
+  _findSafeLandPatchNear(x, y, radius = 300) {
+    if (this.canWalk(x, y) && !this._isNearWater(x, y, 18)) return { x, y };
 
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2;
-      const px = x + Math.cos(a) * testR;
-      const py = y + Math.sin(a) * testR;
-      if (!this.canWalk(px, py)) blockedArcs++;
-    }
-
-    return blockedArcs >= 4;
-  }
-
-  _findSafeLandPatchNear(x, y, maxR = 240) {
-    for (let r = 0; r <= maxR; r += 16) {
-      const samples = r === 0 ? 1 : 40;
-      for (let i = 0; i < samples; i++) {
-        const a = samples === 1 ? 0 : (i / samples) * Math.PI * 2;
+    const step = 20;
+    for (let r = step; r <= radius; r += step) {
+      for (let a = 0; a < Math.PI * 2; a += Math.PI / 14) {
         const px = x + Math.cos(a) * r;
         const py = y + Math.sin(a) * r;
-        if (this._isSpawnCandidate(px, py)) {
-          return { x: px, y: py };
-        }
+        if (!this.canWalk(px, py)) continue;
+        if (this._isNearWater(px, py, 18)) continue;
+        return { x: px, y: py };
+      }
+    }
+
+    return this._findNearbyLand(x, y, radius, false, false);
+  }
+
+  /* ===========================
+     POI GENERATION
+  =========================== */
+
+  _generatePOIs() {
+    this.camps = [];
+    this.docks = [];
+    this.waystones = [];
+    this.dungeons = [];
+
+    const rng = new RNG(hash2(this.seed, 777));
+
+    const campTargets = [
+      { x: -1200, y: -480 },
+      { x: 980, y: -860 },
+      { x: -1040, y: 980 },
+      { x: 1240, y: 820 },
+      { x: 120, y: 1320 },
+    ];
+
+    const wayTargets = [
+      { x: -1800, y: -220 },
+      { x: 1720, y: -180 },
+      { x: -260, y: 1760 },
+      { x: 420, y: -1680 },
+    ];
+
+    const dungeonTargets = [
+      { x: 1880, y: 1180 },
+      { x: -1960, y: 1240 },
+      { x: 1420, y: -1660 },
+    ];
+
+    const dockTargets = [
+      { x: -2300, y: 220 },
+      { x: 2260, y: -140 },
+      { x: 160, y: 2360 },
+    ];
+
+    for (let i = 0; i < campTargets.length; i++) {
+      const p = this._snapToLand(
+        campTargets[i].x + rng.range(-120, 120),
+        campTargets[i].y + rng.range(-120, 120),
+        420
+      );
+      if (!p) continue;
+      this.camps.push({
+        id: i + 1,
+        x: p.x,
+        y: p.y,
+        name: ["Oak Camp", "Stone Camp", "Pine Camp", "River Camp", "Dust Camp"][i] || `Camp ${i + 1}`,
+      });
+    }
+
+    for (let i = 0; i < wayTargets.length; i++) {
+      const p = this._snapToLand(wayTargets[i].x, wayTargets[i].y, 420);
+      if (!p) continue;
+      this.waystones.push({
+        id: i + 1,
+        x: p.x,
+        y: p.y,
+        name: `Waystone ${i + 1}`,
+      });
+    }
+
+    for (let i = 0; i < dungeonTargets.length; i++) {
+      const p = this._snapToLand(dungeonTargets[i].x, dungeonTargets[i].y, 520);
+      if (!p) continue;
+      this.dungeons.push({
+        id: i + 1,
+        x: p.x,
+        y: p.y,
+        name: ["Sunken Gate", "Ash Ruin", "Broken Crypt"][i] || `Dungeon ${i + 1}`,
+      });
+    }
+
+    for (let i = 0; i < dockTargets.length; i++) {
+      const p = this._snapDockToShore(dockTargets[i].x, dockTargets[i].y, 620);
+      if (!p) continue;
+      this.docks.push({
+        id: i + 1,
+        x: p.x,
+        y: p.y,
+        name: ["West Dock", "East Dock", "South Dock"][i] || `Dock ${i + 1}`,
+      });
+    }
+  }
+
+  _snapToLand(x, y, radius = 400) {
+    return this._findSafeLandPatchNear(x, y, radius);
+  }
+
+  _snapDockToShore(x, y, radius = 500) {
+    const step = 22;
+    for (let r = 0; r <= radius; r += step) {
+      for (let a = 0; a < Math.PI * 2; a += Math.PI / 18) {
+        const px = x + Math.cos(a) * r;
+        const py = y + Math.sin(a) * r;
+        if (!this.canWalk(px, py)) continue;
+
+        const nearWater =
+          this.isWater(px + 28, py) ||
+          this.isWater(px - 28, py) ||
+          this.isWater(px, py + 28) ||
+          this.isWater(px, py - 28);
+
+        if (nearWater) return { x: px, y: py };
       }
     }
     return null;
   }
 
-  _findNearbyLand(x, y, maxR = 240, allowNearWater = true, avoidWaterStrong = false) {
-    let best = null;
-    let bestScore = Infinity;
+  /* ===========================
+     DRAW
+  =========================== */
 
-    for (let r = 0; r <= maxR; r += 16) {
-      for (let i = 0; i < 32; i++) {
-        const a = (i / 32) * Math.PI * 2;
-        const px = x + Math.cos(a) * r;
-        const py = y + Math.sin(a) * r;
-        const t = this._sampleTile(px, py);
+  draw(ctx, camera) {
+    const vb = this._viewBounds(camera);
 
-        if (!(t === "grass" || t === "rock" || t === "sand" || t === "road" || t === "forest")) continue;
-        if (!allowNearWater && this._isNearWater(px, py, 80)) continue;
-        if (avoidWaterStrong && this._isNearWater(px, py, 120)) continue;
+    this._drawGround(ctx, vb);
+    this._drawWater(ctx, vb);
+    this._drawRoadHints(ctx, vb);
+    this._drawPOIs(ctx, vb);
+  }
 
-        const score = r + (t === "grass" || t === "road" ? 0 : 12);
-        if (score < bestScore) {
-          bestScore = score;
-          best = { x: px, y: py };
+  _viewBounds(camera) {
+    const halfW = this.viewW * 0.5;
+    const halfH = this.viewH * 0.5;
+    return {
+      x0: camera.x - halfW - 120,
+      y0: camera.y - halfH - 120,
+      x1: camera.x + halfW + 120,
+      y1: camera.y + halfH + 120,
+    };
+  }
+
+  _drawGround(ctx, vb) {
+    const t = this.tile;
+    const x0 = Math.floor(vb.x0 / t) * t;
+    const y0 = Math.floor(vb.y0 / t) * t;
+    const x1 = Math.ceil(vb.x1 / t) * t;
+    const y1 = Math.ceil(vb.y1 / t) * t;
+
+    for (let y = y0; y <= y1; y += t) {
+      for (let x = x0; x <= x1; x += t) {
+        const water = this.isWater(x + t * 0.5, y + t * 0.5);
+        if (water) continue;
+
+        const zone = this.getZoneName(x, y);
+        ctx.fillStyle = this._groundColor(zone, x, y);
+        ctx.fillRect(x, y, t + 1, t + 1);
+
+        const n = Math.abs(hash2((x / t) | 0, (y / t) | 0, this.seed + 66)) % 100;
+        if (n < 8) this._drawGrassTuft(ctx, x + 10, y + 22);
+        else if (n > 94) this._drawPebble(ctx, x + 16, y + 18);
+      }
+    }
+  }
+
+  _drawWater(ctx, vb) {
+    const t = this.tile;
+    const x0 = Math.floor(vb.x0 / t) * t;
+    const y0 = Math.floor(vb.y0 / t) * t;
+    const x1 = Math.ceil(vb.x1 / t) * t;
+    const y1 = Math.ceil(vb.y1 / t) * t;
+
+    for (let y = y0; y <= y1; y += t) {
+      for (let x = x0; x <= x1; x += t) {
+        if (!this.isWater(x + t * 0.5, y + t * 0.5)) continue;
+
+        const n = this._terrainNoise(x, y);
+        ctx.fillStyle = n < -0.28 ? "#2b6ba0" : "#3d84b8";
+        ctx.fillRect(x, y, t + 1, t + 1);
+
+        const foam = Math.abs(hash2((x / t) | 0, (y / t) | 0, 9182)) % 100;
+        if (foam < 14) {
+          ctx.fillStyle = "rgba(255,255,255,0.12)";
+          ctx.fillRect(x + 4, y + 6, 12, 2);
+          ctx.fillRect(x + 16, y + 18, 8, 2);
         }
       }
     }
+  }
 
+  _drawRoadHints(ctx, vb) {
+    const camps = this.camps;
+    const ways = this.waystones;
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(194,170,120,0.14)";
+    ctx.lineWidth = 18;
+    ctx.lineCap = "round";
+
+    for (const c of camps) {
+      const nearestWay = this._nearestPOI(c.x, c.y, ways);
+      if (!nearestWay) continue;
+      if (!segmentIntersectsView(c.x, c.y, nearestWay.x, nearestWay.y, vb)) continue;
+
+      ctx.beginPath();
+      ctx.moveTo(c.x, c.y);
+      ctx.lineTo(nearestWay.x, nearestWay.y);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  _drawPOIs(ctx, vb) {
+    for (const c of this.camps) {
+      if (!pointInView(c.x, c.y, vb, 220)) continue;
+      this._drawCamp(ctx, c);
+    }
+
+    for (const w of this.waystones) {
+      if (!pointInView(w.x, w.y, vb, 120)) continue;
+      this._drawWaystone(ctx, w);
+    }
+
+    for (const d of this.docks) {
+      if (!pointInView(d.x, d.y, vb, 120)) continue;
+      this._drawDock(ctx, d);
+    }
+
+    for (const dg of this.dungeons) {
+      if (!pointInView(dg.x, dg.y, vb, 180)) continue;
+      this._drawDungeonEntrance(ctx, dg);
+    }
+  }
+
+  _drawCamp(ctx, camp) {
+    const tier = this._campTier(camp.id);
+    const scale = tier >= 4 ? 1.34 : tier >= 3 ? 1.20 : tier >= 2 ? 1.08 : 1.0;
+
+    ctx.save();
+    ctx.translate(camp.x, camp.y);
+
+    this._drawCampGround(ctx, tier);
+
+    if (tier === 1) {
+      this._drawCampOutpost(ctx, camp, scale);
+    } else if (tier === 2) {
+      this._drawCampTier2(ctx, camp, scale);
+    } else if (tier === 3) {
+      this._drawCampTier3(ctx, camp, scale);
+    } else {
+      this._drawCampTier4(ctx, camp, scale);
+    }
+
+    ctx.fillStyle = "#dfe8f5";
+    ctx.font = "bold 12px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(`${camp.name || `Camp ${camp.id}`} • ${this._campTierName(camp.id)}`, 0, -54 - (tier - 1) * 4);
+
+    ctx.restore();
+  }
+
+  _drawCampGround(ctx, tier) {
+    const rx = tier >= 4 ? 82 : tier >= 3 ? 70 : tier >= 2 ? 58 : 46;
+    const ry = tier >= 4 ? 26 : tier >= 3 ? 22 : tier >= 2 ? 18 : 12;
+
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.beginPath();
+    ctx.ellipse(0, 20, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    const ringColor =
+      tier >= 4 ? "rgba(194,166,126,0.24)" :
+      tier >= 3 ? "rgba(176,150,112,0.22)" :
+      tier >= 2 ? "rgba(160,136,100,0.18)" :
+      "rgba(140,118,86,0.14)";
+
+    ctx.strokeStyle = ringColor;
+    ctx.lineWidth = tier >= 4 ? 5 : tier >= 3 ? 4 : tier >= 2 ? 3 : 2;
+    ctx.beginPath();
+    ctx.ellipse(0, 20, rx - 6, ry - 3, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  _drawCampOutpost(ctx, camp, scale) {
+    this._drawTent(ctx, -18 * scale, 0, 0.88 * scale, "#b78b52");
+    this._drawCampfire(ctx, 10 * scale, 8 * scale, 1.0, false);
+    this._drawCrate(ctx, 26 * scale, 8 * scale, 1.0);
+    this._drawBanner(ctx, -2 * scale, -8 * scale, "#d9c787", 1.0);
+    void camp;
+  }
+
+  _drawCampTier2(ctx, camp, scale) {
+    this._drawTent(ctx, -26 * scale, 2 * scale, 0.94 * scale, "#be8d58");
+    this._drawTent(ctx, 24 * scale, 4 * scale, 0.88 * scale, "#b8844c");
+    this._drawCampfire(ctx, 0, 8 * scale, 1.1, false);
+    this._drawCrate(ctx, -2 * scale, 24 * scale, 1.1);
+    this._drawBanner(ctx, -36 * scale, -6 * scale, "#b8d987", 1.0);
+    this._drawBanner(ctx, 36 * scale, -4 * scale, "#87c0d9", 1.0);
+    void camp;
+  }
+
+  _drawCampTier3(ctx, camp, scale) {
+    this._drawLowWall(ctx, scale);
+    this._drawMainHall(ctx, 0, 0, 1.0 * scale);
+    this._drawTent(ctx, -40 * scale, 10 * scale, 0.80 * scale, "#c49660");
+    this._drawTent(ctx, 42 * scale, 10 * scale, 0.80 * scale, "#b68454");
+    this._drawCampfire(ctx, 0, 16 * scale, 1.18, true);
+    this._drawBanner(ctx, -52 * scale, -10 * scale, "#c7d971", 1.1);
+    this._drawBanner(ctx, 52 * scale, -10 * scale, "#9ec7ff", 1.1);
+    this._drawCrate(ctx, -18 * scale, 28 * scale, 1.15);
+    this._drawCrate(ctx, 18 * scale, 28 * scale, 1.15);
+    void camp;
+  }
+
+  _drawCampTier4(ctx, camp, scale) {
+    this._drawStrongholdWall(ctx, scale);
+    this._drawTower(ctx, -56 * scale, -8 * scale, 0.94 * scale);
+    this._drawTower(ctx, 56 * scale, -8 * scale, 0.94 * scale);
+    this._drawMainHall(ctx, 0, -2 * scale, 1.18 * scale);
+    this._drawCampfire(ctx, 0, 18 * scale, 1.28, true);
+    this._drawBanner(ctx, -66 * scale, -16 * scale, "#ffe08a", 1.15);
+    this._drawBanner(ctx, 66 * scale, -16 * scale, "#ff9f87", 1.15);
+    this._drawCrate(ctx, -22 * scale, 34 * scale, 1.18);
+    this._drawCrate(ctx, 22 * scale, 34 * scale, 1.18);
+    this._drawFencePost(ctx, -32 * scale, 26 * scale, 1.0);
+    this._drawFencePost(ctx, 32 * scale, 26 * scale, 1.0);
+    void camp;
+  }
+
+  _drawTent(ctx, x, y, scale = 1, roof = "#b78b52") {
+    ctx.save();
+    ctx.translate(x, y);
+
+    ctx.fillStyle = "rgba(0,0,0,0.14)";
+    ctx.beginPath();
+    ctx.ellipse(0, 14 * scale, 18 * scale, 6 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#8d6b3b";
+    ctx.fillRect(-16 * scale, 0, 32 * scale, 10 * scale);
+
+    ctx.fillStyle = roof;
+    ctx.beginPath();
+    ctx.moveTo(-20 * scale, 0);
+    ctx.lineTo(0, -18 * scale);
+    ctx.lineTo(20 * scale, 0);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "#6c4b2c";
+    ctx.fillRect(-3 * scale, 3 * scale, 6 * scale, 7 * scale);
+
+    ctx.restore();
+  }
+
+  _drawCampfire(ctx, x, y, scale = 1, strong = false) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    ctx.fillStyle = strong ? "rgba(255,214,140,0.25)" : "rgba(255,210,120,0.16)";
+    ctx.beginPath();
+    ctx.arc(0, 0, (strong ? 24 : 18) * scale, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#6d5237";
+    ctx.fillRect(-10 * scale, 4 * scale, 20 * scale, 4 * scale);
+    ctx.fillRect(-2 * scale, -2 * scale, 4 * scale, 12 * scale);
+
+    ctx.fillStyle = strong ? "#ffb44d" : "#d48b3f";
+    ctx.beginPath();
+    ctx.arc(0, 2 * scale, 6 * scale, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = strong ? "rgba(255,220,140,0.42)" : "rgba(255,210,120,0.32)";
+    ctx.beginPath();
+    ctx.arc(0, 0, 10 * scale, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  _drawCrate(ctx, x, y, scale = 1) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.fillStyle = "#8c6a3e";
+    ctx.fillRect(-6 * scale, -6 * scale, 12 * scale, 12 * scale);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(-6 * scale, -6 * scale, 12 * scale, 12 * scale);
+    ctx.restore();
+  }
+
+  _drawBanner(ctx, x, y, color = "#d9c787", scale = 1) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.strokeStyle = "#7a6748";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, 16 * scale);
+    ctx.lineTo(0, -10 * scale);
+    ctx.stroke();
+
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(0, -8 * scale);
+    ctx.lineTo(12 * scale, -5 * scale);
+    ctx.lineTo(0, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  _drawLowWall(ctx, scale = 1) {
+    ctx.save();
+    ctx.fillStyle = "#90714c";
+    ctx.fillRect(-54 * scale, 18 * scale, 108 * scale, 8 * scale);
+    ctx.fillRect(-58 * scale, 2 * scale, 8 * scale, 24 * scale);
+    ctx.fillRect(50 * scale, 2 * scale, 8 * scale, 24 * scale);
+    ctx.restore();
+  }
+
+  _drawStrongholdWall(ctx, scale = 1) {
+    ctx.save();
+    ctx.fillStyle = "#8e7761";
+    ctx.fillRect(-68 * scale, 16 * scale, 136 * scale, 10 * scale);
+    ctx.fillRect(-72 * scale, -6 * scale, 10 * scale, 32 * scale);
+    ctx.fillRect(62 * scale, -6 * scale, 10 * scale, 32 * scale);
+
+    ctx.fillStyle = "#6a5946";
+    for (let i = -58; i <= 58; i += 16) {
+      ctx.fillRect(i * scale, 10 * scale, 8 * scale, 6 * scale);
+    }
+    ctx.restore();
+  }
+
+  _drawMainHall(ctx, x, y, scale = 1) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    ctx.fillStyle = "rgba(0,0,0,0.16)";
+    ctx.beginPath();
+    ctx.ellipse(0, 18 * scale, 34 * scale, 10 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#8d6b3b";
+    ctx.fillRect(-28 * scale, -2 * scale, 56 * scale, 20 * scale);
+
+    ctx.fillStyle = "#b78b52";
+    ctx.beginPath();
+    ctx.moveTo(-34 * scale, -2 * scale);
+    ctx.lineTo(0, -26 * scale);
+    ctx.lineTo(34 * scale, -2 * scale);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "#67472c";
+    ctx.fillRect(-6 * scale, 4 * scale, 12 * scale, 14 * scale);
+
+    ctx.fillStyle = "rgba(255,226,150,0.22)";
+    ctx.fillRect(-4 * scale, 7 * scale, 8 * scale, 6 * scale);
+
+    ctx.restore();
+  }
+
+  _drawTower(ctx, x, y, scale = 1) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    ctx.fillStyle = "rgba(0,0,0,0.14)";
+    ctx.beginPath();
+    ctx.ellipse(0, 18 * scale, 14 * scale, 5 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#8e7761";
+    ctx.fillRect(-10 * scale, -12 * scale, 20 * scale, 30 * scale);
+
+    ctx.fillStyle = "#6a5946";
+    ctx.fillRect(-12 * scale, -16 * scale, 24 * scale, 6 * scale);
+    ctx.fillRect(-8 * scale, -4 * scale, 4 * scale, 4 * scale);
+    ctx.fillRect(4 * scale, -4 * scale, 4 * scale, 4 * scale);
+
+    ctx.restore();
+  }
+
+  _drawFencePost(ctx, x, y, scale = 1) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.fillStyle = "#7d603e";
+    ctx.fillRect(-2 * scale, -10 * scale, 4 * scale, 12 * scale);
+    ctx.restore();
+  }
+
+  _drawWaystone(ctx, stone) {
+    ctx.save();
+    ctx.translate(stone.x, stone.y);
+
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.beginPath();
+    ctx.ellipse(0, 16, 22, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#6e7e9a";
+    ctx.beginPath();
+    ctx.moveTo(-12, 14);
+    ctx.lineTo(-8, -18);
+    ctx.lineTo(0, -28);
+    ctx.lineTo(8, -18);
+    ctx.lineTo(12, 14);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(196,220,255,0.95)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, -22);
+    ctx.lineTo(0, 8);
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(150,210,255,0.18)";
+    ctx.beginPath();
+    ctx.arc(0, -10, 22, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  _drawDock(ctx, dock) {
+    ctx.save();
+    ctx.translate(dock.x, dock.y);
+
+    ctx.fillStyle = "#8c6a3e";
+    ctx.fillRect(-18, -8, 36, 16);
+    ctx.fillRect(-10, 8, 6, 12);
+    ctx.fillRect(4, 8, 6, 12);
+
+    ctx.strokeStyle = "rgba(255,255,255,0.14)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-14, -2);
+    ctx.lineTo(14, -2);
+    ctx.moveTo(-14, 3);
+    ctx.lineTo(14, 3);
+    ctx.stroke();
+
+    ctx.fillStyle = "#dfe8f5";
+    ctx.font = "bold 12px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(dock.name || `Dock ${dock.id}`, 0, -16);
+
+    ctx.restore();
+  }
+
+  _drawDungeonEntrance(ctx, dg) {
+    ctx.save();
+    ctx.translate(dg.x, dg.y);
+
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.beginPath();
+    ctx.ellipse(0, 20, 48, 12, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#554b45";
+    ctx.fillRect(-34, -10, 68, 30);
+
+    ctx.fillStyle = "#2a2424";
+    ctx.beginPath();
+    ctx.arc(0, 8, 18, Math.PI, 0, false);
+    ctx.lineTo(18, 8);
+    ctx.lineTo(-18, 8);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(255,150,110,0.35)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(0, 8, 26, Math.PI, 0, false);
+    ctx.stroke();
+
+    ctx.fillStyle = "#dfe8f5";
+    ctx.font = "bold 12px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(dg.name || `Dungeon ${dg.id}`, 0, -18);
+
+    ctx.restore();
+  }
+
+  /* ===========================
+     MINIMAP
+  =========================== */
+
+  getMinimapCanvas() {
+    if (this._miniDirty) this._rebuildMinimap();
+    return this._miniCanvas;
+  }
+
+  _rebuildMinimap() {
+    const c = this._miniCanvas;
+    const ctx = c.getContext("2d");
+    const w = c.width;
+    const h = c.height;
+
+    ctx.clearRect(0, 0, w, h);
+
+    const span = this.mapMode === "large"
+      ? Math.max(8000, this.boundsRadius * 2)
+      : Math.max(4000, this.boundsRadius);
+
+    const half = span * 0.5;
+
+    for (let py = 0; py < h; py += 2) {
+      for (let px = 0; px < w; px += 2) {
+        const wx = (px / w) * span - half;
+        const wy = (py / h) * span - half;
+        const water = this.isWater(wx, wy);
+
+        if (water) ctx.fillStyle = "#356e9c";
+        else {
+          const zone = this.getZoneName(wx, wy);
+          ctx.fillStyle = this._miniGroundColor(zone);
+        }
+
+        ctx.fillRect(px, py, 2, 2);
+      }
+    }
+
+    for (const c0 of this.camps) {
+      this._miniPoint(ctx, c0.x, c0.y, span, "#f3c46e", 3);
+    }
+    for (const w0 of this.waystones) {
+      this._miniPoint(ctx, w0.x, w0.y, span, "#bde4ff", 2.5);
+    }
+    for (const d0 of this.docks) {
+      this._miniPoint(ctx, d0.x, d0.y, span, "#d6c3a1", 2.5);
+    }
+    for (const dg of this.dungeons) {
+      this._miniPoint(ctx, dg.x, dg.y, span, "#ff9f87", 3);
+    }
+
+    this._miniDirty = false;
+  }
+
+  _miniPoint(ctx, x, y, span, color, r) {
+    const c = this._miniCanvas;
+    const px = ((x + span * 0.5) / span) * c.width;
+    const py = ((y + span * 0.5) / span) * c.height;
+
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  /* ===========================
+     CAMP TIERS
+  =========================== */
+
+  _campRenown(campId) {
+    return this._campProgress(campId);
+  }
+
+  _campProgress(campId) {
+    const h = Math.abs(hash2(campId | 0, this.seed | 0, 431)) % 7;
+    return h;
+  }
+
+  _campTier(campId) {
+    const renown = this._campRenown(campId);
+    if (renown >= 6) return 4;
+    if (renown >= 4) return 3;
+    if (renown >= 2) return 2;
+    return 1;
+  }
+
+  _campTierName(campId) {
+    const t = this._campTier(campId);
+    if (t >= 4) return "Stronghold";
+    if (t >= 3) return "Keep";
+    if (t >= 2) return "Camp";
+    return "Outpost";
+  }
+
+  /* ===========================
+     NOISE / COLORS
+  =========================== */
+
+  _terrainNoise(x, y) {
+    const s1 = this._valueNoise(x * 0.0018, y * 0.0018, this.seed);
+    const s2 = this._valueNoise(x * 0.0045, y * 0.0045, this.seed + 19) * 0.45;
+    const s3 = this._valueNoise(x * 0.0100, y * 0.0100, this.seed + 101) * 0.18;
+    return s1 + s2 + s3 - 0.5;
+  }
+
+  _riverField(x, y) {
+    const bend = Math.sin((x + this.seed * 0.1) * 0.00125) * 260;
+    const bend2 = Math.sin((x - this.seed * 0.08) * 0.0021) * 140;
+    const centerY = bend + bend2;
+    const d = Math.abs(y - centerY);
+    return d / 220;
+  }
+
+  _valueNoise(x, y, seed) {
+    const xi = Math.floor(x);
+    const yi = Math.floor(y);
+    const xf = x - xi;
+    const yf = y - yi;
+
+    const a = this._hashFloat(xi, yi, seed);
+    const b = this._hashFloat(xi + 1, yi, seed);
+    const c = this._hashFloat(xi, yi + 1, seed);
+    const d = this._hashFloat(xi + 1, yi + 1, seed);
+
+    const ux = xf * xf * (3 - 2 * xf);
+    const uy = yf * yf * (3 - 2 * yf);
+
+    const ab = lerpNum(a, b, ux);
+    const cd = lerpNum(c, d, ux);
+    return lerpNum(ab, cd, uy);
+  }
+
+  _hashFloat(x, y, seed) {
+    const h = hash2(x | 0, y | 0, seed | 0) >>> 0;
+    return (h % 100000) / 100000;
+  }
+
+  _groundColor(zone, x, y) {
+    const alt = Math.abs(hash2((x / 32) | 0, (y / 32) | 0, this.seed + 66)) % 12;
+
+    if (zone === "Whisper Grass") return alt < 6 ? "#5f9a59" : "#679f61";
+    if (zone === "Old Road") return alt < 6 ? "#8b845f" : "#948c68";
+    if (zone === "Stone Flats") return alt < 6 ? "#7b876f" : "#869177";
+    if (zone === "High Meadow") return alt < 6 ? "#73ad63" : "#7cb56b";
+    if (zone === "Ash Fields") return alt < 6 ? "#7e7a67" : "#87836f";
+    if (zone === "Pine Verge") return alt < 6 ? "#547d4e" : "#5c8555";
+    if (zone === "Camp Grounds") return alt < 6 ? "#8b7d58" : "#958764";
+    if (zone === "Ruin Approach") return alt < 6 ? "#706a60" : "#7a7468";
+    if (zone === "Waystone Rise") return alt < 6 ? "#6d8a73" : "#76947c";
+    if (zone === "Shoreline") return alt < 6 ? "#8f9368" : "#989d72";
+    if (zone === "Riverbank") return alt < 6 ? "#6f9b65" : "#78a46d";
+
+    return alt < 6 ? "#69995d" : "#72a265";
+  }
+
+  _miniGroundColor(zone) {
+    if (zone === "Whisper Grass") return "#679f61";
+    if (zone === "Old Road") return "#948c68";
+    if (zone === "Stone Flats") return "#869177";
+    if (zone === "High Meadow") return "#7cb56b";
+    if (zone === "Ash Fields") return "#87836f";
+    if (zone === "Pine Verge") return "#5c8555";
+    if (zone === "Camp Grounds") return "#958764";
+    if (zone === "Ruin Approach") return "#7a7468";
+    if (zone === "Waystone Rise") return "#76947c";
+    if (zone === "Shoreline") return "#989d72";
+    if (zone === "Riverbank") return "#78a46d";
+    return "#72a265";
+  }
+
+  _drawGrassTuft(ctx, x, y) {
+    ctx.strokeStyle = "rgba(36,76,32,0.45)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x - 2, y - 6);
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + 1, y - 8);
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + 3, y - 6);
+    ctx.stroke();
+  }
+
+  _drawPebble(ctx, x, y) {
+    ctx.fillStyle = "rgba(40,52,44,0.18)";
+    ctx.beginPath();
+    ctx.arc(x, y, 2, 0, Math.PI * 2);
+    ctx.arc(x + 4, y + 1, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  _nearestPOI(x, y, arr) {
+    let best = null;
+    let bestD = Infinity;
+    for (const p of arr) {
+      const dx = p.x - x;
+      const dy = p.y - y;
+      const d = dx * dx + dy * dy;
+      if (d < bestD) {
+        bestD = d;
+        best = p;
+      }
+    }
     return best;
   }
+}
 
-  _findWaystoneLandNear(x, y, maxR = 260) {
-    let best = null;
-    let bestScore = Infinity;
+/* ===========================
+   HELPERS
+=========================== */
 
-    for (let r = 0; r <= maxR; r += 16) {
-      const samples = r === 0 ? 1 : 48;
-      for (let i = 0; i < samples; i++) {
-        const a = samples === 1 ? 0 : (i / samples) * Math.PI * 2;
-        const px = x + Math.cos(a) * r;
-        const py = y + Math.sin(a) * r;
-        const t = this._sampleTile(px, py);
+function lerpNum(a, b, t) {
+  return a + (b - a) * t;
+}
 
-        if (!(t === "grass" || t === "road")) continue;
-        if (this._isNearWater(px, py, 110)) continue;
-        if (!this._hasWalkablePatch(px, py, 56)) continue;
+function pointInView(x, y, vb, pad = 0) {
+  return x >= vb.x0 - pad && x <= vb.x1 + pad && y >= vb.y0 - pad && y <= vb.y1 + pad;
+}
 
-        const score = r;
-        if (score < bestScore) {
-          bestScore = score;
-          best = { x: px, y: py };
-        }
-      }
-    }
+function segmentIntersectsView(x1, y1, x2, y2, vb) {
+  const minX = Math.min(x1, x2);
+  const maxX = Math.max(x1, x2);
+  const minY = Math.min(y1, y2);
+  const maxY = Math.max(y1, y2);
 
-    return best;
-  }
-
-  _findNearbyShore(x, y, maxR = 240) {
-    let best = null;
-    let bestScore = Infinity;
-
-    for (let r = 0; r <= maxR; r += 16) {
-      for (let i = 0; i < 48; i++) {
-        const a = (i / 48) * Math.PI * 2;
-        const px = x + Math.cos(a) * r;
-        const py = y + Math.sin(a) * r;
-        const t = this._sampleTile(px, py);
-
-        if (t !== "sand" && t !== "grass" && t !== "road") continue;
-
-        const waterTouch =
-          this.isWater(px + 24, py) ||
-          this.isWater(px - 24, py) ||
-          this.isWater(px, py + 24) ||
-          this.isWater(px, py - 24);
-
-        if (!waterTouch) continue;
-
-        const landBehind =
-          this.canWalk(px + 40, py) ||
-          this.canWalk(px - 40, py) ||
-          this.canWalk(px, py + 40) ||
-          this.canWalk(px, py - 40);
-
-        if (!landBehind) continue;
-
-        const usable =
-          this.canWalk(px + 18, py) ||
-          this.canWalk(px - 18, py) ||
-          this.canWalk(px, py + 18) ||
-          this.canWalk(px, py - 18);
-
-        if (!usable) continue;
-
-        const score = r + (t === "sand" ? 0 : 18);
-        if (score < bestScore) {
-          bestScore = score;
-          best = { x: px, y: py };
-        }
-      }
-    }
-
-    return best || this._findNearbyLand(x, y, maxR, true, false);
-  }
+  if (maxX < vb.x0 || minX > vb.x1 || maxY < vb.y0 || minY > vb.y1) return false;
+  return true;
 }

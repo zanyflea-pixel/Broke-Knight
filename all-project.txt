@@ -1,0 +1,5502 @@
+===== ./index.html =====
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Broke Knight</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #070b12;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    body {
+      display: block;
+    }
+
+    #game-shell {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 50% 16%, rgba(42, 74, 114, 0.28), rgba(0, 0, 0, 0) 42%),
+        linear-gradient(180deg, #0b1220 0%, #091019 100%);
+    }
+
+    #overworld {
+      display: block;
+      width: 100%;
+      height: 100%;
+      outline: none;
+      cursor: crosshair;
+      image-rendering: auto;
+    }
+
+    #noscript-msg {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      padding: 14px 18px;
+      border-radius: 12px;
+      background: rgba(10, 14, 22, 0.92);
+      color: rgba(240, 244, 252, 0.96);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+      font-size: 14px;
+      line-height: 1.4;
+      z-index: 10;
+    }
+
+    .js-ready #noscript-msg {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="game-shell">
+    <canvas id="overworld" tabindex="0" aria-label="Broke Knight game canvas"></canvas>
+  </div>
+
+  <div id="noscript-msg">Enable JavaScript to run Broke Knight.</div>
+
+  <script>
+    document.documentElement.classList.add("js-ready");
+  </script>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
+===== ./src/entities.js =====
+// src/entities.js
+// v62 CAMP AI + LEASH PASS (FULL FILE)
+// Focus:
+// - enemies should not all rush hero from everywhere
+// - camp/home based aggro
+// - leash back toward home
+// - preserve exports and compatibility
+// Exports:
+// - makeGear
+// - Hero
+// - Enemy
+// - Projectile
+// - Loot
+
+import { clamp, norm, RNG, hash2 } from "./util.js";
+
+/* ===========================
+   GEAR
+=========================== */
+
+export function makeGear(slot = "weapon", level = 1, rarity = null, seed = 0) {
+  const rr = new RNG(hash2(level | 0, slot.length | 0, seed | 0));
+
+  if (!rarity) {
+    const r = rr.float();
+    rarity =
+      r < 0.58 ? "common" :
+      r < 0.83 ? "uncommon" :
+      r < 0.96 ? "rare" :
+      "epic";
+  }
+
+  const rarityMult =
+    rarity === "epic" ? 1.9 :
+    rarity === "rare" ? 1.45 :
+    rarity === "uncommon" ? 1.18 :
+    1.0;
+
+  const lvl = Math.max(1, level | 0);
+  const stats = { dmg: 0, armor: 0, crit: 0 };
+
+  switch (slot) {
+    case "weapon":
+      stats.dmg = Math.max(1, Math.round((4 + lvl * 1.8 + rr.range(0, 4)) * rarityMult));
+      if (rarity === "rare" || rarity === "epic") {
+        stats.crit = +(0.02 + lvl * 0.001 + rr.range(0, 0.03)).toFixed(3);
+      }
+      break;
+    case "armor":
+    case "chest":
+      stats.armor = Math.max(1, Math.round((2 + lvl * 1.4 + rr.range(0, 3)) * rarityMult));
+      break;
+    case "helm":
+    case "boots":
+      stats.armor = Math.max(1, Math.round((1 + lvl * 0.9 + rr.range(0, 2)) * rarityMult));
+      break;
+    case "ring":
+    case "trinket":
+      stats.crit = +(0.01 + lvl * 0.0008 + rr.range(0, 0.025) * rarityMult).toFixed(3);
+      if (rarity === "epic") stats.dmg = Math.max(0, Math.round(lvl * 0.4));
+      break;
+    default:
+      stats.armor = Math.max(0, Math.round((1 + lvl * 0.5) * rarityMult));
+      break;
+  }
+
+  return {
+    slot,
+    level: lvl,
+    rarity,
+    name: gearName(slot, rarity, rr),
+    stats,
+    price: Math.max(4, Math.round((lvl * 10 + rr.range(0, 12)) * rarityMult)),
+  };
+}
+
+function gearName(slot, rarity, rr) {
+  const prefix =
+    rarity === "epic" ? ["Mythic", "Ancient", "Stormforged", "Kingsfall"] :
+    rarity === "rare" ? ["Fine", "Runed", "Steel", "Hunter's"] :
+    rarity === "uncommon" ? ["Sturdy", "Traveler's", "Polished", "Mercenary's"] :
+    ["Plain", "Worn", "Simple", "Old"];
+
+  const coreBySlot = {
+    weapon: ["Blade", "Sword", "Wand", "Staff"],
+    armor: ["Armor", "Mail", "Plate", "Guard"],
+    chest: ["Chestplate", "Vest", "Cuirass", "Tunic"],
+    helm: ["Helm", "Cap", "Hood", "Crown"],
+    boots: ["Boots", "Greaves", "Striders", "Treads"],
+    ring: ["Ring", "Band", "Loop", "Seal"],
+    trinket: ["Charm", "Idol", "Relic", "Totem"],
+  };
+
+  const arr = coreBySlot[slot] || ["Gear"];
+  return `${rr.pick(prefix)} ${rr.pick(arr)}`;
+}
+
+/* ===========================
+   HERO
+=========================== */
+
+export class Hero {
+  constructor(x = 0, y = 0) {
+    this.x = x;
+    this.y = y;
+
+    this.vx = 0;
+    this.vy = 0;
+
+    this.radius = 10;
+    this.r = 14;
+
+    this.level = 1;
+    this.xp = 0;
+    this.nextXp = 30;
+    this.gold = 0;
+
+    this.maxHp = 100;
+    this.hp = 100;
+
+    this.maxMana = 60;
+    this.mana = 60;
+
+    this.hpRegen = 1.5;
+    this.manaRegen = 6.0;
+
+    this.inventory = [];
+    this.equip = {};
+    this.potions = { hp: 2, mana: 1 };
+
+    this.state = {
+      sailing: false,
+      dashT: 0,
+      hurtT: 0,
+    };
+
+    this.lastMove = { x: 1, y: 0 };
+
+    this.animT = 0;
+    this.alive = true;
+    this.dead = false;
+  }
+
+  getMoveSpeed(game = null) {
+    const base = this.state?.sailing ? 175 : 140;
+    const terrainMod = game?.world?.getMoveModifier?.(this.x, this.y) ?? 1;
+    return base * terrainMod;
+  }
+
+  update(dt) {
+    if (this.dead) return;
+
+    this.hp = clamp(this.hp + this.hpRegen * dt, 0, this.maxHp);
+    this.mana = clamp(this.mana + this.manaRegen * dt, 0, this.maxMana);
+
+    this.state.dashT = Math.max(0, (this.state.dashT || 0) - dt);
+    this.state.hurtT = Math.max(0, (this.state.hurtT || 0) - dt);
+
+    if (Math.abs(this.vx) + Math.abs(this.vy) > 4) {
+      this.animT += dt * 8.5;
+    }
+
+    if (this.hp <= 0) {
+      this.hp = 0;
+      this.alive = false;
+      this.dead = true;
+    }
+  }
+
+  getStats() {
+    let dmg = 10;
+    let armor = 2;
+    let crit = 0.05;
+    let critMult = 1.7;
+
+    for (const key of Object.keys(this.equip || {})) {
+      const it = this.equip[key];
+      if (!it?.stats) continue;
+      dmg += it.stats.dmg || 0;
+      armor += it.stats.armor || 0;
+      crit += it.stats.crit || 0;
+    }
+
+    return {
+      dmg,
+      armor,
+      crit,
+      critMult,
+      maxHp: this.maxHp,
+      maxMana: this.maxMana,
+    };
+  }
+
+  takeDamage(amount = 0) {
+    const stats = this.getStats();
+    const reduced = Math.max(1, amount - (stats.armor || 0) * 0.35);
+    this.hp = Math.max(0, this.hp - reduced);
+    this.state.hurtT = 0.18;
+
+    if (this.hp <= 0) {
+      this.alive = false;
+      this.dead = true;
+    }
+
+    return Math.round(reduced);
+  }
+
+  spendMana(cost = 0) {
+    if (this.mana < cost) return false;
+    this.mana -= cost;
+    return true;
+  }
+
+  heal(amount = 0) {
+    this.hp = clamp(this.hp + amount, 0, this.maxHp);
+  }
+
+  restoreMana(amount = 0) {
+    this.mana = clamp(this.mana + amount, 0, this.maxMana);
+  }
+
+  gainXp(amount = 0) {
+    this.xp += Math.max(0, amount | 0);
+
+    while (this.xp >= this.nextXp) {
+      this.xp -= this.nextXp;
+      this.level += 1;
+      this.nextXp = Math.floor(this.nextXp * 1.22 + 8);
+      this.maxHp += 10;
+      this.maxMana += 6;
+      this.hp = this.maxHp;
+      this.mana = this.maxMana;
+    }
+  }
+
+  giveXP(amount = 0) {
+    this.gainXp(amount);
+  }
+
+  usePotion(kind = "hp") {
+    const st = this.getStats();
+
+    if (kind === "hp") {
+      if ((this.potions.hp || 0) <= 0) return false;
+      if (this.hp >= st.maxHp) return false;
+      this.hp = Math.min(st.maxHp, this.hp + 45);
+      this.potions.hp -= 1;
+      return true;
+    }
+
+    if (kind === "mana") {
+      if ((this.potions.mana || 0) <= 0) return false;
+      if (this.mana >= st.maxMana) return false;
+      this.mana = Math.min(st.maxMana, this.mana + 35);
+      this.potions.mana -= 1;
+      return true;
+    }
+
+    return false;
+  }
+
+  draw(ctx) {
+    const moving = Math.abs(this.vx) + Math.abs(this.vy) > 4;
+    const bob = moving ? Math.sin(this.animT) * 0.8 : 0;
+
+    const fx = this.lastMove.x || 1;
+    const fy = this.lastMove.y || 0;
+
+    ctx.save();
+    ctx.translate(this.x, this.y + bob);
+
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.beginPath();
+    ctx.ellipse(0, 10, 8, 3.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = this.state.hurtT > 0 ? "#ffd3d3" : "#e9eef8";
+    ctx.beginPath();
+    ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#55627a";
+    ctx.beginPath();
+    ctx.arc(0, 0, this.radius - 3.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#f2d5bf";
+    ctx.beginPath();
+    ctx.arc(0, -2, 5.3, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "#242a35";
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(fx * 13, fy * 13);
+    ctx.stroke();
+
+    ctx.fillStyle = "#242a35";
+    ctx.beginPath();
+    ctx.arc(-1.7, -3.2, 0.9, 0, Math.PI * 2);
+    ctx.arc(1.7, -3.2, 0.9, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
+
+/* ===========================
+   ENEMY
+=========================== */
+
+export class Enemy {
+  constructor(x = 0, y = 0, tier = 1, kind = "blob", seed = 1) {
+    this.x = x;
+    this.y = y;
+
+    this.vx = 0;
+    this.vy = 0;
+
+    this.tier = Math.max(1, tier | 0);
+    this.kind = kind || "blob";
+    this.seed = seed | 0;
+
+    this.r = this.kind === "brute" ? 16 : this.kind === "stalker" ? 11 : this.kind === "caster" ? 12 : 13;
+    this.radius = this.r;
+
+    this.speed =
+      this.kind === "stalker" ? 92 + this.tier * 2 :
+      this.kind === "brute" ? 52 + this.tier * 1.4 :
+      this.kind === "caster" ? 58 + this.tier * 1.5 :
+      68 + this.tier * 1.8;
+
+    this.maxHp =
+      this.kind === "brute" ? 34 + this.tier * 16 :
+      this.kind === "caster" ? 20 + this.tier * 9 :
+      this.kind === "stalker" ? 22 + this.tier * 10 :
+      26 + this.tier * 12;
+
+    this.hp = this.maxHp;
+
+    this.touchDps =
+      this.kind === "brute" ? 18 + this.tier * 1.6 :
+      this.kind === "stalker" ? 14 + this.tier * 1.2 :
+      this.kind === "caster" ? 10 + this.tier :
+      12 + this.tier * 1.1;
+
+    this.alive = true;
+    this.dead = false;
+    this.hitFlash = 0;
+    this.animT = Math.random() * Math.PI * 2;
+    this.attackCd = 0;
+
+    this.variant = Math.abs(hash2((x * 7) | 0, (y * 7) | 0, seed)) % 4;
+
+    this.home = { x, y };
+    this.campId = null;
+
+    this.state = "idle";
+    this.aggroT = 0;
+    this.wanderT = 0;
+    this.wanderDir = { x: 0, y: 0 };
+  }
+
+  xpValue() {
+    const base =
+      this.kind === "brute" ? 9 :
+      this.kind === "caster" ? 8 :
+      this.kind === "stalker" ? 7 :
+      6;
+
+    return base + this.tier * 2;
+  }
+
+  update(dt, hero, world, game) {
+    if (!this.alive || !hero) return;
+
+    this.animT += dt * 6;
+    this.hitFlash = Math.max(0, this.hitFlash - dt * 6);
+    this.attackCd = Math.max(0, this.attackCd - dt);
+    this.aggroT = Math.max(0, this.aggroT - dt);
+    this.wanderT = Math.max(0, this.wanderT - dt);
+
+    const hx = hero.x;
+    const hy = hero.y;
+    const dx = hx - this.x;
+    const dy = hy - this.y;
+    const d = Math.hypot(dx, dy) || 0.0001;
+
+    const home = this.home || { x: this.x, y: this.y };
+    const hdx = hx - home.x;
+    const hdy = hy - home.y;
+    const heroFromHome = Math.hypot(hdx, hdy);
+
+    const backDx = home.x - this.x;
+    const backDy = home.y - this.y;
+    const distFromHome = Math.hypot(backDx, backDy);
+
+    const campAggroRadius =
+      this.kind === "stalker" ? 240 :
+      this.kind === "caster" ? 220 :
+      this.kind === "brute" ? 200 :
+      210;
+
+    const leashRadius =
+      this.kind === "stalker" ? 320 :
+      this.kind === "caster" ? 300 :
+      this.kind === "brute" ? 260 :
+      280;
+
+    const hardLeash =
+      this.kind === "stalker" ? 420 :
+      this.kind === "caster" ? 390 :
+      this.kind === "brute" ? 340 :
+      360;
+
+    const directAggroRadius =
+      this.kind === "stalker" ? 150 :
+      this.kind === "caster" ? 170 :
+      this.kind === "brute" ? 110 :
+      135;
+
+    if (d < directAggroRadius || heroFromHome < campAggroRadius) {
+      this.aggroT = 2.6;
+      this.state = "aggro";
+    }
+
+    if (distFromHome > hardLeash) {
+      this.state = "return";
+      this.aggroT = 0;
+    } else if (this.aggroT <= 0) {
+      if (distFromHome > leashRadius) this.state = "return";
+      else if (this.state === "aggro") this.state = "idle";
+    }
+
+    let tx = 0;
+    let ty = 0;
+    let moveSpeed = this.speed * 0.92;
+
+    if (this.state === "aggro") {
+      tx = dx / d;
+      ty = dy / d;
+      moveSpeed = this.speed;
+
+      if (this.kind === "caster" && d < 130) {
+        tx *= -1;
+        ty *= -1;
+        moveSpeed *= 0.95;
+      } else if (this.kind === "brute" && d < 90) {
+        moveSpeed *= 0.76;
+      } else if (this.kind === "stalker" && d > 170) {
+        moveSpeed *= 1.14;
+      }
+    } else if (this.state === "return") {
+      const bd = Math.hypot(backDx, backDy) || 0.0001;
+      tx = backDx / bd;
+      ty = backDy / bd;
+      moveSpeed = this.speed * 0.82;
+
+      if (bd < 12) {
+        this.state = "idle";
+        this.wanderT = 0;
+      }
+    } else {
+      if (this.wanderT <= 0) {
+        this.wanderT = 0.8 + Math.random() * 1.5;
+        const ang = Math.random() * Math.PI * 2;
+        this.wanderDir.x = Math.cos(ang);
+        this.wanderDir.y = Math.sin(ang);
+      }
+
+      tx = this.wanderDir.x;
+      ty = this.wanderDir.y;
+      moveSpeed = this.speed * 0.34;
+
+      if (distFromHome > 70) {
+        const bd = Math.hypot(backDx, backDy) || 1;
+        tx = backDx / bd;
+        ty = backDy / bd;
+        moveSpeed = this.speed * 0.48;
+      }
+    }
+
+    const nx = this.x + tx * moveSpeed * dt;
+    const ny = this.y + ty * moveSpeed * dt;
+
+    if (!world?.canWalk || world.canWalk(nx, this.y)) this.x = nx;
+    if (!world?.canWalk || world.canWalk(this.x, ny)) this.y = ny;
+
+    if (this.state === "aggro" && this.kind === "caster" && d < 260 && this.attackCd <= 0) {
+      this.attackCd = 1.5;
+
+      const n = norm(dx, dy);
+      const p = new Projectile(
+        this.x + n.x * 12,
+        this.y + n.y * 12,
+        n.x * 225,
+        n.y * 225,
+        Math.round(6 + this.tier * 2.2),
+        1.2,
+        this.tier,
+        {
+          color: "rgba(255,120,120,0.92)",
+          radius: 5,
+          type: "enemy_bolt",
+          hitRadius: 16,
+          onHitHero: true,
+          friendly: false,
+        }
+      );
+
+      if (game?.projectiles?.push) {
+        game.projectiles.push(p);
+      }
+    }
+  }
+
+  takeDamage(amount = 0) {
+    this.hp -= Math.max(1, amount | 0);
+    this.hitFlash = 1;
+    this.aggroT = Math.max(this.aggroT, 3.2);
+    this.state = "aggro";
+
+    if (this.hp <= 0) {
+      this.alive = false;
+      this.dead = true;
+    }
+  }
+
+  draw(ctx) {
+    const bob = Math.sin(this.animT * 1.2) * 0.9;
+    const pulse = 1 + Math.sin(this.animT * 2.1) * 0.04;
+
+    ctx.save();
+    ctx.translate(this.x, this.y + bob);
+    ctx.scale(pulse, pulse);
+
+    ctx.fillStyle = "rgba(0,0,0,0.16)";
+    ctx.beginPath();
+    ctx.ellipse(0, this.radius + 1, this.radius * 0.75, 3.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    let main = "#cc4444";
+    let dark = "#8f2323";
+
+    if (this.kind === "caster") {
+      main = "#7db7ff";
+      dark = "#356fbb";
+    } else if (this.kind === "stalker") {
+      main = "#5fd17c";
+      dark = "#2f8244";
+    } else if (this.kind === "brute") {
+      main = "#d98a4e";
+      dark = "#96541f";
+    }
+
+    if (this.hitFlash > 0) {
+      main = "#ffffff";
+      dark = "#d9d9d9";
+    }
+
+    ctx.fillStyle = main;
+
+    if (this.kind === "brute") {
+      if (ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(-this.radius, -this.radius + 1, this.radius * 2, this.radius * 2 - 2, 5);
+        ctx.fill();
+      } else {
+        ctx.fillRect(-this.radius, -this.radius + 1, this.radius * 2, this.radius * 2 - 2);
+      }
+    } else if (this.kind === "stalker") {
+      ctx.beginPath();
+      ctx.moveTo(0, -this.radius - 2);
+      ctx.lineTo(this.radius + 1, this.radius - 2);
+      ctx.lineTo(-this.radius - 1, this.radius - 2);
+      ctx.closePath();
+      ctx.fill();
+    } else if (this.kind === "caster") {
+      ctx.beginPath();
+      ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.35)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, this.radius + 2, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      if (this.variant === 0) {
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (this.variant === 1) {
+        ctx.fillRect(-this.radius, -this.radius + 1, this.radius * 2, this.radius * 2 - 2);
+      } else if (this.variant === 2) {
+        ctx.beginPath();
+        ctx.moveTo(0, -this.radius);
+        ctx.lineTo(this.radius, this.radius - 1);
+        ctx.lineTo(-this.radius, this.radius - 1);
+        ctx.closePath();
+        ctx.fill();
+      } else {
+        ctx.beginPath();
+        ctx.ellipse(0, 0, this.radius + 1.5, this.radius - 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    ctx.fillStyle = dark;
+    if (this.kind === "brute") {
+      ctx.fillRect(-this.radius * 0.65, -2, this.radius * 1.3, 5);
+    } else if (this.kind === "stalker") {
+      ctx.beginPath();
+      ctx.moveTo(-5, 1);
+      ctx.lineTo(0, 5);
+      ctx.lineTo(5, 1);
+      ctx.closePath();
+      ctx.fill();
+    } else if (this.kind === "caster") {
+      ctx.beginPath();
+      ctx.arc(0, 2, 4.2, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.beginPath();
+      ctx.arc(0, 2, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.fillStyle = "#181d25";
+    ctx.beginPath();
+    ctx.arc(-2.2, -1.5, 1.1, 0, Math.PI * 2);
+    ctx.arc(2.2, -1.5, 1.1, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
+
+/* ===========================
+   PROJECTILE
+=========================== */
+
+export class Projectile {
+  constructor(x, y, vx, vy, dmg = 10, life = 1, level = 1, meta = {}) {
+    this.x = x;
+    this.y = y;
+    this.vx = vx;
+    this.vy = vy;
+
+    this.dmg = Math.max(1, dmg | 0);
+    this.life = Math.max(0.05, +life || 1);
+    this.level = Math.max(1, level | 0);
+
+    this.meta = {
+      color: "rgba(255,209,102,0.95)",
+      radius: 4,
+      type: "bolt",
+      hitRadius: 18,
+      pierce: false,
+      friendly: true,
+      ...meta,
+    };
+
+    this.radius = Math.max(2, this.meta.radius || 4);
+    this.hitRadius = Math.max(6, this.meta.hitRadius || 18);
+    this.friendly = this.meta.friendly !== false;
+
+    this.alive = true;
+    this.dead = false;
+    this.t = 0;
+  }
+
+  update(dt, world) {
+    if (!this.alive) return;
+
+    this.t += dt;
+    this.life -= dt;
+
+    if (this.life <= 0) {
+      this.alive = false;
+      this.dead = true;
+      return;
+    }
+
+    if (this.meta?.nova) return;
+
+    const nx = this.x + this.vx * dt;
+    const ny = this.y + this.vy * dt;
+
+    if (world?.isSolid?.(nx, ny)) {
+      this.alive = false;
+      this.dead = true;
+      return;
+    }
+
+    this.x = nx;
+    this.y = ny;
+  }
+
+  draw(ctx) {
+    if (!this.alive) return;
+
+    ctx.save();
+
+    if (this.meta?.nova) {
+      ctx.strokeStyle = this.meta?.color || "rgba(214,245,255,0.9)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.hitRadius * 0.8, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.globalAlpha = 0.12;
+      ctx.fillStyle = this.meta?.color || "rgba(214,245,255,0.9)";
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.hitRadius, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
+      return;
+    }
+
+    const glow = this.radius + (this.meta.type === "orb" ? 4 : 2);
+
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = this.meta?.color || "rgba(255,209,102,0.95)";
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, glow, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = this.meta?.color || "rgba(255,209,102,0.95)";
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (this.meta.type === "spark" || this.meta.type === "enemy_bolt") {
+      ctx.strokeStyle = "rgba(255,255,255,0.45)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(this.x - this.vx * 0.012, this.y - this.vy * 0.012);
+      ctx.lineTo(this.x, this.y);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+}
+
+/* ===========================
+   LOOT
+=========================== */
+
+export class Loot {
+  constructor(x, y, kind = "gold", data = {}) {
+    this.x = x;
+    this.y = y;
+    this.kind = kind;
+    this.data = data || {};
+
+    this.alive = true;
+    this.dead = false;
+    this.age = 0;
+    this.r = 11;
+  }
+
+  update(dt, hero) {
+    if (!this.alive) return;
+
+    this.age += dt;
+
+    const dx = hero.x - this.x;
+    const dy = hero.y - this.y;
+    const d2 = dx * dx + dy * dy;
+
+    if (d2 < 150 * 150 && d2 > 1e-6) {
+      const n = norm(dx, dy);
+      const speed = d2 < 40 * 40 ? 260 : d2 < 90 * 90 ? 180 : 110;
+      this.x += n.x * speed * dt;
+      this.y += n.y * speed * dt;
+    }
+
+    if (d2 < 18 * 18) {
+      this.alive = false;
+      this.dead = true;
+    }
+  }
+
+  draw(ctx) {
+    if (!this.alive) return;
+
+    const bob = Math.sin(this.age * 5) * 2;
+    const x = this.x;
+    const y = this.y + bob;
+
+    ctx.save();
+
+    if (this.kind === "gold") {
+      ctx.fillStyle = "#ffd654";
+      ctx.beginPath();
+      ctx.arc(x, y, 6, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(255,255,255,0.5)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(x, y, 3.2, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (this.kind === "potion") {
+      ctx.fillStyle = this.data?.potionType === "mana" ? "#5a96ff" : "#eb526c";
+      ctx.beginPath();
+      ctx.arc(x, y, 6, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(255,255,255,0.55)";
+      ctx.fillRect(x - 1, y - 7, 2, 3);
+    } else {
+      const rarity = this.data?.rarity;
+      ctx.fillStyle =
+        rarity === "epic" ? "#d79cff" :
+        rarity === "rare" ? "#90cfff" :
+        rarity === "uncommon" ? "#98e798" :
+        "#d8d8d8";
+      ctx.fillRect(x - 5, y - 5, 10, 10);
+
+      ctx.strokeStyle = "rgba(255,255,255,0.35)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x - 5, y - 5, 10, 10);
+    }
+
+    ctx.restore();
+  }
+}
+===== ./src/game.js =====
+// src/game.js
+// v64 RPG CAMP SHOP PASS (FULL FILE)
+// Focus:
+// - keep performance gains from v63
+// - add camp shops
+// - buy potions and random gear
+// - sell backpack gear
+// - stronger RPG camp loop
+// - keep current systems compatible
+
+import World from "./world.js";
+import { clamp, lerp, dist2, norm, RNG, hash2 } from "./util.js";
+import { Hero, Enemy, Projectile, Loot, makeGear } from "./entities.js";
+import Input from "./input.js";
+import UI from "./ui.js";
+import Save from "./save.js";
+
+export default class Game {
+  constructor(canvas) {
+    if (!canvas) throw new Error("Game: canvas is required");
+
+    this.canvas = canvas;
+    this.ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
+
+    this.w = canvas.width | 0;
+    this.h = canvas.height | 0;
+
+    this.seed = (Date.now() & 0x7fffffff) | 0;
+
+    this.input = new Input(window);
+    this.ui = new UI(canvas);
+    this.save = new Save("broke-knight-save-v64");
+
+    this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
+    this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
+
+    this.enemies = [];
+    this.projectiles = [];
+    this.loot = [];
+
+    this.camera = {
+      x: this.hero.x,
+      y: this.hero.y,
+      zoom: 1,
+      shakeT: 0,
+      shakeMag: 0,
+      sx: 0,
+      sy: 0,
+    };
+
+    this.perf = {
+      enemyUpdateRadius: 980,
+      lootUpdateRadius: 760,
+      projectileUpdateRadius: 1260,
+      spawnRadius: 940,
+      drawPad: 150,
+      maxEnemies: 28,
+      maxLoot: 90,
+      cleanupTimer: 0,
+      cleanupEvery: 0.55,
+      touchDamageTick: 0.18,
+      campRespawnCheckEvery: 2.6,
+      campAggroRadius: 340,
+    };
+
+    this.time = 0;
+    this._dtClamp = 0.05;
+    this._autosaveT = 8;
+
+    this._spawnTimer = 0;
+    this._campRespawnT = 0;
+    this._rng = new RNG(hash2(this.seed, 9001));
+
+    this.menu = { open: null };
+
+    this.quests = [];
+    this.questTurnIn = null;
+    this._questIdCounter = 1;
+
+    this.msg = "";
+    this.msgT = 0;
+    this.zoneMsg = "";
+    this.zoneMsgT = 0;
+
+    this.flashT = 0;
+    this.hitStopT = 0;
+
+    this._pickupMsgCooldown = 0;
+    this._spellMsgCooldown = 0;
+    this._touchShakeCd = 0;
+    this._touchDamageCd = 0;
+    this._dockToggleCd = 0;
+    this._interactCd = 0;
+    this._shopToggleCd = 0;
+    this._spawnSuppressionT = 0;
+    this._zoneSampleT = 0;
+    this._lastZoneName = "";
+    this._killFlashT = 0;
+    this._combatTextT = 0;
+    this._levelSeen = this.hero.level || 1;
+
+    this._cachedNearbyCamp = null;
+    this._cachedNearbyDock = null;
+    this._cachedNearbyWaystone = null;
+    this._cachedNearbyDungeon = null;
+    this._nearbyPoiTimer = 0;
+
+    this.shop = {
+      campId: null,
+      stockSeed: 0,
+      refreshTier: 1,
+      lastRefreshLevel: 1,
+      stock: [],
+    };
+
+    this.mouse = {
+      x: this.w * 0.5,
+      y: this.h * 0.5,
+      down: false,
+      worldX: this.hero.x,
+      worldY: this.hero.y,
+      moved: false,
+    };
+
+    this.skillLoadout = ["q", "w", "e", "r"];
+    this.selectedSkillSlot = 0;
+
+    this.skillDefs = {
+      q: { key: "q", name: "Spark", mana: 8, cd: 0.22, color: "#8be9ff" },
+      w: { key: "w", name: "Nova", mana: 18, cd: 1.8, color: "#d6f5ff" },
+      e: { key: "e", name: "Dash", mana: 14, cd: 2.8, color: "#ffd36e" },
+      r: { key: "r", name: "Orb", mana: 22, cd: 3.4, color: "#c08cff" },
+    };
+
+    this.cooldowns = { q: 0, w: 0, e: 0, r: 0 };
+
+    this.dungeon = {
+      active: false,
+      floor: 0,
+      rooms: [],
+      currentRoomIndex: 0,
+      seed: 0,
+      visited: new Set(),
+      roomMsgT: 0,
+    };
+
+    this.progress = {
+      discoveredWaystones: new Set(),
+      discoveredDocks: new Set(),
+      dungeonBest: 0,
+      visitedCamps: new Set(),
+    };
+
+    this._bindMouse();
+    this._loadGame();
+
+    if (!this.hero.inventory) this.hero.inventory = [];
+    if (!this.hero.equip) this.hero.equip = {};
+    if (!this.hero.potions) this.hero.potions = { hp: 2, mana: 1 };
+    if (!this.hero.lastMove) this.hero.lastMove = { x: 1, y: 0 };
+    if (!this.hero.state) this.hero.state = {};
+    if (typeof this.hero.state.sailing !== "boolean") this.hero.state.sailing = false;
+    if (typeof this.hero.state.dashT !== "number") this.hero.state.dashT = 0;
+    if (typeof this.hero.state.hurtT !== "number") this.hero.state.hurtT = 0;
+
+    this._ensureWorldPopulation();
+    this._ensureCampQuests();
+    this._ensureHeroSafe();
+
+    this._msg("Broke Knight ready", 1.8);
+  }
+
+  resize(w, h) {
+    this.w = w | 0;
+    this.h = h | 0;
+    this.world?.setViewSize?.(this.w, this.h);
+    this.ui?.setViewSize?.(this.w, this.h);
+  }
+
+  update(dt) {
+    dt = Math.min(this._dtClamp, Math.max(0, dt || 0));
+
+    if (this.hitStopT > 0) {
+      this.hitStopT = Math.max(0, this.hitStopT - dt);
+      this._tickUI(dt);
+      this.input.endFrame();
+      return;
+    }
+
+    this.time += dt;
+
+    this._tickUI(dt);
+    this._tickCooldowns(dt);
+    this._updateMouseWorld();
+    this._handleMenus();
+
+    this._dockToggleCd = Math.max(0, this._dockToggleCd - dt);
+    this._interactCd = Math.max(0, this._interactCd - dt);
+    this._shopToggleCd = Math.max(0, this._shopToggleCd - dt);
+    this._spawnSuppressionT = Math.max(0, this._spawnSuppressionT - dt);
+    this._killFlashT = Math.max(0, this._killFlashT - dt);
+    this._combatTextT = Math.max(0, this._combatTextT - dt);
+
+    this._updateNearbyPOIs(dt);
+    this._autoCloseShopIfNeeded();
+
+    if (this.menu.open === "map") {
+      this._handleFastTravelInput();
+    } else if (this.menu.open === "shop") {
+      this._handleShopInput();
+    } else {
+      this._handleMovement(dt);
+      this._handleSpells();
+    }
+
+    if (this.input.wasPressed("b") && this._dockToggleCd <= 0) {
+      this._dockToggleCd = 0.18;
+      this._toggleDockingOrSailing();
+    }
+
+    if (this.input.wasPressed("f") && this._interactCd <= 0) {
+      this._interactCd = 0.18;
+      this._interact();
+    }
+
+    if (this.input.wasPressed("h") && this._shopToggleCd <= 0) {
+      this._shopToggleCd = 0.18;
+      this._toggleShop();
+    }
+
+    this.hero.update?.(dt);
+    this._checkLevelUpMessage();
+
+    if (this.dungeon.active) {
+      this._updateDungeon(dt);
+    } else {
+      this.world.update?.(dt, this.hero);
+      this._spawnWorldEnemies(dt);
+      this._respawnCampEnemies(dt);
+      this._updateOverworldEnemies(dt);
+    }
+
+    this._updateProjectiles(dt);
+    this._updateLoot(dt);
+
+    if ((this.time % 0.20) < dt) {
+      this._updateQuestState();
+    }
+
+    this._updateZoneMessages(dt);
+    this._tickCamera(dt);
+    this._ensureHeroSafe();
+
+    this.perf.cleanupTimer += dt;
+    if (this.perf.cleanupTimer >= this.perf.cleanupEvery) {
+      this.perf.cleanupTimer = 0;
+      this._cleanupFarEntities();
+    }
+
+    this._autosaveT -= dt;
+    if (this._autosaveT <= 0) {
+      this._autosaveT = 8 + Math.random() * 4;
+      this._saveGame();
+    }
+
+    this.input.endFrame();
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+
+    ctx.save();
+    ctx.clearRect(0, 0, this.w, this.h);
+
+    this._drawBackground(ctx);
+
+    if (this._killFlashT > 0.02) {
+      ctx.fillStyle = `rgba(255,255,255,${0.035 * this._killFlashT})`;
+      ctx.fillRect(0, 0, this.w, this.h);
+    }
+
+    ctx.translate((this.w * 0.5) | 0, (this.h * 0.5) | 0);
+    ctx.scale(this.camera.zoom, this.camera.zoom);
+    ctx.translate(
+      (-this.camera.x + this.camera.sx) | 0,
+      (-this.camera.y + this.camera.sy) | 0
+    );
+
+    if (this.dungeon.active) {
+      this._drawDungeonWorld(ctx);
+    } else {
+      this.world.draw?.(ctx, this.camera);
+    }
+
+    const vb = this._viewBoundsWorld();
+
+    for (const l of this.loot) {
+      if (!l?.alive) continue;
+      if (this._inView(l.x, l.y, vb)) l.draw?.(ctx);
+    }
+
+    for (const p of this.projectiles) {
+      if (!p?.alive) continue;
+      if (this._inView(p.x, p.y, vb)) p.draw?.(ctx);
+    }
+
+    for (const e of this.enemies) {
+      if (!e?.alive) continue;
+      if (this._inView(e.x, e.y, vb)) e.draw?.(ctx);
+    }
+
+    this.hero.draw?.(ctx);
+
+    if (this.dungeon.active) {
+      this._drawDungeonOverlayWorld(ctx);
+    }
+
+    ctx.restore();
+
+    this.ui.draw?.(ctx, this);
+    this._drawOverlayText(ctx);
+  }
+
+  _drawBackground(ctx) {
+    const g = ctx.createLinearGradient(0, 0, 0, this.h);
+    g.addColorStop(0, "#0c1320");
+    g.addColorStop(0.35, "#102033");
+    g.addColorStop(0.7, "#14273b");
+    g.addColorStop(1, "#0a111b");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, this.w, this.h);
+  }
+
+  _drawOverlayText(ctx) {
+    if (this.msgT > 0 && this.msg) {
+      ctx.save();
+      ctx.font = "bold 18px Arial";
+      ctx.textAlign = "center";
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.strokeStyle = "rgba(0,0,0,0.45)";
+      ctx.lineWidth = 4;
+      ctx.strokeText(this.msg, this.w * 0.5, this.h - 28);
+      ctx.fillText(this.msg, this.w * 0.5, this.h - 28);
+      ctx.restore();
+    }
+
+    if (this.zoneMsgT > 0 && this.zoneMsg) {
+      ctx.save();
+      ctx.font = "bold 20px Arial";
+      ctx.textAlign = "center";
+      ctx.fillStyle = "rgba(232,238,252,0.92)";
+      ctx.strokeStyle = "rgba(0,0,0,0.55)";
+      ctx.lineWidth = 5;
+      ctx.strokeText(this.zoneMsg, this.w * 0.5, 34);
+      ctx.fillText(this.zoneMsg, this.w * 0.5, 34);
+      ctx.restore();
+    }
+
+    if (this._combatTextT > 0.1) {
+      ctx.save();
+      ctx.font = "bold 16px Arial";
+      ctx.textAlign = "center";
+      ctx.fillStyle = "rgba(255,228,150,0.92)";
+      ctx.strokeStyle = "rgba(0,0,0,0.38)";
+      ctx.lineWidth = 4;
+      const y = this.h - 60 - (1 - this._combatTextT) * 8;
+      ctx.strokeText("Enemy defeated", this.w * 0.5, y);
+      ctx.fillText("Enemy defeated", this.w * 0.5, y);
+      ctx.restore();
+    }
+  }
+
+  _tickUI(dt) {
+    this.msgT = Math.max(0, this.msgT - dt);
+    this.zoneMsgT = Math.max(0, this.zoneMsgT - dt);
+    this.flashT = Math.max(0, this.flashT - dt);
+    this._pickupMsgCooldown = Math.max(0, this._pickupMsgCooldown - dt);
+    this._spellMsgCooldown = Math.max(0, this._spellMsgCooldown - dt);
+    this._touchShakeCd = Math.max(0, this._touchShakeCd - dt);
+    this._touchDamageCd = Math.max(0, this._touchDamageCd - dt);
+    if (this.dungeon.roomMsgT > 0) this.dungeon.roomMsgT -= dt;
+    this.ui?.update?.(dt, this);
+  }
+
+  _tickCooldowns(dt) {
+    for (const k of Object.keys(this.cooldowns)) {
+      this.cooldowns[k] = Math.max(0, this.cooldowns[k] - dt);
+    }
+  }
+
+  _tickCamera(dt) {
+    this.camera.x = lerp(this.camera.x, this.hero.x, 1 - Math.exp(-dt * 10));
+    this.camera.y = lerp(this.camera.y, this.hero.y, 1 - Math.exp(-dt * 10));
+
+    if (this.camera.shakeT > 0) {
+      this.camera.shakeT = Math.max(0, this.camera.shakeT - dt);
+      const m = this.camera.shakeMag;
+      this.camera.sx = (Math.random() * 2 - 1) * m;
+      this.camera.sy = (Math.random() * 2 - 1) * m;
+    } else {
+      this.camera.sx = lerp(this.camera.sx, 0, 1 - Math.exp(-dt * 18));
+      this.camera.sy = lerp(this.camera.sy, 0, 1 - Math.exp(-dt * 18));
+    }
+  }
+
+  _viewBoundsWorld() {
+    const z = this.camera.zoom || 1;
+    const halfW = (this.w * 0.5) / z;
+    const halfH = (this.h * 0.5) / z;
+    const pad = this.perf.drawPad;
+    return {
+      x0: this.camera.x - halfW - pad,
+      x1: this.camera.x + halfW + pad,
+      y0: this.camera.y - halfH - pad,
+      y1: this.camera.y + halfH + pad,
+    };
+  }
+
+  _inView(x, y, vb) {
+    return x >= vb.x0 && x <= vb.x1 && y >= vb.y0 && y <= vb.y1;
+  }
+
+  _drawDungeonWorld(ctx) {
+    const room = this._getRoom();
+    if (!room) return;
+
+    const x0 = room.x - room.w * 0.5;
+    const y0 = room.y - room.h * 0.5;
+
+    ctx.fillStyle = "rgba(28,28,38,1)";
+    ctx.fillRect(x0, y0, room.w, room.h);
+
+    const cell = 24;
+    for (let y = 0; y < room.h; y += cell) {
+      for (let x = 0; x < room.w; x += cell) {
+        const wx = x0 + x;
+        const wy = y0 + y;
+        const n = hash2((wx / cell) | 0, (wy / cell) | 0, this.dungeon.floor | 0) >>> 0;
+        ctx.fillStyle = n % 2 === 0 ? "rgba(46,46,58,1)" : "rgba(40,40,50,1)";
+        ctx.fillRect(wx, wy, cell + 1, cell + 1);
+      }
+    }
+
+    ctx.fillStyle = "rgba(64,54,40,1)";
+    ctx.fillRect(x0 - 18, y0 - 18, room.w + 36, 18);
+    ctx.fillRect(x0 - 18, y0 + room.h, room.w + 36, 18);
+    ctx.fillRect(x0 - 18, y0, 18, room.h);
+    ctx.fillRect(x0 + room.w, y0, 18, room.h);
+  }
+
+  _drawDungeonOverlayWorld(ctx) {
+    const room = this._getRoom();
+    if (!room) return;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.fillRect(room.x - room.w * 0.5, room.y - room.h * 0.5, room.w, room.h);
+    ctx.restore();
+  }
+
+  _handleMenus() {
+    if (this.input.wasPressed("i")) this.menu.open = this.menu.open === "inventory" ? null : "inventory";
+    if (this.input.wasPressed("k")) this.menu.open = this.menu.open === "skills" ? null : "skills";
+    if (this.input.wasPressed("g")) this.menu.open = this.menu.open === "god" ? null : "god";
+    if (this.input.wasPressed("m")) this.menu.open = this.menu.open === "map" ? null : "map";
+    if (this.input.wasPressed("j")) this.menu.open = this.menu.open === "quests" ? null : "quests";
+    if (this.input.wasPressed("Escape")) this.menu.open = null;
+
+    if (this.menu.open) this.ui.open?.(this.menu.open);
+    else this.ui.closeAll?.();
+  }
+
+  _handleMovement(dt) {
+    const left = this.input.isDown("ArrowLeft");
+    const right = this.input.isDown("ArrowRight");
+    const up = this.input.isDown("ArrowUp");
+    const down = this.input.isDown("ArrowDown");
+
+    let ax = 0;
+    let ay = 0;
+    if (left) ax -= 1;
+    if (right) ax += 1;
+    if (up) ay -= 1;
+    if (down) ay += 1;
+
+    if (ax || ay) {
+      const n = norm(ax, ay);
+      this.hero.lastMove = { x: n.x, y: n.y };
+
+      let speed = this.hero.getMoveSpeed?.(this) || 140;
+      if (this.menu.open) speed *= 0.65;
+      if (this.hero.state?.dashT > 0) speed *= 1.1;
+
+      this.hero.vx += (n.x * speed - this.hero.vx) * 0.18;
+      this.hero.vy += (n.y * speed - this.hero.vy) * 0.18;
+
+      const nx = this.hero.x + this.hero.vx * dt;
+      const ny = this.hero.y + this.hero.vy * dt;
+
+      if (this.dungeon.active) {
+        this._moveHeroDungeon(nx, ny);
+      } else if (this.hero.state?.sailing) {
+        this.hero.x = nx;
+        this.hero.y = ny;
+      } else {
+        if (this.world.canWalk(nx, this.hero.y)) this.hero.x = nx;
+        else this.hero.vx = 0;
+
+        if (this.world.canWalk(this.hero.x, ny)) this.hero.y = ny;
+        else this.hero.vy = 0;
+      }
+    } else {
+      this.hero.vx *= 0.82;
+      this.hero.vy *= 0.82;
+      if (Math.abs(this.hero.vx) < 1) this.hero.vx = 0;
+      if (Math.abs(this.hero.vy) < 1) this.hero.vy = 0;
+    }
+
+    if (this.input.wasPressed("1")) {
+      if (this.hero.usePotion?.("hp")) {
+        this._msg("Used HP potion");
+        this._saveSoon();
+      }
+    }
+
+    if (this.input.wasPressed("2")) {
+      if (this.hero.usePotion?.("mana")) {
+        this._msg("Used Mana potion");
+        this._saveSoon();
+      }
+    }
+  }
+
+  _handleSpells() {
+    const aim = this._getAim();
+
+    if (this.input.wasPressed("q")) this._castSpark(aim.x, aim.y);
+    if (this.input.wasPressed("w")) this._castNova();
+    if (this.input.wasPressed("e")) this._castDash(aim.x, aim.y);
+    if (this.input.wasPressed("r")) this._castOrb(aim.x, aim.y);
+  }
+
+  _handleShopInput() {
+    if (!this.shop.campId) return;
+
+    if (this.input.wasPressed("1")) {
+      this._buyPotion("hp");
+      return;
+    }
+    if (this.input.wasPressed("2")) {
+      this._buyPotion("mana");
+      return;
+    }
+    if (this.input.wasPressed("3")) {
+      this._buyStockItem(0);
+      return;
+    }
+    if (this.input.wasPressed("4")) {
+      this._buyStockItem(1);
+      return;
+    }
+    if (this.input.wasPressed("5")) {
+      this._sellInventoryIndex(0);
+      return;
+    }
+    if (this.input.wasPressed("6")) {
+      this._sellInventoryIndex(1);
+      return;
+    }
+    if (this.input.wasPressed("7")) {
+      this._sellInventoryIndex(2);
+      return;
+    }
+    if (this.input.wasPressed("8")) {
+      this._sellInventoryIndex(3);
+      return;
+    }
+    if (this.input.wasPressed("9")) {
+      this._sellInventoryIndex(4);
+      return;
+    }
+  }
+
+  _toggleShop() {
+    const camp = this._cachedNearbyCamp;
+    if (!camp) {
+      if (this.menu.open === "shop") {
+        this.menu.open = null;
+      } else {
+        this._msg("No camp nearby");
+      }
+      return;
+    }
+
+    if (this.menu.open === "shop") {
+      this.menu.open = null;
+      return;
+    }
+
+    this._openShopForCamp(camp);
+  }
+
+  _openShopForCamp(camp) {
+    this._refreshShopForCamp(camp);
+    this.menu.open = "shop";
+    this.ui.open?.("shop");
+    this._msg(`Camp ${camp.id} shop`, 1.0);
+  }
+
+  _refreshShopForCamp(camp) {
+    const needsRefresh =
+      this.shop.campId !== camp.id ||
+      this.shop.lastRefreshLevel !== this.hero.level;
+
+    if (!needsRefresh) return;
+
+    this.shop.campId = camp.id;
+    this.shop.stockSeed = hash2(camp.id | 0, this.hero.level | 0, this.seed | 0);
+    this.shop.refreshTier = Math.max(1, this.hero.level);
+    this.shop.lastRefreshLevel = this.hero.level;
+
+    const rng = new RNG(this.shop.stockSeed);
+    const weaponRarityRoll = rng.float();
+    const armorRarityRoll = rng.float();
+
+    const weaponRarity =
+      weaponRarityRoll < 0.55 ? "common" :
+      weaponRarityRoll < 0.84 ? "uncommon" :
+      weaponRarityRoll < 0.96 ? "rare" : "epic";
+
+    const armorRarity =
+      armorRarityRoll < 0.58 ? "common" :
+      armorRarityRoll < 0.86 ? "uncommon" :
+      armorRarityRoll < 0.97 ? "rare" : "epic";
+
+    const weapon = makeGear("weapon", this.hero.level, weaponRarity, hash2(this.shop.stockSeed, 11));
+    const armor = makeGear("armor", this.hero.level, armorRarity, hash2(this.shop.stockSeed, 23));
+
+    weapon.price = Math.max(20, Math.round(weapon.price * 1.15));
+    armor.price = Math.max(18, Math.round(armor.price * 1.12));
+
+    this.shop.stock = [weapon, armor];
+  }
+
+  _buyPotion(kind) {
+    const cost = kind === "mana" ? 16 : 14;
+    if ((this.hero.gold || 0) < cost) {
+      this._msg("Not enough gold");
+      return;
+    }
+
+    this.hero.gold -= cost;
+    if (kind === "mana") this.hero.potions.mana = (this.hero.potions.mana || 0) + 1;
+    else this.hero.potions.hp = (this.hero.potions.hp || 0) + 1;
+
+    this._msg(kind === "mana" ? "Bought Mana Potion" : "Bought HP Potion");
+    this._saveSoon();
+  }
+
+  _buyStockItem(index) {
+    const item = this.shop.stock[index];
+    if (!item) return;
+
+    if ((this.hero.gold || 0) < (item.price || 0)) {
+      this._msg("Not enough gold");
+      return;
+    }
+
+    this.hero.gold -= item.price || 0;
+    this.hero.inventory.push({ ...item });
+    this._msg(`Bought ${item.name}`, 1.2);
+
+    const replacementSlot = item.slot || (index === 0 ? "weapon" : "armor");
+    const replacement = makeGear(
+      replacementSlot,
+      this.hero.level,
+      null,
+      hash2(this.shop.stockSeed, this.time * 1000 | 0, index | 0)
+    );
+    replacement.price = Math.max(16, Math.round(replacement.price * 1.12));
+    this.shop.stock[index] = replacement;
+
+    this._saveSoon();
+  }
+
+  _sellInventoryIndex(index) {
+    const inv = this.hero.inventory || [];
+    if (index < 0 || index >= inv.length) return;
+
+    const item = inv[index];
+    if (!item) return;
+
+    const sellPrice = Math.max(4, Math.round((item.price || 10) * 0.45));
+    this.hero.gold += sellPrice;
+    inv.splice(index, 1);
+    this._msg(`Sold ${item.name} for ${sellPrice}G`, 1.1);
+    this._saveSoon();
+  }
+
+  _getAim() {
+    if (this.mouse?.moved) {
+      const dx = this.mouse.worldX - this.hero.x;
+      const dy = this.mouse.worldY - this.hero.y;
+      const n = norm(dx, dy);
+      return { x: n.x || 1, y: n.y || 0 };
+    }
+
+    const last = this.hero.lastMove || { x: 1, y: 0 };
+    const n = norm(last.x, last.y);
+    return { x: n.x || 1, y: n.y || 0 };
+  }
+
+  _castSpark(dx, dy) {
+    if (this.cooldowns.q > 0) return;
+
+    const def = this.skillDefs.q;
+    if (!this.hero.spendMana?.(def.mana)) {
+      this._spellMsg("No mana");
+      return;
+    }
+
+    const dmg = this.hero.getStats?.().dmg || 8;
+
+    this.projectiles.push(
+      new Projectile(
+        this.hero.x + dx * 16,
+        this.hero.y + dy * 16,
+        dx * 320,
+        dy * 320,
+        dmg,
+        1.0,
+        this.hero.level,
+        { friendly: true, color: "#8be9ff", type: "spark", radius: 5, hitRadius: 18 }
+      )
+    );
+
+    this.cooldowns.q = def.cd;
+    this._spellMsg("Spark");
+  }
+
+  _castNova() {
+    if (this.cooldowns.w > 0) return;
+
+    const def = this.skillDefs.w;
+    if (!this.hero.spendMana?.(def.mana)) {
+      this._spellMsg("No mana");
+      return;
+    }
+
+    const dmg = this.hero.getStats?.().dmg || 8;
+
+    this.projectiles.push(
+      new Projectile(
+        this.hero.x,
+        this.hero.y,
+        0,
+        0,
+        dmg,
+        0.18,
+        this.hero.level,
+        { friendly: true, nova: true, radius: 12, hitRadius: 76, color: "#d6f5ff" }
+      )
+    );
+
+    this.cooldowns.w = def.cd;
+    this._spellMsg("Nova");
+    this._shake(0.04, 1.6);
+  }
+
+  _castDash(dx, dy) {
+    if (this.cooldowns.e > 0) return;
+
+    const def = this.skillDefs.e;
+    if (!this.hero.spendMana?.(def.mana)) {
+      this._spellMsg("No mana");
+      return;
+    }
+
+    const dist = 86;
+    const nx = this.hero.x + dx * dist;
+    const ny = this.hero.y + dy * dist;
+
+    if (this.dungeon.active) {
+      this._moveHeroDungeon(nx, ny);
+    } else {
+      if (this.world.canWalk(nx, this.hero.y)) this.hero.x = nx;
+      if (this.world.canWalk(this.hero.x, ny)) this.hero.y = ny;
+    }
+
+    this.hero.state.dashT = 0.12;
+    this.cooldowns.e = def.cd;
+    this._shake(0.08, 3.0);
+    this._spellMsg("Dash");
+  }
+
+  _castOrb(dx, dy) {
+    if (this.cooldowns.r > 0) return;
+
+    const def = this.skillDefs.r;
+    if (!this.hero.spendMana?.(def.mana)) {
+      this._spellMsg("No mana");
+      return;
+    }
+
+    const dmg = this.hero.getStats?.().dmg || 8;
+
+    this.projectiles.push(
+      new Projectile(
+        this.hero.x + dx * 18,
+        this.hero.y + dy * 18,
+        dx * 180,
+        dy * 180,
+        dmg * 1.4,
+        1.8,
+        this.hero.level,
+        { friendly: true, color: "#c08cff", type: "orb", radius: 8, hitRadius: 24 }
+      )
+    );
+
+    this.cooldowns.r = def.cd;
+    this._spellMsg("Orb");
+  }
+
+  _updateProjectiles(dt) {
+    const nearR2 = this.perf.projectileUpdateRadius * this.perf.projectileUpdateRadius;
+
+    for (const p of this.projectiles) {
+      if (!p.alive) continue;
+
+      const pdx = p.x - this.hero.x;
+      const pdy = p.y - this.hero.y;
+      if (pdx * pdx + pdy * pdy > nearR2) {
+        p.life -= dt * 2;
+        if (p.life <= 0) p.alive = false;
+        continue;
+      }
+
+      p.update?.(dt, this.dungeon.active ? null : this.world);
+
+      if (p.meta?.onHitHero) {
+        if (dist2(p.x, p.y, this.hero.x, this.hero.y) < (p.hitRadius || 16) ** 2) {
+          this.hero.takeDamage?.(p.dmg || 4);
+          p.alive = false;
+          this._shake(0.05, 1.6);
+          continue;
+        }
+      }
+
+      if (p.friendly) {
+        for (const e of this.enemies) {
+          if (!e.alive) continue;
+          if (dist2(p.x, p.y, e.x, e.y) < (p.hitRadius || 18) ** 2) {
+            e.takeDamage?.(p.dmg || 4);
+
+            if (!p.meta?.pierce) p.alive = false;
+
+            if (!e.alive) {
+              this._dropLoot(e.x, e.y, e.tier || 1);
+              this.hero.giveXP?.(e.xpValue?.() || 4);
+              this._onEnemyKilled(e);
+              this._killFlashT = 0.7;
+              this._combatTextT = 0.65;
+              this._shake(0.05, 1.7);
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    this.projectiles = this.projectiles.filter((p) => p.alive !== false);
+  }
+
+  _updateLoot(dt) {
+    const nearR2 = this.perf.lootUpdateRadius * this.perf.lootUpdateRadius;
+
+    for (const l of this.loot) {
+      if (!l.alive) continue;
+
+      const dx = l.x - this.hero.x;
+      const dy = l.y - this.hero.y;
+      if (dx * dx + dy * dy > nearR2) continue;
+
+      l.update?.(dt, this.hero);
+
+      if (!l.alive) {
+        if (l.kind === "gold") {
+          const amt = l.data?.amount || 5;
+          this.hero.gold += amt;
+          if (this._pickupMsgCooldown <= 0) {
+            this._pickupMsgCooldown = 0.22;
+            this._msg(`+${amt} Gold`, 0.6);
+          }
+        } else if (l.kind === "potion") {
+          const t = l.data?.potionType || "hp";
+          if (t === "mana") this.hero.potions.mana = (this.hero.potions.mana || 0) + 1;
+          else this.hero.potions.hp = (this.hero.potions.hp || 0) + 1;
+
+          if (this._pickupMsgCooldown <= 0) {
+            this._pickupMsgCooldown = 0.3;
+            this._msg(t === "mana" ? "Mana Potion" : "HP Potion", 0.8);
+          }
+        } else if (l.kind === "gear") {
+          const gear = l.data;
+          if (gear?.slot) {
+            const current = this.hero.equip?.[gear.slot];
+            if (!current) {
+              this.hero.equip[gear.slot] = gear;
+              this._msg(`Equipped ${gear.name}`, 1.0);
+            } else {
+              this.hero.inventory.push(gear);
+              this._msg(`Looted ${gear.name}`, 1.0);
+            }
+          }
+        }
+      }
+    }
+
+    this.loot = this.loot.filter((l) => l.alive !== false);
+  }
+
+  _dropLoot(x, y, lvl) {
+    if (this.loot.length >= this.perf.maxLoot) return;
+
+    if (Math.random() < 0.72) {
+      this.loot.push(new Loot(x, y, "gold", { amount: 4 + Math.floor(Math.random() * 6) + (lvl | 0) }));
+    }
+
+    if (Math.random() < 0.18 && this.loot.length < this.perf.maxLoot) {
+      this.loot.push(new Loot(x, y, "gear", makeGear("weapon", lvl, null, hash2(x | 0, y | 0, lvl | 0))));
+    }
+
+    if (Math.random() < 0.09 && this.loot.length < this.perf.maxLoot) {
+      this.loot.push(new Loot(x, y, "potion", { potionType: Math.random() < 0.5 ? "hp" : "mana" }));
+    }
+  }
+
+  _spawnWorldEnemies(dt) {
+    if (this.enemies.length >= this.perf.maxEnemies) return;
+    if (this.hero.state?.sailing) return;
+    if (this.menu.open) return;
+    if (this._spawnSuppressionT > 0) return;
+
+    this._spawnTimer += dt;
+    if (this._spawnTimer < 4.0) return;
+    this._spawnTimer = 0;
+
+    if (Math.random() > 0.22) return;
+
+    const r = this.perf.spawnRadius;
+    const a = Math.random() * Math.PI * 2;
+    const x = this.hero.x + Math.cos(a) * r;
+    const y = this.hero.y + Math.sin(a) * r;
+
+    if (!this.world.canWalk(x, y)) return;
+    if (this.world._isNearWater?.(x, y, 64)) return;
+    if (dist2(x, y, this.hero.x, this.hero.y) < 700 * 700) return;
+
+    let nearby = 0;
+    for (const e of this.enemies) {
+      if (dist2(x, y, e.x, e.y) < 320 * 320) nearby++;
+      if (nearby >= 2) return;
+    }
+
+    const roll = Math.random();
+    const kind =
+      roll < 0.15 ? "brute" :
+      roll < 0.35 ? "stalker" :
+      roll < 0.47 ? "caster" :
+      "blob";
+
+    const e = new Enemy(x, y, this.hero.level, kind, hash2(x | 0, y | 0, this.time | 0));
+    e.home = { x, y };
+    e.campId = null;
+    this.enemies.push(e);
+  }
+
+  _respawnCampEnemies(dt) {
+    this._campRespawnT += dt;
+    if (this._campRespawnT < this.perf.campRespawnCheckEvery) return;
+    this._campRespawnT = 0;
+
+    const camps = this.world?.camps || [];
+    if (!camps.length) return;
+    if (this.enemies.length >= this.perf.maxEnemies) return;
+    if (this.hero.state?.sailing) return;
+    if (this.dungeon.active) return;
+
+    for (const camp of camps) {
+      const heroNear = dist2(this.hero.x, this.hero.y, camp.x, camp.y) < this.perf.campAggroRadius * this.perf.campAggroRadius;
+
+      let campCount = 0;
+      for (const e of this.enemies) {
+        if (!e.alive) continue;
+        if (e.campId === camp.id) campCount++;
+      }
+
+      const desired = heroNear ? 3 : 2;
+      if (campCount >= desired) continue;
+
+      const missing = desired - campCount;
+      for (let i = 0; i < missing; i++) {
+        if (this.enemies.length >= this.perf.maxEnemies) break;
+
+        const ang = Math.random() * Math.PI * 2;
+        const rr = 72 + Math.random() * 56;
+        const ex = camp.x + Math.cos(ang) * rr;
+        const ey = camp.y + Math.sin(ang) * rr;
+
+        if (!this.world.canWalk(ex, ey)) continue;
+        if (this.world._isNearWater?.(ex, ey, 40)) continue;
+        if (dist2(ex, ey, this.hero.x, this.hero.y) < 190 * 190) continue;
+
+        const roll = Math.random();
+        const kind =
+          roll < 0.14 ? "brute" :
+          roll < 0.34 ? "stalker" :
+          roll < 0.46 ? "caster" :
+          "blob";
+
+        const e = new Enemy(ex, ey, Math.max(1, this.hero.level), kind, hash2(ex | 0, ey | 0, camp.id | 0));
+        e.home = { x: camp.x, y: camp.y };
+        e.campId = camp.id;
+        this.enemies.push(e);
+      }
+    }
+  }
+
+  _applyEnemyTouchDamage(e) {
+    if (!e?.alive) return;
+
+    const close = dist2(e.x, e.y, this.hero.x, this.hero.y) < (e.radius + 16) ** 2;
+    if (!close) return;
+
+    if (this._touchShakeCd <= 0) {
+      this._touchShakeCd = 0.10;
+      this._shake(0.03, 1.1);
+    }
+
+    if (this._touchDamageCd > 0) return;
+    this._touchDamageCd = this.perf.touchDamageTick;
+
+    this.hero.takeDamage?.((e.touchDps || 3) * this.perf.touchDamageTick);
+  }
+
+  _updateOverworldEnemies(dt) {
+    const nearR2 = this.perf.enemyUpdateRadius * this.perf.enemyUpdateRadius;
+
+    for (const e of this.enemies) {
+      if (!e.alive) continue;
+
+      const dx = e.x - this.hero.x;
+      const dy = e.y - this.hero.y;
+      if (dx * dx + dy * dy > nearR2) continue;
+
+      e.update?.(dt, this.hero, this.world, this);
+      this._applyEnemyTouchDamage(e);
+    }
+
+    this.enemies = this.enemies.filter((e) => e.alive !== false);
+  }
+
+  _updateDungeon(dt) {
+    const room = this._getRoom();
+    if (!room) return;
+
+    const nearR2 = this.perf.enemyUpdateRadius * this.perf.enemyUpdateRadius;
+
+    for (const e of this.enemies) {
+      if (!e.alive) continue;
+
+      const dx = e.x - this.hero.x;
+      const dy = e.y - this.hero.y;
+      if (dx * dx + dy * dy > nearR2) continue;
+
+      e.update?.(dt, this.hero, null, this);
+      this._applyEnemyTouchDamage(e);
+    }
+
+    this.enemies = this.enemies.filter((e) => e.alive !== false);
+
+    if (this.enemies.length === 0) {
+      if (room.exits.next) this._advanceDungeon();
+      else this._completeDungeon();
+    }
+  }
+
+  _autoCloseShopIfNeeded() {
+    if (this.menu.open !== "shop") return;
+    if (this.dungeon.active) {
+      this.menu.open = null;
+      return;
+    }
+    if (!this._cachedNearbyCamp) {
+      this.menu.open = null;
+    }
+  }
+
+  _updateNearbyPOIs(dt) {
+    this._nearbyPoiTimer -= dt;
+    if (this._nearbyPoiTimer > 0) return;
+    this._nearbyPoiTimer = 0.18;
+
+    const hx = this.hero.x;
+    const hy = this.hero.y;
+
+    this._cachedNearbyCamp = null;
+    this._cachedNearbyDock = null;
+    this._cachedNearbyWaystone = null;
+    this._cachedNearbyDungeon = null;
+
+    let bestCampD2 = 110 * 110;
+    for (const c of this.world?.camps || []) {
+      const d2 = dist2(hx, hy, c.x, c.y);
+      if (d2 < bestCampD2) {
+        bestCampD2 = d2;
+        this._cachedNearbyCamp = c;
+      }
+    }
+
+    let bestDockD2 = 110 * 110;
+    for (const d of this.world?.docks || []) {
+      const d2 = dist2(hx, hy, d.x, d.y);
+      if (d2 < bestDockD2) {
+        bestDockD2 = d2;
+        this._cachedNearbyDock = d;
+      }
+    }
+
+    let bestWayD2 = 100 * 100;
+    for (const w of this.world?.waystones || []) {
+      const d2 = dist2(hx, hy, w.x, w.y);
+      if (d2 < bestWayD2) {
+        bestWayD2 = d2;
+        this._cachedNearbyWaystone = w;
+      }
+    }
+
+    let bestDungeonD2 = 100 * 100;
+    for (const dg of this.world?.dungeons || []) {
+      const d2 = dist2(hx, hy, dg.x, dg.y);
+      if (d2 < bestDungeonD2) {
+        bestDungeonD2 = d2;
+        this._cachedNearbyDungeon = dg;
+      }
+    }
+  }
+
+  _interact() {
+    if (this.hero.state?.sailing) {
+      const dock = this._cachedNearbyDock || this._nearestDock(100);
+      if (dock) {
+        this.progress.discoveredDocks?.add?.(dock.id);
+        this._msg("Dock discovered", 1.2);
+        this._saveSoon();
+      }
+      return;
+    }
+
+    const camp = this._cachedNearbyCamp || this._nearestCamp(110);
+    if (camp) {
+      this._interactCamp(camp);
+      return;
+    }
+
+    const waystone = this._cachedNearbyWaystone;
+    if (waystone) {
+      this.progress.discoveredWaystones?.add?.(waystone.id);
+      this.hero.hp = this.hero.maxHp;
+      this.hero.mana = this.hero.maxMana;
+      this._msg(`Waystone ${waystone.id} awakened • Restored`);
+      this._saveSoon();
+      return;
+    }
+
+    const dock = this._cachedNearbyDock;
+    if (dock) {
+      this.progress.discoveredDocks?.add?.(dock.id);
+      this._msg("Dock discovered", 1.2);
+      this._saveSoon();
+      return;
+    }
+
+    const dungeon = this._cachedNearbyDungeon;
+    if (dungeon) {
+      this._enterDungeon(dungeon);
+    }
+  }
+
+  _interactCamp(camp) {
+    this.progress.visitedCamps?.add?.(camp.id);
+
+    const existing = this.quests.find((q) => q.campId === camp.id && !q.turnedIn);
+
+    this.hero.hp = Math.min(this.hero.maxHp, this.hero.hp + 20);
+    this.hero.mana = Math.min(this.hero.maxMana, this.hero.mana + 20);
+
+    if (existing && existing.done) {
+      existing.turnedIn = true;
+      this.hero.gold += existing.rewardGold || 0;
+      this.hero.giveXP?.(existing.rewardXp || 0);
+      this.questTurnIn = { id: existing.id, name: existing.name };
+      this._msg(`Quest complete: +${existing.rewardGold} Gold +${existing.rewardXp} XP`, 1.8);
+      this._saveSoon();
+      return;
+    }
+
+    if (existing && !existing.done) {
+      this._msg(`Rested at camp • ${existing.have}/${existing.need} ${existing.target}`, 1.5);
+      return;
+    }
+
+    const quest = this._createCampQuest(camp);
+    this.quests.push(quest);
+    this._msg(`New quest: ${quest.name}`, 1.6);
+    this._saveSoon();
+  }
+
+  _handleFastTravelInput() {
+    if (this.menu.open !== "map") return;
+    if (this.dungeon.active) return;
+    if (this.hero.state?.sailing) return;
+
+    if (this.input.wasPressed("z")) {
+      this.world?.toggleMapScale?.();
+      this._msg(`Map scale: ${this.world.mapMode}`, 1.2);
+    }
+
+    const ways = [...(this.world?.waystones || [])].filter((w) =>
+      this.progress?.discoveredWaystones?.has?.(w.id)
+    );
+
+    const digitPressed =
+      this.input.wasPressed("1") ? 1 :
+      this.input.wasPressed("2") ? 2 :
+      this.input.wasPressed("3") ? 3 :
+      this.input.wasPressed("4") ? 4 :
+      this.input.wasPressed("5") ? 5 :
+      this.input.wasPressed("6") ? 6 :
+      this.input.wasPressed("7") ? 7 :
+      this.input.wasPressed("8") ? 8 :
+      this.input.wasPressed("9") ? 9 :
+      0;
+
+    if (digitPressed > 0) {
+      const w = ways[digitPressed - 1];
+      if (!w) return;
+
+      const safe =
+        this.world?._findSafeLandPatchNear?.(w.x, w.y, 90) ||
+        this.world?._findNearbyLand?.(w.x, w.y, 120, false, true) ||
+        { x: w.x, y: w.y + 42 };
+
+      this.hero.x = safe.x;
+      this.hero.y = safe.y;
+      this.hero.vx = 0;
+      this.hero.vy = 0;
+      this.hero.hp = this.hero.maxHp;
+      this.hero.mana = this.hero.maxMana;
+      this._msg(`Waystone ${w.id} • Restored`, 1.2);
+      this._shake(0.06, 2.2);
+      this._saveSoon();
+    }
+  }
+
+  _updateZoneMessages(dt) {
+    if (this.dungeon.active) {
+      this.zoneMsg = `Dungeon Floor ${this.dungeon.floor}`;
+      this.zoneMsgT = 1.5;
+      return;
+    }
+
+    if (this._cachedNearbyDungeon) {
+      this.zoneMsg = "Dungeon Entrance";
+      this.zoneMsgT = 1.0;
+      return;
+    }
+
+    if (this._cachedNearbyDock) {
+      this.zoneMsg = "Dock";
+      this.zoneMsgT = 1.0;
+      return;
+    }
+
+    if (this._cachedNearbyCamp) {
+      this.zoneMsg = "Camp";
+      this.zoneMsgT = 1.0;
+      return;
+    }
+
+    this._zoneSampleT -= dt;
+    if (this._zoneSampleT <= 0) {
+      this._zoneSampleT = 0.55;
+      const z = this.world?.getZoneName?.(this.hero.x, this.hero.y) || "";
+      if (z && z !== this._lastZoneName) {
+        this._lastZoneName = z;
+        this.zoneMsg = z;
+        this.zoneMsgT = 1.0;
+      }
+    }
+  }
+
+  _updateMouseWorld() {
+    const rect = this.canvas.getBoundingClientRect();
+    this.mouse.worldX = (this.mouse.x - rect.left - this.w * 0.5) / this.camera.zoom + this.camera.x;
+    this.mouse.worldY = (this.mouse.y - rect.top - this.h * 0.5) / this.camera.zoom + this.camera.y;
+  }
+
+  _bindMouse() {
+    if (!this.canvas) return;
+
+    this.canvas.addEventListener("mousemove", (e) => {
+      this.mouse.x = e.clientX;
+      this.mouse.y = e.clientY;
+      this.mouse.moved = true;
+    });
+
+    this.canvas.addEventListener("mousedown", () => {
+      this.mouse.down = true;
+    });
+
+    this.canvas.addEventListener("mouseup", () => {
+      this.mouse.down = false;
+    });
+
+    this.canvas.addEventListener("mouseleave", () => {
+      this.mouse.down = false;
+    });
+  }
+
+  _nudgeToLand() {
+    const safe =
+      this.world?._findSafeLandPatchNear?.(this.hero.x, this.hero.y, 300) ||
+      this.world?._findNearbyLand?.(this.hero.x, this.hero.y, 300, false, true);
+
+    if (safe) {
+      this.hero.x = safe.x;
+      this.hero.y = safe.y;
+      this.hero.vx = 0;
+      this.hero.vy = 0;
+    }
+  }
+
+  _ensureHeroSafe() {
+    if (this.dungeon.active) return;
+    if (this.hero.state?.sailing) return;
+    if (this.world?.canWalk?.(this.hero.x, this.hero.y)) return;
+    this._nudgeToLand();
+  }
+
+  _cleanupFarEntities() {
+    const farEnemyR2 = (this.perf.enemyUpdateRadius * 1.75) ** 2;
+    const farProjR2 = (this.perf.projectileUpdateRadius * 1.4) ** 2;
+    const farLootR2 = (this.perf.lootUpdateRadius * 1.6) ** 2;
+
+    this.enemies = this.enemies.filter((e) => {
+      if (!e.alive) return false;
+      const dx = e.x - this.hero.x;
+      const dy = e.y - this.hero.y;
+      return dx * dx + dy * dy < farEnemyR2;
+    });
+
+    this.projectiles = this.projectiles.filter((p) => {
+      if (!p.alive) return false;
+      const dx = p.x - this.hero.x;
+      const dy = p.y - this.hero.y;
+      return dx * dx + dy * dy < farProjR2;
+    });
+
+    this.loot = this.loot.filter((l) => {
+      if (!l.alive) return false;
+      const dx = l.x - this.hero.x;
+      const dy = l.y - this.hero.y;
+      return dx * dx + dy * dy < farLootR2;
+    });
+  }
+
+  _shake(t, mag) {
+    this.camera.shakeT = t;
+    this.camera.shakeMag = mag;
+  }
+
+  _msg(text, t = 1.4) {
+    this.msg = text;
+    this.msgT = t;
+    this.ui?.setMsg?.(text, t);
+  }
+
+  _spellMsg(text, t = 1.0) {
+    if (this._spellMsgCooldown > 0) return;
+    this._spellMsgCooldown = 0.3;
+    this._msg(text, t);
+  }
+
+  _saveSoon() {
+    this._autosaveT = Math.min(this._autosaveT, 1.0);
+  }
+
+  _checkLevelUpMessage() {
+    if ((this.hero.level || 1) > this._levelSeen) {
+      this._levelSeen = this.hero.level;
+      this._msg(`Level Up! ${this.hero.level}`, 1.6);
+      if (this.shop.campId) {
+        const fakeCamp = { id: this.shop.campId };
+        this._refreshShopForCamp(fakeCamp);
+      }
+    }
+  }
+
+  _ensureCampQuests() {
+    const camps = this.world?.camps || [];
+    for (const camp of camps) {
+      const exists = this.quests.some((q) => q.campId === camp.id && !q.turnedIn);
+      if (!exists && this.progress?.visitedCamps?.has?.(camp.id)) {
+        this.quests.push(this._createCampQuest(camp));
+      }
+    }
+  }
+
+  _createCampQuest(camp) {
+    const types = ["blob", "stalker", "caster"];
+    const target = types[Math.floor(Math.random() * types.length)];
+    const need = 3 + Math.floor(Math.random() * 3);
+    const rewardGold = 18 + need * 6 + this.hero.level * 2;
+    const rewardXp = 14 + need * 5 + this.hero.level * 2;
+
+    return {
+      id: this._questIdCounter++,
+      type: "kill",
+      campId: camp.id,
+      name: `Camp ${camp.id}: Hunt ${target}s`,
+      desc: `Defeat ${need} ${target}${need > 1 ? "s" : ""} near Camp ${camp.id}. Return to camp for payment.`,
+      target,
+      need,
+      have: 0,
+      done: false,
+      turnedIn: false,
+      rewardGold,
+      rewardXp,
+    };
+  }
+
+  _onEnemyKilled(enemy) {
+    for (const q of this.quests) {
+      if (q.turnedIn || q.done) continue;
+      if (q.type !== "kill") continue;
+      if (q.target !== enemy.kind) continue;
+
+      q.have = Math.min(q.need, (q.have || 0) + 1);
+      if (q.have >= q.need) {
+        q.done = true;
+        this._msg(`Quest ready: ${q.name}`, 1.4);
+      }
+    }
+  }
+
+  _updateQuestState() {
+    for (const q of this.quests) {
+      if (!q.turnedIn && !q.done && q.have >= q.need) {
+        q.done = true;
+      }
+    }
+
+    this.quests = this.quests.slice(-12);
+  }
+
+  _saveGame() {
+    this.save.save?.({
+      seed: this.seed,
+      hero: this.hero,
+      progress: {
+        ...this.progress,
+        discoveredWaystones: [...(this.progress?.discoveredWaystones || [])],
+        discoveredDocks: [...(this.progress?.discoveredDocks || [])],
+        visitedCamps: [...(this.progress?.visitedCamps || [])],
+      },
+      dungeon: {
+        active: this.dungeon.active,
+        floor: this.dungeon.floor,
+        seed: this.dungeon.seed,
+        currentRoomIndex: this.dungeon.currentRoomIndex,
+        visited: [...(this.dungeon.visited || [])],
+      },
+      cooldowns: this.cooldowns,
+      skillLoadout: this.skillLoadout,
+      selectedSkillSlot: this.selectedSkillSlot,
+      quests: this.quests,
+      questTurnIn: this.questTurnIn,
+      menu: this.menu,
+      time: this.time,
+      msg: this.msg,
+      msgT: this.msgT,
+      zoneMsg: this.zoneMsg,
+      zoneMsgT: this.zoneMsgT,
+    });
+  }
+
+  _loadGame() {
+    const data = this.save.load?.();
+    if (!data) return;
+
+    if (typeof data.seed === "number" && Number.isFinite(data.seed)) {
+      this.seed = data.seed | 0;
+    }
+
+    if (data.hero) Object.assign(this.hero, data.hero);
+
+    if (data.progress) {
+      this.progress = {
+        ...this.progress,
+        ...data.progress,
+        discoveredWaystones: new Set(data.progress.discoveredWaystones || []),
+        discoveredDocks: new Set(data.progress.discoveredDocks || []),
+        visitedCamps: new Set(data.progress.visitedCamps || []),
+      };
+    }
+
+    if (data.cooldowns) this.cooldowns = { ...this.cooldowns, ...data.cooldowns };
+    if (Array.isArray(data.skillLoadout) && data.skillLoadout.length) {
+      this.skillLoadout = data.skillLoadout.slice(0, 4);
+    }
+    if (typeof data.selectedSkillSlot === "number") {
+      this.selectedSkillSlot = clamp(data.selectedSkillSlot | 0, 0, 3);
+    }
+
+    if (Array.isArray(data.quests)) {
+      this.quests = data.quests.map((q) => ({ ...q }));
+      this._questIdCounter = this.quests.reduce((m, q) => Math.max(m, q.id || 0), 0) + 1;
+    }
+
+    if (data.questTurnIn) {
+      this.questTurnIn = { ...data.questTurnIn };
+    }
+
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+    this.hero.state.sailing = false;
+  }
+
+  _ensureWorldPopulation() {
+    if (this.enemies.length > 0) return;
+
+    const camps = this.world?.camps || [];
+    for (const camp of camps) {
+      for (let i = 0; i < 2; i++) {
+        const a = (i / 2) * Math.PI * 2 + (camp.id || 0) * 0.33;
+        const ex = camp.x + Math.cos(a) * 110;
+        const ey = camp.y + Math.sin(a) * 110;
+        if (!this.world?.canWalk?.(ex, ey)) continue;
+        if (this.world?._isNearWater?.(ex, ey, 48)) continue;
+
+        const kind = i === 0 ? "blob" : "stalker";
+        const e = new Enemy(
+          ex,
+          ey,
+          Math.max(1, this.hero.level),
+          kind,
+          hash2(ex | 0, ey | 0, camp.id | 0)
+        );
+        e.home = { x: camp.x, y: camp.y };
+        e.campId = camp.id;
+        this.enemies.push(e);
+        if (this.enemies.length >= 10) return;
+      }
+    }
+  }
+
+  _nearestDock(radius = 100) {
+    const docks = this.world?.docks || [];
+    let best = null;
+    let bestD2 = radius * radius;
+
+    for (const d of docks) {
+      const dd = dist2(this.hero.x, this.hero.y, d.x, d.y);
+      if (dd < bestD2) {
+        bestD2 = dd;
+        best = d;
+      }
+    }
+
+    return best;
+  }
+
+  _nearestCamp(radius = 120) {
+    const camps = this.world?.camps || [];
+    let best = null;
+    let bestD2 = radius * radius;
+
+    for (const c of camps) {
+      const dd = dist2(this.hero.x, this.hero.y, c.x, c.y);
+      if (dd < bestD2) {
+        bestD2 = dd;
+        best = c;
+      }
+    }
+
+    return best;
+  }
+
+  _toggleDockingOrSailing() {
+    if (this.dungeon.active) {
+      this._msg("Cannot sail in dungeon");
+      return;
+    }
+
+    const dock = this._cachedNearbyDock || this._nearestDock(104);
+    if (!dock) {
+      this._msg("No dock nearby");
+      return;
+    }
+
+    if (!this.hero.state.sailing) {
+      const nearWater =
+        this.world.isWater(dock.x + 24, dock.y) ||
+        this.world.isWater(dock.x - 24, dock.y) ||
+        this.world.isWater(dock.x, dock.y + 24) ||
+        this.world.isWater(dock.x, dock.y - 24);
+
+      if (!nearWater) {
+        this._msg("Dock is blocked");
+        return;
+      }
+
+      this.hero.state.sailing = true;
+      this.hero.x = dock.x;
+      this.hero.y = dock.y;
+      this.hero.vx = 0;
+      this.hero.vy = 0;
+      this._msg("Sailing");
+      return;
+    }
+
+    this.hero.state.sailing = false;
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+    this._nudgeToLand();
+    this._msg("Docked");
+  }
+}
+===== ./src/input.js =====
+// src/input.js
+// v37 INPUT COMPAT + SAFETY PASS (FULL FILE)
+// Goals:
+// - keep current game.js compatibility
+// - preserve isDown / wasPressed / endFrame API
+// - normalize arrows / letters / digits / numpad
+// - prevent stuck keys after blur / alt-tab / hidden tab
+// - keep controls responsive without repeat spam
+// - keep map hotkeys and menu hotkeys reliable
+
+export default class Input {
+  constructor(target = window) {
+    this.target = target || window;
+
+    this.down = new Set();
+    this.pressed = new Set();
+
+    this._onKeyDown = (e) => {
+      const variants = this._variants(e);
+
+      let alreadyDown = false;
+      for (const v of variants) {
+        if (this.down.has(v)) {
+          alreadyDown = true;
+          break;
+        }
+      }
+
+      if (!alreadyDown && !e.repeat) {
+        for (const v of variants) this.pressed.add(v);
+      }
+
+      for (const v of variants) this.down.add(v);
+
+      if (
+        e.key === "ArrowUp" ||
+        e.key === "ArrowDown" ||
+        e.key === "ArrowLeft" ||
+        e.key === "ArrowRight" ||
+        e.key === " " ||
+        e.key === "Spacebar" ||
+        e.code === "Space" ||
+        e.key === "Tab"
+      ) {
+        e.preventDefault();
+      }
+    };
+
+    this._onKeyUp = (e) => {
+      const variants = this._variants(e);
+      for (const v of variants) this.down.delete(v);
+    };
+
+    this._onBlur = () => {
+      this.clearAll();
+    };
+
+    this._onWindowFocus = () => {
+      this.clearPressed();
+    };
+
+    this._onVisibilityChange = () => {
+      if (document.hidden) {
+        this.clearAll();
+      } else {
+        this.clearPressed();
+      }
+    };
+
+    this._onPointerLockChange = () => {
+      this.clearPressed();
+    };
+
+    this._onMouseLeave = () => {
+      this.clearPressed();
+    };
+
+    this.target.addEventListener("keydown", this._onKeyDown, { passive: false });
+    this.target.addEventListener("keyup", this._onKeyUp);
+    window.addEventListener("blur", this._onBlur);
+    window.addEventListener("focus", this._onWindowFocus);
+    document.addEventListener("visibilitychange", this._onVisibilityChange);
+    document.addEventListener("pointerlockchange", this._onPointerLockChange);
+    window.addEventListener("mouseleave", this._onMouseLeave);
+  }
+
+  _variants(e) {
+    const out = new Set();
+
+    const key = e?.key;
+    const code = e?.code;
+
+    if (key != null) {
+      const s = String(key);
+      out.add(s);
+      out.add(s.toLowerCase());
+      out.add(s.toUpperCase());
+    }
+
+    if (code != null) {
+      const s = String(code);
+      out.add(s);
+      out.add(s.toLowerCase());
+      out.add(s.toUpperCase());
+    }
+
+    if (key === "ArrowLeft" || key === "Left") {
+      out.add("ArrowLeft");
+      out.add("arrowleft");
+      out.add("Left");
+      out.add("left");
+    }
+    if (key === "ArrowRight" || key === "Right") {
+      out.add("ArrowRight");
+      out.add("arrowright");
+      out.add("Right");
+      out.add("right");
+    }
+    if (key === "ArrowUp" || key === "Up") {
+      out.add("ArrowUp");
+      out.add("arrowup");
+      out.add("Up");
+      out.add("up");
+    }
+    if (key === "ArrowDown" || key === "Down") {
+      out.add("ArrowDown");
+      out.add("arrowdown");
+      out.add("Down");
+      out.add("down");
+    }
+
+    if (key === "Escape" || key === "Esc" || code === "Escape") {
+      out.add("Escape");
+      out.add("escape");
+      out.add("Esc");
+      out.add("esc");
+    }
+
+    if (typeof key === "string" && key.length === 1) {
+      const ch = key.toUpperCase();
+
+      if (ch >= "A" && ch <= "Z") {
+        out.add(ch);
+        out.add(ch.toLowerCase());
+        out.add("Key" + ch);
+        out.add(("Key" + ch).toLowerCase());
+      }
+
+      if (ch >= "0" && ch <= "9") {
+        out.add(ch);
+        out.add("Digit" + ch);
+        out.add(("Digit" + ch).toLowerCase());
+      }
+    }
+
+    if (typeof code === "string" && /^Digit[0-9]$/.test(code)) {
+      const d = code.slice(5);
+      out.add(d);
+      out.add("Digit" + d);
+      out.add(("Digit" + d).toLowerCase());
+    }
+
+    if (typeof code === "string" && /^Numpad[0-9]$/.test(code)) {
+      const n = code.slice(6);
+      out.add(n);
+      out.add("Digit" + n);
+      out.add(("Digit" + n).toLowerCase());
+      out.add("Numpad" + n);
+      out.add(("Numpad" + n).toLowerCase());
+    }
+
+    if (key === "Enter" || code === "Enter" || code === "NumpadEnter") {
+      out.add("Enter");
+      out.add("enter");
+    }
+
+    if (key === "Delete" || code === "Delete") {
+      out.add("Delete");
+      out.add("delete");
+      out.add("Del");
+      out.add("del");
+    }
+
+    if (key === "Backspace" || code === "Backspace") {
+      out.add("Backspace");
+      out.add("backspace");
+    }
+
+    if (key === "Tab" || code === "Tab") {
+      out.add("Tab");
+      out.add("tab");
+    }
+
+    if (code === "NumpadAdd") {
+      out.add("+");
+      out.add("Plus");
+      out.add("plus");
+    }
+    if (code === "NumpadSubtract") {
+      out.add("-");
+      out.add("Minus");
+      out.add("minus");
+    }
+    if (code === "NumpadMultiply") {
+      out.add("*");
+      out.add("Multiply");
+      out.add("multiply");
+    }
+    if (code === "NumpadDivide") {
+      out.add("/");
+      out.add("Divide");
+      out.add("divide");
+    }
+    if (code === "NumpadDecimal") {
+      out.add(".");
+      out.add("Period");
+      out.add("period");
+    }
+
+    if (key === " " || key === "Spacebar" || code === "Space") {
+      out.add(" ");
+      out.add("Space");
+      out.add("space");
+      out.add("Spacebar");
+    }
+
+    return Array.from(out);
+  }
+
+  isDown(key) {
+    if (key == null) return false;
+    if (this.down.has(key)) return true;
+
+    const s = String(key);
+    if (this.down.has(s.toLowerCase())) return true;
+    if (this.down.has(s.toUpperCase())) return true;
+
+    return false;
+  }
+
+  wasPressed(key) {
+    if (key == null) return false;
+    if (this.pressed.has(key)) return true;
+
+    const s = String(key);
+    if (this.pressed.has(s.toLowerCase())) return true;
+    if (this.pressed.has(s.toUpperCase())) return true;
+
+    return false;
+  }
+
+  clearPressed() {
+    this.pressed.clear();
+  }
+
+  clearAll() {
+    this.down.clear();
+    this.pressed.clear();
+  }
+
+  endFrame() {
+    this.pressed.clear();
+  }
+
+  destroy() {
+    this.target.removeEventListener("keydown", this._onKeyDown);
+    this.target.removeEventListener("keyup", this._onKeyUp);
+    window.removeEventListener("blur", this._onBlur);
+    window.removeEventListener("focus", this._onWindowFocus);
+    document.removeEventListener("visibilitychange", this._onVisibilityChange);
+    document.removeEventListener("pointerlockchange", this._onPointerLockChange);
+    window.removeEventListener("mouseleave", this._onMouseLeave);
+    this.clearAll();
+  }
+}
+===== ./src/main.js =====
+// src/main.js
+// v43 MAIN LOOP + RECOVERY + CANVAS SAFETY PASS (FULL FILE)
+// Goals:
+// - keep current boot flow
+// - smoother frame pacing
+// - safer resize / focus handling
+// - recover cleanly after alt-tab / hidden tab
+// - avoid duplicate loops / runaway delta spikes
+// - keep canvas crisp and correctly sized
+
+import Game from "./game.js";
+
+const canvas = document.getElementById("overworld");
+if (!canvas) {
+  throw new Error('Missing <canvas id="overworld"> in index.html');
+}
+
+const ctx = canvas.getContext("2d", { alpha: false });
+if (!ctx) {
+  throw new Error("Could not get 2D canvas context");
+}
+
+let game = null;
+let rafId = 0;
+let booted = false;
+let running = false;
+let lastTime = performance.now();
+let accumulator = 0;
+let resizeQueued = false;
+let resumeTimer = 0;
+let dprCache = 1;
+
+const STEP = 1 / 60;
+const MAX_FRAME = 0.05;
+const MAX_STEPS = 4;
+
+setupCanvasElement();
+boot();
+
+function setupCanvasElement() {
+  if (!canvas.hasAttribute("tabindex")) {
+    canvas.tabIndex = 0;
+  }
+
+  canvas.setAttribute("role", "application");
+  canvas.setAttribute("aria-label", "Broke Knight game canvas");
+
+  canvas.style.outline = "none";
+  canvas.style.userSelect = "none";
+  canvas.style.webkitUserSelect = "none";
+  canvas.style.touchAction = "none";
+  canvas.style.display = "block";
+}
+
+function getDPR() {
+  return Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+}
+
+function getCssSize() {
+  const w = Math.max(320, window.innerWidth | 0);
+  const h = Math.max(240, window.innerHeight | 0);
+  return { w, h };
+}
+
+function applyCanvasSize(cssW, cssH, dpr) {
+  canvas.style.width = `${cssW}px`;
+  canvas.style.height = `${cssH}px`;
+
+  const pixelW = Math.max(1, Math.floor(cssW * dpr));
+  const pixelH = Math.max(1, Math.floor(cssH * dpr));
+
+  if (canvas.width !== pixelW || canvas.height !== pixelH) {
+    canvas.width = pixelW;
+    canvas.height = pixelH;
+  }
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+}
+
+function resizeCanvas() {
+  const { w: cssW, h: cssH } = getCssSize();
+  const dpr = getDPR();
+  dprCache = dpr;
+
+  applyCanvasSize(cssW, cssH, dpr);
+
+  if (game?.resize) {
+    game.resize(cssW, cssH);
+  } else if (game) {
+    game.w = cssW;
+    game.h = cssH;
+  }
+}
+
+function queueResize() {
+  if (resizeQueued) return;
+  resizeQueued = true;
+
+  requestAnimationFrame(() => {
+    resizeQueued = false;
+    resizeCanvas();
+  });
+}
+
+function focusCanvas() {
+  try {
+    canvas.focus({ preventScroll: true });
+  } catch (_) {
+    try {
+      canvas.focus();
+    } catch (_) {}
+  }
+}
+
+function cancelLoop() {
+  if (rafId) {
+    cancelAnimationFrame(rafId);
+    rafId = 0;
+  }
+  running = false;
+}
+
+function render() {
+  if (!game) return;
+  game.draw?.();
+}
+
+function tick(now) {
+  if (!running) return;
+
+  rafId = requestAnimationFrame(tick);
+
+  let frame = (now - lastTime) / 1000;
+  lastTime = now;
+
+  if (!Number.isFinite(frame) || frame < 0) {
+    frame = STEP;
+  }
+
+  frame = Math.min(MAX_FRAME, frame);
+  accumulator += frame;
+
+  let steps = 0;
+  while (accumulator >= STEP && steps < MAX_STEPS) {
+    game?.update?.(STEP);
+    accumulator -= STEP;
+    steps++;
+  }
+
+  if (steps >= MAX_STEPS) {
+    accumulator = 0;
+  }
+
+  render();
+}
+
+function startLoop() {
+  cancelLoop();
+  lastTime = performance.now();
+  accumulator = 0;
+  running = true;
+  rafId = requestAnimationFrame(tick);
+}
+
+function boot() {
+  if (booted) return;
+  booted = true;
+
+  resizeCanvas();
+  game = new Game(canvas);
+  resizeCanvas();
+  focusCanvas();
+  startLoop();
+}
+
+function hardResume() {
+  if (!booted || !game) return;
+
+  resizeCanvas();
+  focusCanvas();
+
+  lastTime = performance.now();
+  accumulator = 0;
+
+  if (!running) {
+    startLoop();
+  }
+}
+
+function softResumeSoon(delay = 50) {
+  if (resumeTimer) {
+    clearTimeout(resumeTimer);
+    resumeTimer = 0;
+  }
+
+  resumeTimer = window.setTimeout(() => {
+    resumeTimer = 0;
+    hardResume();
+  }, delay);
+}
+
+window.addEventListener("resize", queueResize);
+window.addEventListener("orientationchange", () => softResumeSoon(80));
+window.addEventListener("focus", () => softResumeSoon(0));
+window.addEventListener("pageshow", () => softResumeSoon(0));
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    cancelLoop();
+  } else {
+    softResumeSoon(0);
+  }
+});
+
+window.addEventListener("blur", () => {
+  cancelLoop();
+});
+
+canvas.addEventListener("mousedown", () => {
+  focusCanvas();
+});
+
+canvas.addEventListener(
+  "touchstart",
+  () => {
+    focusCanvas();
+  },
+  { passive: true }
+);
+
+window.addEventListener(
+  "keydown",
+  (e) => {
+    const blocked = [
+      "ArrowUp",
+      "ArrowDown",
+      "ArrowLeft",
+      "ArrowRight",
+      " ",
+      "Spacebar"
+    ];
+
+    if (blocked.includes(e.key)) {
+      e.preventDefault();
+    }
+  },
+  { passive: false }
+);
+
+window.addEventListener("devicepixelratiochange", () => {
+  const next = getDPR();
+  if (next !== dprCache) queueResize();
+});
+
+// Fallback DPR check for browsers without a devicepixelratiochange event.
+setInterval(() => {
+  const next = getDPR();
+  if (next !== dprCache) {
+    queueResize();
+  }
+}, 1000);
+===== ./src/save.js =====
+// src/save.js
+// v58 SAVE COMPAT + RECOVERY PASS (FULL FILE)
+// Goals:
+// - keep current game.js compatibility
+// - sanitize older / partial saves harder
+// - prevent broken coords / bad state reloads
+// - preserve hero / progress / cooldown / menu flow
+// - never reload into unsafe dungeon / sailing / dead state
+
+export default class Save {
+  constructor(key = "broke-knight-save") {
+    this.key = String(key || "broke-knight-save");
+    this.version = 7;
+  }
+
+  load() {
+    try {
+      const raw = localStorage.getItem(this.key);
+      if (!raw) return null;
+
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return null;
+
+      return this._sanitize(parsed);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  save(data) {
+    try {
+      const clean = this._sanitize(data);
+      clean._meta = {
+        version: this.version,
+        savedAt: Date.now(),
+      };
+
+      localStorage.setItem(this.key, JSON.stringify(clean));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  clear() {
+    try {
+      localStorage.removeItem(this.key);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  hasSave() {
+    try {
+      return !!localStorage.getItem(this.key);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  exportString(data) {
+    try {
+      const clean = this._sanitize(data);
+      clean._meta = {
+        version: this.version,
+        savedAt: Date.now(),
+      };
+      return JSON.stringify(clean);
+    } catch (_) {
+      return "";
+    }
+  }
+
+  importString(text) {
+    try {
+      if (typeof text !== "string" || !text.trim()) return null;
+      const parsed = JSON.parse(text);
+      return this._sanitize(parsed);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  _sanitize(data) {
+    const src = data && typeof data === "object" ? data : {};
+
+    const heroSrc = src.hero && typeof src.hero === "object" ? src.hero : {};
+    const progressSrc = src.progress && typeof src.progress === "object" ? src.progress : {};
+    const dungeonSrc = src.dungeon && typeof src.dungeon === "object" ? src.dungeon : {};
+    const menuSrc = src.menu && typeof src.menu === "object" ? src.menu : {};
+    const cooldownsSrc = src.cooldowns && typeof src.cooldowns === "object" ? src.cooldowns : {};
+
+    const out = {
+      seed: this._num(src.seed, 0),
+
+      hero: {
+        x: this._finiteCoord(heroSrc.x, 0),
+        y: this._finiteCoord(heroSrc.y, 0),
+        vx: this._safeVelocity(heroSrc.vx),
+        vy: this._safeVelocity(heroSrc.vy),
+
+        radius: this._num(heroSrc.radius, 10, 1, 128),
+        r: this._num(heroSrc.r, 14, 1, 128),
+
+        level: this._int(heroSrc.level, 1, 1, 9999),
+        xp: this._int(heroSrc.xp, 0, 0, 1000000000),
+        nextXp: this._int(heroSrc.nextXp, 30, 1, 1000000000),
+        gold: this._int(heroSrc.gold, 0, 0, 1000000000),
+
+        maxHp: this._num(heroSrc.maxHp, 100, 1, 1000000),
+        hp: 0,
+        maxMana: this._num(heroSrc.maxMana, 60, 0, 1000000),
+        mana: 0,
+
+        hpRegen: this._num(heroSrc.hpRegen, 1.5, 0, 10000),
+        manaRegen: this._num(heroSrc.manaRegen, 6.0, 0, 10000),
+
+        potions: {
+          hp: this._int(heroSrc?.potions?.hp, 2, 0, 9999),
+          mana: this._int(heroSrc?.potions?.mana, 1, 0, 9999),
+        },
+
+        inventory: this._sanitizeInventory(heroSrc.inventory),
+        equip: this._sanitizeEquip(heroSrc.equip),
+
+        state: {
+          sailing: !!heroSrc?.state?.sailing,
+          dashT: this._num(heroSrc?.state?.dashT, 0, 0, 999),
+          hurtT: this._num(heroSrc?.state?.hurtT, 0, 0, 999),
+        },
+
+        lastMove: this._sanitizeDir(heroSrc.lastMove, { x: 1, y: 0 }),
+
+        alive: heroSrc.alive !== false,
+        dead: !!heroSrc.dead,
+        animT: this._num(heroSrc.animT, 0, 0, 100000),
+      },
+
+      progress: {
+        discoveredWaystones: this._intArray(progressSrc.discoveredWaystones),
+        discoveredDocks: this._intArray(progressSrc.discoveredDocks),
+        dungeonBest: this._int(progressSrc.dungeonBest, 0, 0, 9999),
+        eliteKills: this._int(progressSrc.eliteKills, 0, 0, 999999),
+      },
+
+      dungeon: {
+        active: !!dungeonSrc.active,
+        floor: this._int(dungeonSrc.floor, 0, 0, 9999),
+        seed: this._num(dungeonSrc.seed, 0),
+        currentRoomIndex: this._int(dungeonSrc.currentRoomIndex, 0, 0, 9999),
+        visited: this._intArray(dungeonSrc.visited),
+      },
+
+      cooldowns: {
+        q: this._num(cooldownsSrc.q, 0, 0, 999),
+        w: this._num(cooldownsSrc.w, 0, 0, 999),
+        e: this._num(cooldownsSrc.e, 0, 0, 999),
+        r: this._num(cooldownsSrc.r, 0, 0, 999),
+      },
+
+      skillLoadout: this._sanitizeSkillLoadout(src.skillLoadout),
+      selectedSkillSlot: this._int(src.selectedSkillSlot, 0, 0, 3),
+
+      quests: this._sanitizeQuests(src.quests),
+      questTurnIn: this._sanitizeQuestTurnIn(src.questTurnIn),
+
+      menu: {
+        open: this._sanitizeMenu(menuSrc.open),
+      },
+
+      time: this._num(src.time, 0, 0, 1000000000),
+      msg: typeof src.msg === "string" ? src.msg.slice(0, 120) : "",
+      msgT: this._num(src.msgT, 0, 0, 999),
+      zoneMsg: typeof src.zoneMsg === "string" ? src.zoneMsg.slice(0, 120) : "",
+      zoneMsgT: this._num(src.zoneMsgT, 0, 0, 999),
+    };
+
+    out.hero.hp = this._num(heroSrc.hp, out.hero.maxHp, 0, out.hero.maxHp);
+    out.hero.mana = this._num(heroSrc.mana, out.hero.maxMana, 0, out.hero.maxMana);
+
+    if (out.hero.hp <= 0 || out.hero.dead) {
+      out.hero.hp = out.hero.maxHp;
+      out.hero.mana = Math.max(0, out.hero.mana);
+      out.hero.alive = true;
+      out.hero.dead = false;
+      out.hero.state.hurtT = 0;
+      out.hero.state.sailing = false;
+    } else {
+      out.hero.alive = true;
+      out.hero.dead = false;
+    }
+
+    if (out.dungeon.active) {
+      out.dungeon.active = false;
+      out.dungeon.floor = 0;
+      out.dungeon.currentRoomIndex = 0;
+      out.dungeon.visited = [];
+      out.hero.state.sailing = false;
+    }
+
+    if (Math.abs(out.hero.vx) < 0.001) out.hero.vx = 0;
+    if (Math.abs(out.hero.vy) < 0.001) out.hero.vy = 0;
+
+    out.hero.lastMove = this._sanitizeDir(out.hero.lastMove, { x: 1, y: 0 });
+
+    return out;
+  }
+
+  _sanitizeInventory(inv) {
+    if (!Array.isArray(inv)) return [];
+    return inv
+      .map((it) => this._sanitizeItem(it))
+      .filter(Boolean)
+      .slice(0, 300);
+  }
+
+  _sanitizeEquip(equip) {
+    const src = equip && typeof equip === "object" ? equip : {};
+    const out = {};
+
+    const allowed = ["weapon", "armor", "chest", "helm", "boots", "ring", "trinket"];
+    for (const key of allowed) {
+      const item = this._sanitizeItem(src[key], key);
+      if (item) out[key] = item;
+    }
+
+    return out;
+  }
+
+  _sanitizeItem(item, forcedSlot = null) {
+    if (!item || typeof item !== "object") return null;
+
+    const slot = this._sanitizeSlot(forcedSlot || item.slot);
+    if (!slot) return null;
+
+    const rarity = this._sanitizeRarity(item.rarity);
+    const level = this._int(item.level, 1, 1, 9999);
+    const name =
+      typeof item.name === "string" && item.name.trim()
+        ? item.name.slice(0, 80)
+        : this._fallbackItemName(slot, rarity);
+
+    const statsSrc = item.stats && typeof item.stats === "object" ? item.stats : {};
+
+    return {
+      slot,
+      level,
+      rarity,
+      name,
+      stats: {
+        dmg: this._int(statsSrc.dmg, 0, 0, 100000),
+        armor: this._int(statsSrc.armor, 0, 0, 100000),
+        crit: this._num(statsSrc.crit, 0, 0, 10),
+      },
+      price: this._int(item.price, 0, 0, 100000000),
+    };
+  }
+
+  _sanitizeQuests(quests) {
+    if (!Array.isArray(quests)) return [];
+
+    return quests.slice(0, 50).map((q, i) => {
+      const src = q && typeof q === "object" ? q : {};
+      return {
+        id: this._int(src.id, i + 1, 0, 999999),
+        type: typeof src.type === "string" ? src.type.slice(0, 40) : "kill",
+        name: typeof src.name === "string" ? src.name.slice(0, 120) : `Quest ${i + 1}`,
+        desc: typeof src.desc === "string" ? src.desc.slice(0, 240) : "",
+        target: this._int(src.target, 0, 0, 999999),
+        need: this._int(src.need, 0, 0, 999999),
+        have: this._int(src.have, 0, 0, 999999),
+        done: !!src.done,
+        turnedIn: !!src.turnedIn,
+        rewardGold: this._int(src.rewardGold, 0, 0, 99999999),
+        rewardXp: this._int(src.rewardXp, 0, 0, 99999999),
+      };
+    });
+  }
+
+  _sanitizeQuestTurnIn(q) {
+    if (!q || typeof q !== "object") return null;
+    return {
+      id: this._int(q.id, 0, 0, 999999),
+      name: typeof q.name === "string" ? q.name.slice(0, 120) : "",
+    };
+  }
+
+  _sanitizeSkillLoadout(loadout) {
+    const valid = ["q", "w", "e", "r"];
+    if (!Array.isArray(loadout)) return ["q", "w", "e", "r"];
+
+    const out = loadout
+      .map((v) => String(v || "").toLowerCase())
+      .filter((v) => valid.includes(v))
+      .slice(0, 4);
+
+    while (out.length < 4) {
+      const next = valid.find((v) => !out.includes(v));
+      if (!next) break;
+      out.push(next);
+    }
+
+    return out.slice(0, 4);
+  }
+
+  _sanitizeMenu(open) {
+    const allowed = [null, "inventory", "skills", "god", "map", "quests", "options"];
+    return allowed.includes(open) ? open : null;
+  }
+
+  _sanitizeSlot(slot) {
+    const s = String(slot || "").toLowerCase();
+    const allowed = ["weapon", "armor", "chest", "helm", "boots", "ring", "trinket"];
+    return allowed.includes(s) ? s : null;
+  }
+
+  _sanitizeRarity(rarity) {
+    const r = String(rarity || "").toLowerCase();
+    if (r === "uncommon" || r === "rare" || r === "epic") return r;
+    return "common";
+  }
+
+  _sanitizeDir(dir, fallback = { x: 1, y: 0 }) {
+    const x = this._num(dir?.x, fallback.x, -1, 1);
+    const y = this._num(dir?.y, fallback.y, -1, 1);
+
+    if (Math.abs(x) < 0.001 && Math.abs(y) < 0.001) {
+      return { x: fallback.x, y: fallback.y };
+    }
+
+    const mag = Math.hypot(x, y) || 1;
+    return {
+      x: x / mag,
+      y: y / mag,
+    };
+  }
+
+  _intArray(value) {
+    if (value instanceof Set) {
+      return [...value]
+        .map((v) => this._int(v, null, -1000000000, 1000000000))
+        .filter((v) => v !== null);
+    }
+
+    if (!Array.isArray(value)) return [];
+
+    return value
+      .map((v) => this._int(v, null, -1000000000, 1000000000))
+      .filter((v) => v !== null)
+      .slice(0, 10000);
+  }
+
+  _fallbackItemName(slot, rarity) {
+    const r =
+      rarity === "epic" ? "Mythic" :
+      rarity === "rare" ? "Fine" :
+      rarity === "uncommon" ? "Sturdy" :
+      "Plain";
+
+    const s =
+      slot === "weapon" ? "Blade" :
+      slot === "armor" ? "Armor" :
+      slot === "chest" ? "Chestplate" :
+      slot === "helm" ? "Helm" :
+      slot === "boots" ? "Boots" :
+      slot === "ring" ? "Ring" :
+      slot === "trinket" ? "Charm" :
+      "Gear";
+
+    return `${r} ${s}`;
+  }
+
+  _safeVelocity(v) {
+    return this._num(v, 0, -5000, 5000);
+  }
+
+  _finiteCoord(v, fallback = 0) {
+    return this._num(v, fallback, -1000000, 1000000);
+  }
+
+  _num(v, fallback = 0, min = -Infinity, max = Infinity) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return fallback;
+    if (n < min) return min;
+    if (n > max) return max;
+    return n;
+  }
+
+  _int(v, fallback = 0, min = -Infinity, max = Infinity) {
+    if (v === null || v === undefined || v === "") return fallback;
+    const n = Number(v);
+    if (!Number.isFinite(n)) return fallback;
+    const i = Math.trunc(n);
+    if (i < min) return min;
+    if (i > max) return max;
+    return i;
+  }
+}
+===== ./src/ui.js =====
+// src/ui.js
+// v59 RPG SHOP UI PASS (FULL FILE)
+// Focus:
+// - add camp shop menu
+// - keep quest / map / inventory panels
+// - stronger RPG camp feedback
+// - compatible with current game.js
+
+import { clamp } from "./util.js";
+
+export default class UI {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.w = canvas?.width || 960;
+    this.h = canvas?.height || 540;
+
+    this._open = null;
+    this._msg = "";
+    this._msgT = 0;
+
+    this._mini = null;
+    this._miniT = 0;
+  }
+
+  setViewSize(w, h) {
+    this.w = w | 0;
+    this.h = h | 0;
+  }
+
+  open(name) {
+    this._open = name || null;
+  }
+
+  closeAll() {
+    this._open = null;
+  }
+
+  setMsg(text, t = 2) {
+    this._msg = String(text || "");
+    this._msgT = Math.max(0, +t || 0);
+  }
+
+  update(dt, game) {
+    if (this._msgT > 0) {
+      this._msgT = Math.max(0, this._msgT - dt);
+      if (this._msgT <= 0) this._msg = "";
+    }
+
+    this._miniT += dt;
+    if (this._miniT >= 0.18) {
+      this._miniT = 0;
+      this._mini = game?.world?.getMinimapCanvas?.() || null;
+    }
+  }
+
+  draw(ctx, game) {
+    if (!ctx || !game) return;
+
+    this._syncViewFromCanvas();
+
+    this._drawHUD(ctx, game);
+    this._drawSpellBar(ctx, game);
+    this._drawMinimap(ctx, game);
+    this._drawHelp(ctx, game);
+    this._drawPrompt(ctx, game);
+    this._drawToast(ctx, game);
+
+    const open = game?.menu?.open || this._open || null;
+    if (!open) return;
+
+    if (open === "inventory") this._drawInventory(ctx, game);
+    else if (open === "skills") this._drawSkills(ctx, game);
+    else if (open === "god") this._drawGod(ctx, game);
+    else if (open === "map") this._drawMap(ctx, game);
+    else if (open === "quests") this._drawQuests(ctx, game);
+    else if (open === "shop") this._drawShop(ctx, game);
+    else if (open === "options") this._drawOptions(ctx, game);
+  }
+
+  _syncViewFromCanvas() {
+    if (!this.canvas) return;
+    const rect = this.canvas.getBoundingClientRect?.();
+    if (rect && rect.width > 0 && rect.height > 0) {
+      this.w = rect.width | 0;
+      this.h = rect.height | 0;
+    }
+  }
+
+  _drawHUD(ctx, game) {
+    const hero = game?.hero;
+    const st = hero?.getStats?.() || {
+      maxHp: hero?.maxHp || 100,
+      maxMana: hero?.maxMana || 60,
+      dmg: 10,
+      armor: 2,
+      crit: 0.05,
+    };
+
+    const hpP = clamp((hero?.hp || 0) / Math.max(1, st.maxHp || 1), 0, 1);
+    const mpP = clamp((hero?.mana || 0) / Math.max(1, st.maxMana || 1), 0, 1);
+    const xpP = clamp((hero?.xp || 0) / Math.max(1, hero?.nextXp || 1), 0, 1);
+
+    const x = 14;
+    const y = 12;
+    const panelW = 388;
+    const panelH = 146;
+
+    ctx.save();
+
+    this._panel(ctx, x, y, panelW, panelH, 16, "rgba(10,12,18,0.78)");
+
+    ctx.fillStyle = "rgba(246,248,252,0.96)";
+    ctx.font = "bold 13px Arial";
+    ctx.fillText("BROKE KNIGHT", x + 14, y + 18);
+
+    const bx = x + 14;
+    let by = y + 34;
+
+    this._bar(ctx, bx, by, 264, 15, hpP, "HP", `${Math.round(hero?.hp || 0)}/${Math.round(st.maxHp || 0)}`, "rgba(220,76,104,0.98)");
+    by += 25;
+    this._bar(ctx, bx, by, 264, 15, mpP, "MP", `${Math.round(hero?.mana || 0)}/${Math.round(st.maxMana || 0)}`, "rgba(82,150,255,0.98)");
+    by += 25;
+    this._bar(ctx, bx, by, 264, 12, xpP, "XP", `${Math.round(hero?.xp || 0)}/${Math.round(hero?.nextXp || 0)}`, "rgba(228,196,92,0.98)");
+
+    const rx = x + 295;
+    ctx.fillStyle = "rgba(222,230,244,0.90)";
+    ctx.font = "13px Arial";
+    ctx.fillText(`Lv ${hero?.level || 1}`, rx, y + 39);
+    ctx.fillText(`${hero?.gold || 0} Gold`, rx, y + 59);
+    ctx.fillText(`DMG ${Math.round(st.dmg || 0)}`, rx, y + 79);
+    ctx.fillText(`ARM ${Math.round(st.armor || 0)}`, rx, y + 99);
+    ctx.fillText(`CRT ${Math.round((st.crit || 0) * 100)}%`, rx, y + 119);
+
+    ctx.fillStyle = "rgba(198,208,226,0.82)";
+    ctx.font = "12px Arial";
+    ctx.fillText(`1 HP x${hero?.potions?.hp || 0}   2 MP x${hero?.potions?.mana || 0}`, x + 14, y + 131);
+
+    if (hero?.state?.sailing) {
+      this._chip(ctx, x + panelW - 92, y + 10, 76, 18, "SAILING", "rgba(76,152,226,0.95)");
+    } else if (game?.dungeon?.active) {
+      this._chip(ctx, x + panelW - 100, y + 10, 84, 18, `FLOOR ${game?.dungeon?.floor || 1}`, "rgba(144,96,220,0.95)");
+    } else if (game?.menu?.open === "shop") {
+      this._chip(ctx, x + panelW - 88, y + 10, 72, 18, "SHOP", "rgba(218,166,88,0.94)");
+    } else {
+      const activeQuest = (game?.quests || []).find(q => !q.turnedIn && !q.done);
+      if (activeQuest) {
+        this._chip(ctx, x + panelW - 96, y + 10, 80, 18, "QUEST", "rgba(88,166,98,0.94)");
+      } else {
+        this._chip(ctx, x + panelW - 108, y + 10, 92, 18, "OVERWORLD", "rgba(88,166,98,0.94)");
+      }
+    }
+
+    ctx.restore();
+  }
+
+  _drawSpellBar(ctx, game) {
+    const defs = game?.skillDefs || {};
+    const cds = game?.cooldowns || {};
+    const loadout = Array.isArray(game?.skillLoadout) && game.skillLoadout.length
+      ? game.skillLoadout
+      : ["q", "w", "e", "r"];
+
+    const slotSize = 58;
+    const gap = 10;
+    const totalW = loadout.length * slotSize + (loadout.length - 1) * gap;
+    const x0 = ((this.w - totalW) * 0.5) | 0;
+    const y = this.h - 84;
+
+    ctx.save();
+
+    for (let i = 0; i < loadout.length; i++) {
+      const key = loadout[i];
+      const def = defs[key] || {
+        key,
+        name: String(key || "?").toUpperCase(),
+        mana: 0,
+        color: "rgba(162,188,232,1)",
+        cd: 0,
+      };
+      const cd = Math.max(0, cds[key] || 0);
+      const active = (game?.selectedSkillSlot || 0) === i;
+      const x = x0 + i * (slotSize + gap);
+
+      this._panel(ctx, x, y, slotSize, slotSize, 12, active ? "rgba(24,30,42,0.97)" : "rgba(14,18,26,0.90)");
+      ctx.strokeStyle = active ? "rgba(240,214,116,0.95)" : "rgba(255,255,255,0.09)";
+      ctx.lineWidth = active ? 2 : 1;
+      roundRect(ctx, x, y, slotSize, slotSize, 12);
+      ctx.stroke();
+
+      ctx.fillStyle = def.color || "rgba(162,188,232,1)";
+      ctx.beginPath();
+      ctx.arc(x + slotSize * 0.5, y + 21, 11, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(255,255,255,0.92)";
+      ctx.font = "bold 13px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(String(def.key || key || "?").toUpperCase(), x + slotSize * 0.5, y + 45);
+
+      if (cd > 0.001) {
+        const p = clamp(cd / Math.max(0.001, def.cd || cd), 0, 1);
+        ctx.fillStyle = "rgba(0,0,0,0.48)";
+        roundRectFill(ctx, x, y, slotSize, slotSize * p, 12);
+        ctx.fillStyle = "rgba(255,255,255,0.95)";
+        ctx.font = "bold 15px Arial";
+        ctx.fillText(cd.toFixed(cd >= 1 ? 1 : 2), x + slotSize * 0.5, y + 30);
+      }
+
+      ctx.font = "10px Arial";
+      ctx.fillStyle = "rgba(208,218,236,0.82)";
+      ctx.fillText(`${def.mana || 0} MP`, x + slotSize * 0.5, y + 58);
+    }
+
+    ctx.textAlign = "left";
+    ctx.restore();
+  }
+
+  _drawMinimap(ctx, game) {
+    const mini = this._mini || game?.world?.getMinimapCanvas?.();
+    if (!mini) return;
+
+    const size = Math.max(136, Math.min(190, Math.floor(this.h * 0.24)));
+    const x = this.w - size - 16;
+    const y = 16;
+    const world = game?.world;
+
+    ctx.save();
+    this._panel(ctx, x - 6, y - 6, size + 12, size + 28, 14, "rgba(8,12,18,0.72)");
+
+    ctx.save();
+    roundRect(ctx, x, y, size, size, 12);
+    ctx.clip();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(mini, x, y, size, size);
+    ctx.imageSmoothingEnabled = true;
+    ctx.restore();
+
+    ctx.strokeStyle = "rgba(255,255,255,0.15)";
+    ctx.lineWidth = 1;
+    roundRect(ctx, x, y, size, size, 12);
+    ctx.stroke();
+
+    const span = world?.mapMode === "large"
+      ? Math.max(8000, world?.boundsRadius ? world.boundsRadius * 2 : 10400)
+      : Math.max(4000, world?.boundsRadius || 5200);
+
+    const half = span * 0.5;
+    const px = x + clamp(((game?.hero?.x || 0) + half) / span, 0, 1) * size;
+    const py = y + clamp(((game?.hero?.y || 0) + half) / span, 0, 1) * size;
+
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.beginPath();
+    ctx.arc(px, py, 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(238,244,255,0.96)";
+    ctx.font = "bold 11px Arial";
+    ctx.fillText(`MINIMAP • ${world?.mapMode || "small"}`, x + 6, y + size + 17);
+
+    ctx.restore();
+  }
+
+  _drawHelp(ctx, game) {
+    const open = game?.menu?.open || null;
+    const text = open
+      ? "ESC close • F interact • H shop near camps • 1-9 menu actions"
+      : "Arrows move • Q/W/E/R cast • F interact • H shop • J quests • B sail/dock • I inv • M map";
+
+    ctx.save();
+    ctx.font = "12px Arial";
+
+    const padX = 12;
+    const w = Math.ceil(ctx.measureText(text).width + padX * 2);
+    const h = 24;
+    const x = ((this.w - w) * 0.5) | 0;
+    const y = 12;
+
+    this._panel(ctx, x, y, w, h, 12, "rgba(10,14,20,0.58)");
+    ctx.fillStyle = "rgba(226,234,247,0.88)";
+    ctx.fillText(text, x + padX, y + 16);
+
+    ctx.restore();
+  }
+
+  _drawPrompt(ctx, game) {
+    const hero = game?.hero;
+    const hx = hero?.x || 0;
+    const hy = hero?.y || 0;
+    let text = "";
+
+    for (const c of game?.world?.camps || []) {
+      if (distSq(hx, hy, c.x, c.y) < 100 * 100) {
+        const quest = (game?.quests || []).find(q => q.campId === c.id && !q.turnedIn);
+        if (quest?.done) text = "Press F to turn in quest • H to open shop";
+        else if (quest) text = "Press F to rest at camp • H to open shop";
+        else text = "Press F to take quest • H to open shop";
+        break;
+      }
+    }
+
+    if (!text) {
+      for (const w of game?.world?.waystones || []) {
+        if (distSq(hx, hy, w.x, w.y) < 90 * 90) {
+          text = "Press F to awaken waystone and restore";
+          break;
+        }
+      }
+    }
+
+    if (!text) {
+      for (const d of game?.world?.docks || []) {
+        if (distSq(hx, hy, d.x, d.y) < 100 * 100) {
+          text = hero?.state?.sailing
+            ? "Press B to dock"
+            : "Press F to discover dock • Press B to sail";
+          break;
+        }
+      }
+    }
+
+    if (!text) {
+      for (const dg of game?.world?.dungeons || []) {
+        if (distSq(hx, hy, dg.x, dg.y) < 90 * 90) {
+          text = "Press F to enter dungeon";
+          break;
+        }
+      }
+    }
+
+    if (!text) return;
+
+    const w = Math.min(500, Math.max(250, Math.floor(this.w * 0.52)));
+    const h = 34;
+    const x = ((this.w - w) * 0.5) | 0;
+    const y = this.h - 128;
+
+    ctx.save();
+    this._panel(ctx, x, y, w, h, 14, "rgba(12,16,24,0.80)");
+    ctx.font = "bold 14px Arial";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(242,246,255,0.95)";
+    ctx.fillText(text, x + w * 0.5, y + 22);
+    ctx.textAlign = "left";
+    ctx.restore();
+  }
+
+  _drawToast(ctx, game) {
+    const msg = this._msg || game?.msg || "";
+    const msgT = this._msg ? this._msgT : (game?.msgT || 0);
+    if (!msg || msgT <= 0) return;
+
+    ctx.save();
+    ctx.font = "bold 16px Arial";
+    ctx.textAlign = "center";
+
+    const padX = 14;
+    const tw = ctx.measureText(msg).width;
+    const w = Math.ceil(tw + padX * 2);
+    const h = 34;
+    const x = ((this.w - w) * 0.5) | 0;
+    const y = this.h - 34 - h;
+
+    this._panel(ctx, x, y, w, h, 12, "rgba(8,12,18,0.86)");
+    ctx.fillStyle = "rgba(245,248,255,0.96)";
+    ctx.fillText(msg, x + w * 0.5, y + 22);
+
+    ctx.textAlign = "left";
+    ctx.restore();
+  }
+
+  _drawInventory(ctx, game) {
+    const hero = game?.hero;
+    const inv = Array.isArray(hero?.inventory) ? hero.inventory : [];
+    const equip = hero?.equip || {};
+
+    const x = Math.max(20, ((this.w - 820) * 0.5) | 0);
+    const y = Math.max(20, ((this.h - 500) * 0.5) | 0);
+    const w = Math.min(820, this.w - 40);
+    const h = Math.min(500, this.h - 40);
+
+    ctx.save();
+    this._bigPanel(ctx, x, y, w, h, "Inventory");
+
+    const leftW = 264;
+    const rightX = x + leftW + 16;
+    const rightW = w - leftW - 30;
+
+    this._subPanel(ctx, x + 14, y + 44, leftW, h - 60, "Equipped");
+
+    const slots = ["weapon", "armor", "chest", "helm", "boots", "ring", "trinket"];
+    let sy = y + 74;
+    for (const slot of slots) {
+      this._slotRow(ctx, x + 24, sy, leftW - 20, slot, equip[slot] || null);
+      sy += 48;
+    }
+
+    this._subPanel(ctx, rightX, y + 44, rightW, h - 60, `Backpack (${inv.length})`);
+
+    const cols = 2;
+    const gap = 10;
+    const cellW = Math.floor((rightW - 26 - gap) / cols);
+    const cellH = 72;
+    const startX = rightX + 12;
+    const startY = y + 74;
+
+    for (let i = 0; i < inv.length && i < 10; i++) {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const cx = startX + col * (cellW + gap);
+      const cy = startY + row * (cellH + 8);
+      this._itemCard(ctx, cx, cy, cellW, cellH, inv[i], `${i + 1}`);
+    }
+
+    if (inv.length === 0) {
+      ctx.fillStyle = "rgba(214,222,238,0.78)";
+      ctx.font = "14px Arial";
+      ctx.fillText("Backpack is empty.", rightX + 14, y + 76);
+    }
+
+    ctx.restore();
+  }
+
+  _drawSkills(ctx, game) {
+    const hero = game?.hero;
+    const defs = game?.skillDefs || {};
+    const cds = game?.cooldowns || {};
+    const loadout = Array.isArray(game?.skillLoadout) && game.skillLoadout.length
+      ? game.skillLoadout
+      : ["q", "w", "e", "r"];
+
+    const x = Math.max(40, ((this.w - 720) * 0.5) | 0);
+    const y = Math.max(24, ((this.h - 420) * 0.5) | 0);
+    const w = Math.min(720, this.w - 80);
+    const h = Math.min(420, this.h - 48);
+
+    ctx.save();
+    this._bigPanel(ctx, x, y, w, h, "Skills");
+
+    const st = hero?.getStats?.() || {};
+    ctx.fillStyle = "rgba(222,230,244,0.86)";
+    ctx.font = "14px Arial";
+    ctx.fillText(
+      `Damage ${Math.round(st.dmg || 0)} • Armor ${Math.round(st.armor || 0)} • Crit ${Math.round((st.crit || 0) * 100)}%`,
+      x + 18,
+      y + 64
+    );
+
+    let sy = y + 92;
+    for (let i = 0; i < loadout.length; i++) {
+      const key = loadout[i];
+      const def = defs[key] || { key, name: key, mana: 0, cd: 0, color: "rgba(162,188,232,1)" };
+      const cd = Math.max(0, cds[key] || 0);
+      this._skillRow(ctx, x + 18, sy, w - 36, i, def, cd, (game?.selectedSkillSlot || 0) === i);
+      sy += 68;
+    }
+
+    ctx.restore();
+  }
+
+  _drawGod(ctx, game) {
+    const hero = game?.hero;
+    const stats = hero?.getStats?.() || {};
+
+    const x = Math.max(60, ((this.w - 560) * 0.5) | 0);
+    const y = Math.max(32, ((this.h - 360) * 0.5) | 0);
+    const w = Math.min(560, this.w - 120);
+    const h = Math.min(360, this.h - 64);
+
+    ctx.save();
+    this._bigPanel(ctx, x, y, w, h, "God Menu");
+
+    const lines = [
+      `Hero Level: ${hero?.level || 1}`,
+      `Gold: ${hero?.gold || 0}`,
+      `HP Regen: ${fmtNum(hero?.hpRegen || 0)}`,
+      `Mana Regen: ${fmtNum(hero?.manaRegen || 0)}`,
+      `Damage: ${Math.round(stats.dmg || 0)}`,
+      `Armor: ${Math.round(stats.armor || 0)}`,
+      `Crit: ${Math.round((stats.crit || 0) * 100)}%`,
+      `Dungeon Best: ${game?.progress?.dungeonBest || 0}`,
+      `Waystones: ${countSetLike(game?.progress?.discoveredWaystones)}`,
+      `Docks: ${countSetLike(game?.progress?.discoveredDocks)}`,
+    ];
+
+    let ty = y + 72;
+    ctx.fillStyle = "rgba(230,236,248,0.90)";
+    ctx.font = "15px Arial";
+    for (const line of lines) {
+      ctx.fillText(line, x + 22, ty);
+      ty += 28;
+    }
+
+    ctx.restore();
+  }
+
+  _drawMap(ctx, game) {
+    const mini = game?.world?.getMinimapCanvas?.();
+    const discovered = [...(game?.progress?.discoveredWaystones || [])];
+
+    const x = Math.max(20, ((this.w - 860) * 0.5) | 0);
+    const y = Math.max(20, ((this.h - 560) * 0.5) | 0);
+    const w = Math.min(860, this.w - 40);
+    const h = Math.min(560, this.h - 40);
+
+    ctx.save();
+    this._bigPanel(ctx, x, y, w, h, "World Map");
+
+    const mapX = x + 18;
+    const mapY = y + 50;
+    const mapW = Math.floor(w * 0.63);
+    const mapH = h - 76;
+
+    this._subPanel(ctx, mapX, mapY, mapW, mapH, "Explored Terrain");
+
+    if (mini) {
+      const dx = mapX + 10;
+      const dy = mapY + 24;
+      const dw = mapW - 20;
+      const dh = mapH - 34;
+
+      ctx.save();
+      roundRect(ctx, dx, dy, dw, dh, 12);
+      ctx.clip();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(mini, dx, dy, dw, dh);
+      ctx.imageSmoothingEnabled = true;
+      ctx.restore();
+
+      ctx.strokeStyle = "rgba(255,255,255,0.18)";
+      ctx.lineWidth = 1;
+      roundRect(ctx, dx, dy, dw, dh, 12);
+      ctx.stroke();
+    }
+
+    const sideX = mapX + mapW + 16;
+    const sideW = w - (sideX - x) - 18;
+    this._subPanel(ctx, sideX, mapY, sideW, mapH, "Travel");
+
+    let ty = mapY + 38;
+    ctx.fillStyle = "rgba(234,240,252,0.94)";
+    ctx.font = "bold 14px Arial";
+    ctx.fillText(`Map scale: ${game?.world?.mapMode || "small"}`, sideX + 12, ty);
+    ty += 26;
+
+    ctx.font = "13px Arial";
+    ctx.fillStyle = "rgba(206,216,236,0.84)";
+    ctx.fillText("Z = change map scale", sideX + 12, ty);
+    ty += 20;
+    ctx.fillText("1-9 = fast travel", sideX + 12, ty);
+    ty += 20;
+    ctx.fillText(`Unlocked stones: ${discovered.length}`, sideX + 12, ty);
+
+    ty += 28;
+    ctx.fillStyle = "rgba(232,238,252,0.94)";
+    ctx.font = "bold 13px Arial";
+    ctx.fillText("Waystones", sideX + 12, ty);
+    ty += 20;
+
+    ctx.font = "12px Arial";
+    ctx.fillStyle = "rgba(206,216,236,0.84)";
+    for (let i = 0; i < discovered.length && i < 9; i++) {
+      ctx.fillText(`${i + 1} • Waystone ${discovered[i]}`, sideX + 12, ty);
+      ty += 18;
+    }
+
+    if (!discovered.length) {
+      ctx.fillText("No waystones unlocked yet.", sideX + 12, ty);
+    }
+
+    ctx.restore();
+  }
+
+  _drawQuests(ctx, game) {
+    const quests = Array.isArray(game?.quests) ? game.quests : [];
+
+    const x = Math.max(60, ((this.w - 700) * 0.5) | 0);
+    const y = Math.max(26, ((this.h - 460) * 0.5) | 0);
+    const w = Math.min(700, this.w - 120);
+    const h = Math.min(460, this.h - 52);
+
+    ctx.save();
+    this._bigPanel(ctx, x, y, w, h, "Quests");
+
+    let ty = y + 72;
+    for (let i = 0; i < quests.length && i < 8; i++) {
+      const q = quests[i];
+      this._panel(ctx, x + 16, ty - 16, w - 32, 68, 10, "rgba(14,20,30,0.72)");
+
+      ctx.fillStyle = q?.turnedIn
+        ? "rgba(170,170,170,0.80)"
+        : q?.done
+        ? "rgba(160,240,160,0.95)"
+        : "rgba(236,240,248,0.94)";
+      ctx.font = "bold 14px Arial";
+      ctx.fillText(q?.name || `Quest ${i + 1}`, x + 28, ty);
+
+      ctx.fillStyle = "rgba(204,214,232,0.82)";
+      ctx.font = "12px Arial";
+      ctx.fillText((q?.desc || "").slice(0, 90), x + 28, ty + 16);
+
+      ctx.fillStyle = "rgba(232,238,252,0.90)";
+      ctx.fillText(
+        `Progress: ${q?.have || 0}/${q?.need || 0} • Reward: ${q?.rewardGold || 0}G / ${q?.rewardXp || 0}XP`,
+        x + 28,
+        ty + 34
+      );
+
+      ty += 76;
+    }
+
+    if (!quests.length) {
+      ctx.fillStyle = "rgba(210,220,236,0.78)";
+      ctx.font = "14px Arial";
+      ctx.fillText("No active quests. Visit a camp and press F.", x + 20, y + 72);
+    }
+
+    ctx.restore();
+  }
+
+  _drawShop(ctx, game) {
+    const shop = game?.shop || {};
+    const hero = game?.hero;
+    const stock = Array.isArray(shop.stock) ? shop.stock : [];
+    const inv = Array.isArray(hero?.inventory) ? hero.inventory : [];
+
+    const x = Math.max(40, ((this.w - 760) * 0.5) | 0);
+    const y = Math.max(24, ((this.h - 500) * 0.5) | 0);
+    const w = Math.min(760, this.w - 80);
+    const h = Math.min(500, this.h - 48);
+
+    ctx.save();
+    this._bigPanel(ctx, x, y, w, h, `Camp Shop${shop.campId ? ` • Camp ${shop.campId}` : ""}`);
+
+    ctx.fillStyle = "rgba(232,238,252,0.94)";
+    ctx.font = "bold 14px Arial";
+    ctx.fillText(`Gold: ${hero?.gold || 0}`, x + 20, y + 60);
+
+    const leftX = x + 18;
+    const leftY = y + 84;
+    const leftW = 320;
+    const rightX = x + 354;
+    const rightY = y + 84;
+    const rightW = w - (rightX - x) - 18;
+
+    this._subPanel(ctx, leftX, leftY, leftW, h - 102, "Buy");
+    this._subPanel(ctx, rightX, rightY, rightW, h - 102, "Sell Backpack Items");
+
+    const buyRows = [
+      { hotkey: "1", name: "HP Potion", price: 14, desc: "+1 HP potion" },
+      { hotkey: "2", name: "Mana Potion", price: 16, desc: "+1 Mana potion" },
+      {
+        hotkey: "3",
+        name: stock[0]?.name || "Weapon",
+        price: stock[0]?.price || 0,
+        desc: stock[0] ? itemStatText(stock[0]) : "No stock"
+      },
+      {
+        hotkey: "4",
+        name: stock[1]?.name || "Armor",
+        price: stock[1]?.price || 0,
+        desc: stock[1] ? itemStatText(stock[1]) : "No stock"
+      },
+    ];
+
+    let by = leftY + 36;
+    for (const row of buyRows) {
+      this._panel(ctx, leftX + 10, by, leftW - 20, 62, 10, "rgba(12,18,26,0.72)");
+      this._hotkeyChip(ctx, leftX + 18, by + 10, row.hotkey);
+      ctx.fillStyle = "rgba(242,246,255,0.95)";
+      ctx.font = "bold 14px Arial";
+      ctx.fillText(row.name, leftX + 52, by + 20);
+      ctx.fillStyle = "rgba(204,214,232,0.82)";
+      ctx.font = "12px Arial";
+      ctx.fillText(row.desc, leftX + 52, by + 39);
+      ctx.fillStyle = "rgba(255,224,150,0.94)";
+      ctx.font = "bold 13px Arial";
+      ctx.fillText(`${row.price}G`, leftX + leftW - 78, by + 28);
+      by += 72;
+    }
+
+    let sy = rightY + 36;
+    const sellCount = Math.min(5, inv.length);
+    for (let i = 0; i < sellCount; i++) {
+      const item = inv[i];
+      const sellPrice = Math.max(4, Math.round((item?.price || 10) * 0.45));
+
+      this._panel(ctx, rightX + 10, sy, rightW - 20, 62, 10, "rgba(12,18,26,0.72)");
+      this._hotkeyChip(ctx, rightX + 18, sy + 10, String(i + 5));
+      ctx.fillStyle = rarityTextColor(item?.rarity);
+      ctx.font = "bold 14px Arial";
+      ctx.fillText(item?.name || "Item", rightX + 52, sy + 20);
+      ctx.fillStyle = "rgba(204,214,232,0.82)";
+      ctx.font = "12px Arial";
+      ctx.fillText(itemStatText(item), rightX + 52, sy + 39);
+      ctx.fillStyle = "rgba(160,235,160,0.95)";
+      ctx.font = "bold 13px Arial";
+      ctx.fillText(`${sellPrice}G`, rightX + rightW - 78, sy + 28);
+      sy += 72;
+    }
+
+    if (sellCount === 0) {
+      ctx.fillStyle = "rgba(206,216,236,0.78)";
+      ctx.font = "14px Arial";
+      ctx.fillText("No backpack items to sell.", rightX + 16, rightY + 46);
+    }
+
+    ctx.fillStyle = "rgba(198,208,226,0.78)";
+    ctx.font = "12px Arial";
+    ctx.fillText("Press H or ESC to close shop.", x + 20, y + h - 18);
+
+    ctx.restore();
+  }
+
+  _drawOptions(ctx) {
+    const x = Math.max(100, ((this.w - 480) * 0.5) | 0);
+    const y = Math.max(60, ((this.h - 260) * 0.5) | 0);
+    const w = Math.min(480, this.w - 200);
+    const h = Math.min(260, this.h - 120);
+
+    ctx.save();
+    this._bigPanel(ctx, x, y, w, h, "Options");
+
+    ctx.fillStyle = "rgba(228,234,246,0.90)";
+    ctx.font = "14px Arial";
+    ctx.fillText("This panel is kept for compatibility with older menu flows.", x + 20, y + 76);
+    ctx.fillText("Use ESC to close menus.", x + 20, y + 104);
+    ctx.fillText("Resize, focus, and loop behavior are handled in main.js.", x + 20, y + 132);
+
+    ctx.restore();
+  }
+
+  _slotRow(ctx, x, y, w, slot, item) {
+    this._panel(ctx, x, y, w, 36, 10, "rgba(12,18,26,0.72)");
+    ctx.fillStyle = "rgba(183,196,222,0.76)";
+    ctx.font = "bold 11px Arial";
+    ctx.fillText(slot.toUpperCase(), x + 10, y + 14);
+
+    ctx.font = "13px Arial";
+    if (!item) {
+      ctx.fillStyle = "rgba(200,208,224,0.55)";
+      ctx.fillText("Empty", x + 10, y + 29);
+      return;
+    }
+
+    ctx.fillStyle = rarityTextColor(item?.rarity);
+    ctx.fillText(item?.name || "Gear", x + 10, y + 29);
+
+    ctx.fillStyle = "rgba(214,222,238,0.72)";
+    ctx.fillText(this._itemStatText(item), x + w - 122, y + 29);
+  }
+
+  _itemCard(ctx, x, y, w, h, item, hotkey = "") {
+    this._panel(ctx, x, y, w, h, 12, "rgba(12,18,26,0.72)");
+
+    if (hotkey) {
+      ctx.fillStyle = "rgba(255,255,255,0.10)";
+      roundRectFill(ctx, x + w - 24, y + 8, 16, 16, 6);
+      ctx.font = "bold 10px Arial";
+      ctx.textAlign = "center";
+      ctx.fillStyle = "rgba(245,248,255,0.94)";
+      ctx.fillText(hotkey, x + w - 16, y + 19);
+      ctx.textAlign = "left";
+    }
+
+    ctx.fillStyle = rarityTextColor(item?.rarity);
+    ctx.font = "bold 13px Arial";
+    ctx.fillText(item?.name || "Gear", x + 10, y + 18);
+
+    ctx.fillStyle = "rgba(182,194,220,0.72)";
+    ctx.font = "11px Arial";
+    ctx.fillText((item?.slot || "gear").toUpperCase(), x + 10, y + 34);
+
+    ctx.fillStyle = "rgba(222,230,244,0.82)";
+    ctx.font = "12px Arial";
+    ctx.fillText(this._itemStatText(item), x + 10, y + 51);
+
+    ctx.fillStyle = "rgba(196,206,226,0.72)";
+    ctx.font = "11px Arial";
+    ctx.fillText(`Lv ${item?.level || 1}`, x + 10, y + 66);
+  }
+
+  _skillRow(ctx, x, y, w, index, def, cd, selected) {
+    this._panel(ctx, x, y, w, 56, 12, selected ? "rgba(20,28,40,0.90)" : "rgba(12,18,26,0.72)");
+
+    if (selected) {
+      ctx.strokeStyle = "rgba(240,214,116,0.95)";
+      ctx.lineWidth = 2;
+      roundRect(ctx, x, y, w, 56, 12);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = def.color || "rgba(162,188,232,1)";
+    ctx.beginPath();
+    ctx.arc(x + 24, y + 28, 12, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(240,244,252,0.95)";
+    ctx.font = "bold 15px Arial";
+    ctx.fillText(`${String(def.key || "?").toUpperCase()} • ${def.name || "Skill"}`, x + 46, y + 22);
+
+    ctx.fillStyle = "rgba(204,214,232,0.82)";
+    ctx.font = "13px Arial";
+    ctx.fillText(`Mana ${def.mana || 0} • Base CD ${fmtNum(def.cd || 0)}s`, x + 46, y + 40);
+
+    ctx.fillStyle = cd > 0.001 ? "rgba(255,210,128,0.95)" : "rgba(160,235,160,0.95)";
+    ctx.font = "bold 13px Arial";
+    ctx.fillText(cd > 0.001 ? `Cooldown ${fmtNum(cd)}s` : "Ready", x + w - 130, y + 31);
+
+    ctx.fillStyle = "rgba(182,194,220,0.72)";
+    ctx.font = "11px Arial";
+    ctx.fillText(`Slot ${index + 1}`, x + w - 130, y + 15);
+  }
+
+  _hotkeyChip(ctx, x, y, text) {
+    ctx.fillStyle = "rgba(255,255,255,0.10)";
+    roundRectFill(ctx, x, y, 22, 18, 6);
+    ctx.fillStyle = "rgba(245,248,255,0.95)";
+    ctx.font = "bold 11px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(text, x + 11, y + 12);
+    ctx.textAlign = "left";
+  }
+
+  _itemStatText(item) {
+    if (!item || !item.stats) return "";
+    return itemStatText(item);
+  }
+
+  _panel(ctx, x, y, w, h, r = 12, fill = "rgba(10,14,20,0.75)") {
+    ctx.fillStyle = fill;
+    roundRectFill(ctx, x, y, w, h, r);
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.lineWidth = 1;
+    roundRect(ctx, x, y, w, h, r);
+    ctx.stroke();
+  }
+
+  _bigPanel(ctx, x, y, w, h, title) {
+    this._panel(ctx, x, y, w, h, 18, "rgba(8,12,18,0.88)");
+    ctx.fillStyle = "rgba(242,246,255,0.96)";
+    ctx.font = "bold 20px Arial";
+    ctx.fillText(title, x + 18, y + 26);
+
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.beginPath();
+    ctx.moveTo(x + 14, y + 36);
+    ctx.lineTo(x + w - 14, y + 36);
+    ctx.stroke();
+  }
+
+  _subPanel(ctx, x, y, w, h, title) {
+    this._panel(ctx, x, y, w, h, 14, "rgba(16,22,32,0.82)");
+    ctx.fillStyle = "rgba(224,232,246,0.88)";
+    ctx.font = "bold 13px Arial";
+    ctx.fillText(title, x + 10, y + 16);
+  }
+
+  _bar(ctx, x, y, w, h, p, leftText, rightText, fillColor) {
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    roundRectFill(ctx, x, y, w, h, 8);
+
+    ctx.fillStyle = fillColor;
+    roundRectFill(ctx, x, y, Math.max(0, w * p), h, 8);
+
+    ctx.font = "bold 11px Arial";
+    ctx.fillStyle = "rgba(245,248,255,0.96)";
+    ctx.fillText(leftText, x + 6, y + h - 3);
+
+    ctx.textAlign = "right";
+    ctx.fillText(rightText, x + w - 6, y + h - 3);
+    ctx.textAlign = "left";
+  }
+
+  _chip(ctx, x, y, w, h, text, color) {
+    ctx.fillStyle = color;
+    roundRectFill(ctx, x, y, w, h, 10);
+    ctx.font = "bold 11px Arial";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.fillText(text, x + w * 0.5, y + 13);
+    ctx.textAlign = "left";
+  }
+}
+
+function itemStatText(item) {
+  if (!item || !item.stats) return "";
+  const s = item.stats;
+  const parts = [];
+  if (s.dmg) parts.push(`DMG ${Math.round(s.dmg)}`);
+  if (s.armor) parts.push(`ARM ${Math.round(s.armor)}`);
+  if (s.crit) parts.push(`CRIT ${Math.round(s.crit * 100)}%`);
+  return parts.join(" • ") || "No stats";
+}
+
+function rarityTextColor(rarity) {
+  if (rarity === "epic") return "rgba(224,182,255,0.96)";
+  if (rarity === "rare") return "rgba(162,214,255,0.96)";
+  if (rarity === "uncommon") return "rgba(182,240,182,0.96)";
+  return "rgba(232,236,244,0.92)";
+}
+
+function fmtNum(v) {
+  const n = Number(v) || 0;
+  return n >= 10 ? String(Math.round(n * 10) / 10) : n.toFixed(1).replace(/\.0$/, "");
+}
+
+function countSetLike(v) {
+  if (v instanceof Set) return v.size;
+  if (Array.isArray(v)) return v.length;
+  return 0;
+}
+
+function distSq(ax, ay, bx, by) {
+  const dx = ax - bx;
+  const dy = ay - by;
+  return dx * dx + dy * dy;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, w * 0.5, h * 0.5);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
+  ctx.closePath();
+}
+
+function roundRectFill(ctx, x, y, w, h, r) {
+  roundRect(ctx, x, y, w, h, r);
+  ctx.fill();
+}
+===== ./src/util.js =====
+// src/util.js
+// v34 UTIL COMPAT + STABILITY PASS (FULL FILE)
+// Goals:
+// - keep current game/world/entities compatibility
+// - provide stable math + RNG + noise helpers
+// - support mixed old/new call styles safely
+// - avoid breaking runtime assumptions
+
+/* ===========================
+   Basic math helpers
+=========================== */
+
+export function clamp(v, lo = 0, hi = 1) {
+  if (v < lo) return lo;
+  if (v > hi) return hi;
+  return v;
+}
+
+export function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+export function invLerp(a, b, v) {
+  if (a === b) return 0;
+  return (v - a) / (b - a);
+}
+
+export function remap(v, inA, inB, outA, outB) {
+  return lerp(outA, outB, invLerp(inA, inB, v));
+}
+
+export function saturate(v) {
+  return clamp(v, 0, 1);
+}
+
+export function smoothstep(a, b, v) {
+  const t = saturate(invLerp(a, b, v));
+  return t * t * (3 - 2 * t);
+}
+
+export function dist(ax, ay, bx, by) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  return Math.hypot(dx, dy);
+}
+
+export function dist2(ax, ay, bx, by) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  return dx * dx + dy * dy;
+}
+
+export function len(x, y) {
+  return Math.hypot(x, y);
+}
+
+export function norm(x, y) {
+  const d = Math.hypot(x, y);
+  if (d <= 1e-8) return { x: 0, y: 0 };
+  return { x: x / d, y: y / d };
+}
+
+export function normalize(x, y) {
+  return norm(x, y);
+}
+
+export function angleTo(ax, ay, bx, by) {
+  return Math.atan2(by - ay, bx - ax);
+}
+
+export function sign0(v) {
+  if (v > 0) return 1;
+  if (v < 0) return -1;
+  return 0;
+}
+
+export function roundTo(v, step = 1) {
+  if (!step) return v;
+  return Math.round(v / step) * step;
+}
+
+export function approach(value, target, amount) {
+  if (value < target) return Math.min(target, value + amount);
+  if (value > target) return Math.max(target, value - amount);
+  return target;
+}
+
+export function damp(current, target, lambda, dt) {
+  return lerp(current, target, 1 - Math.exp(-lambda * dt));
+}
+
+export function cooldownTick(v, dt) {
+  return v > 0 ? Math.max(0, v - dt) : 0;
+}
+
+/* ===========================
+   Hash / seeded randomness
+=========================== */
+
+export function hash2(x = 0, y = 0, seed = 0) {
+  let h = Math.imul((x | 0) ^ 0x27d4eb2d, 374761393);
+  h = (h + Math.imul((y | 0) ^ 0x165667b1, 668265263)) | 0;
+  h = (h + Math.imul(seed | 0, 69069)) | 0;
+  h ^= h >>> 13;
+  h = Math.imul(h, 1274126177);
+  h ^= h >>> 16;
+  return h | 0;
+}
+
+export function hash3(x = 0, y = 0, z = 0, seed = 0) {
+  let h =
+    Math.imul((x | 0) ^ 0x27d4eb2d, 2246822519) ^
+    Math.imul((y | 0) ^ 0x165667b1, 3266489917) ^
+    Math.imul((z | 0) ^ 0x9e3779b9, 668265263) ^
+    Math.imul(seed | 0, 374761393);
+  h ^= h >>> 15;
+  h = Math.imul(h, 2246822519);
+  h ^= h >>> 13;
+  return h | 0;
+}
+
+export function rand01FromHash(h) {
+  return (h >>> 0) / 4294967295;
+}
+
+export class RNG {
+  constructor(seed = 12345) {
+    this._state = (seed | 0) || 12345;
+    if (this._state === 0) this._state = 12345;
+  }
+
+  seed(v) {
+    this._state = (v | 0) || 12345;
+    if (this._state === 0) this._state = 12345;
+    return this;
+  }
+
+  next() {
+    let x = this._state | 0;
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    this._state = x | 0;
+    return this._state;
+  }
+
+  uint() {
+    return this.next() >>> 0;
+  }
+
+  float() {
+    return this.uint() / 4294967295;
+  }
+
+  range(min = 0, max = 1) {
+    return min + (max - min) * this.float();
+  }
+
+  int(min = 0, max = 1) {
+    if (max < min) {
+      const t = min;
+      min = max;
+      max = t;
+    }
+    return Math.floor(this.range(min, max + 1));
+  }
+
+  chance(p = 0.5) {
+    return this.float() < p;
+  }
+
+  pick(arr) {
+    if (!arr || !arr.length) return undefined;
+    return arr[this.int(0, arr.length - 1)];
+  }
+
+  sign() {
+    return this.chance(0.5) ? -1 : 1;
+  }
+}
+
+export function randRange(rngOrMin, minOrMax, maybeMax) {
+  if (rngOrMin instanceof RNG) {
+    return rngOrMin.range(minOrMax, maybeMax);
+  }
+
+  if (maybeMax === undefined) {
+    const min = Number(rngOrMin) || 0;
+    const max = Number(minOrMax) || 0;
+    return min + (max - min) * Math.random();
+  }
+
+  const min = Number(minOrMax) || 0;
+  const max = Number(maybeMax) || 0;
+  return min + (max - min) * Math.random();
+}
+
+export function randInt(rngOrMin, minOrMax, maybeMax) {
+  if (rngOrMin instanceof RNG) {
+    return rngOrMin.int(minOrMax, maybeMax);
+  }
+
+  if (maybeMax === undefined) {
+    const min = Number(rngOrMin) || 0;
+    const max = Number(minOrMax) || 0;
+    return Math.floor(min + Math.random() * (max - min + 1));
+  }
+
+  const min = Number(minOrMax) || 0;
+  const max = Number(maybeMax) || 0;
+  return Math.floor(min + Math.random() * (max - min + 1));
+}
+
+/* ===========================
+   Value noise + fbm
+=========================== */
+
+function fade(t) {
+  return t * t * (3 - 2 * t);
+}
+
+function valueNoise2(x, y, seed = 0) {
+  const xi = Math.floor(x);
+  const yi = Math.floor(y);
+
+  const tx = x - xi;
+  const ty = y - yi;
+
+  const h00 = rand01FromHash(hash2(xi, yi, seed));
+  const h10 = rand01FromHash(hash2(xi + 1, yi, seed));
+  const h01 = rand01FromHash(hash2(xi, yi + 1, seed));
+  const h11 = rand01FromHash(hash2(xi + 1, yi + 1, seed));
+
+  const u = fade(tx);
+  const v = fade(ty);
+
+  const a = lerp(h00, h10, u);
+  const b = lerp(h01, h11, u);
+  return lerp(a, b, v);
+}
+
+function _fbmFixed(x, y, octaves = 4, lacunarity = 2, gain = 0.5, seed = 0) {
+  let amp = 1;
+  let freq = 1;
+  let sum = 0;
+  let normSum = 0;
+
+  const oct = Math.max(1, octaves | 0);
+
+  for (let i = 0; i < oct; i++) {
+    sum += valueNoise2(x * freq, y * freq, (seed | 0) + i * 1013) * amp;
+    normSum += amp;
+    freq *= lacunarity;
+    amp *= gain;
+  }
+
+  if (normSum <= 1e-8) return 0;
+  return sum / normSum;
+}
+
+/*
+  Supports both:
+  fbm(x, y, octaves, lacunarity, gain, seed)
+  fbm(x, y, seed, octaves)
+*/
+export function fbm(x, y, a = 4, b = 2, c = 0.5, d = 0) {
+  const looksLikeSeedThenOctaves =
+    Number.isInteger(a) &&
+    (Math.abs(a) > 32 || a < 0) &&
+    Number.isInteger(b) &&
+    b >= 1 &&
+    b <= 8 &&
+    c === 0.5 &&
+    d === 0;
+
+  if (looksLikeSeedThenOctaves) {
+    return _fbmFixed(x, y, b, 2, 0.5, a);
+  }
+
+  const octaves = Math.max(1, a | 0);
+  const lacunarity = Number.isFinite(b) ? b : 2;
+  const gain = Number.isFinite(c) ? c : 0.5;
+  const seed = d | 0;
+
+  return _fbmFixed(x, y, octaves, lacunarity, gain, seed);
+}
+
+/* ===========================
+   Geometry helpers
+=========================== */
+
+export function aabbOverlap(a, b) {
+  return !(
+    a.x + a.w < b.x ||
+    a.x > b.x + b.w ||
+    a.y + a.h < b.y ||
+    a.y > b.y + b.h
+  );
+}
+
+export function pointInRect(px, py, rx, ry, rw, rh) {
+  return px >= rx && px <= rx + rw && py >= ry && py <= ry + rh;
+}
+
+export function circleHit(ax, ay, ar, bx, by, br) {
+  const rr = ar + br;
+  return dist2(ax, ay, bx, by) <= rr * rr;
+}
+===== ./src/world.js =====
+// src/world.js
+// v58 VISIBLE WORLD PASS (FULL FILE)
+// Focus:
+// - much safer spawn
+// - fewer ugly trapped water pockets
+// - more usable shorelines
+// - better dock placement
+// - stronger rescue when player loads/stuck in bad terrain
+// - keep compatibility with current game.js
+
+import { fbm, hash2, RNG } from "./util.js";
+
+export default class World {
+  constructor(seed = 1, opts = {}) {
+    this.seed = seed | 0;
+
+    this.viewW = Math.max(320, opts.viewW | 0 || 960);
+    this.viewH = Math.max(240, opts.viewH | 0 || 540);
+
+    this.tileSize = opts.tileSize || 24;
+    this.chunkTiles = opts.chunkTiles || 32;
+    this.chunkSize = this.tileSize * this.chunkTiles;
+    this.boundsRadius = 5200;
+
+    this.mapMode = "small";
+    this.revealRadius = 260;
+    this.revealSoftRadius = 360;
+
+    this._chunks = new Map();
+    this._queued = new Set();
+    this._buildQueue = [];
+
+    this._minimap = null;
+    this._minimapDirty = true;
+    this._miniTimer = 0;
+
+    this._revealedSmall = new Set();
+    this._revealedLarge = new Set();
+
+    this.camps = [];
+    this.waystones = [];
+    this.docks = [];
+    this.dungeons = [];
+
+    this.spawn = { x: 0, y: 0 };
+
+    this._heroRescueCd = 0;
+    this._lastRevealX = null;
+    this._lastRevealY = null;
+
+    this._poiRng = new RNG(hash2(this.seed, 777));
+
+    this._initPOIs();
+    this.revealAround(this.spawn.x, this.spawn.y, this.revealSoftRadius);
+    this._queueAround(this.spawn.x, this.spawn.y, 2);
+  }
+
+  setViewSize(w, h) {
+    this.viewW = Math.max(320, w | 0 || this.viewW);
+    this.viewH = Math.max(240, h | 0 || this.viewH);
+  }
+
+  toggleMapScale() {
+    this.mapMode = this.mapMode === "small" ? "large" : "small";
+    this._minimapDirty = true;
+  }
+
+  update(dt, hero) {
+    if (!hero) return;
+
+    this._queueAround(hero.x, hero.y, 2);
+
+    let builds = 0;
+    while (this._buildQueue.length && builds < 3) {
+      const key = this._buildQueue.shift();
+      this._queued.delete(key);
+
+      if (!this._chunks.has(key)) {
+        const [cx, cy] = key.split(",").map(Number);
+        this._buildChunk(cx, cy);
+      }
+      builds++;
+    }
+
+    if (
+      this._lastRevealX == null ||
+      this._lastRevealY == null ||
+      Math.abs(hero.x - this._lastRevealX) > 80 ||
+      Math.abs(hero.y - this._lastRevealY) > 80
+    ) {
+      this.revealAround(hero.x, hero.y, this.revealSoftRadius);
+      this._lastRevealX = hero.x;
+      this._lastRevealY = hero.y;
+    }
+
+    this._heroRescueCd = Math.max(0, this._heroRescueCd - dt);
+
+    if (!hero.state?.sailing && this._heroRescueCd <= 0) {
+      if (!this.canWalk(hero.x, hero.y) || this._isTrappedInWaterPocket(hero.x, hero.y)) {
+        const rescue =
+          this._findSafeLandPatchNear(hero.x, hero.y, 700) ||
+          this._findNearbyLand(hero.x, hero.y, 700, false, true) ||
+          this._findSafeLandPatchNear(this.spawn.x, this.spawn.y, 700) ||
+          this.spawn ||
+          { x: 0, y: 0 };
+
+        hero.x = rescue.x;
+        hero.y = rescue.y;
+        hero.vx = 0;
+        hero.vy = 0;
+        if (hero.state) hero.state.sailing = false;
+
+        this._heroRescueCd = 2.4;
+        this.revealAround(hero.x, hero.y, this.revealSoftRadius);
+      }
+    }
+
+    this._miniTimer += dt;
+    if (this._miniTimer >= 0.24) {
+      this._miniTimer = 0;
+      this._minimapDirty = true;
+    }
+  }
+
+  draw(ctx, camera) {
+    if (!ctx || !camera) return;
+
+    const camX = camera.x ?? 0;
+    const camY = camera.y ?? 0;
+
+    const halfW = this.viewW * 0.5;
+    const halfH = this.viewH * 0.5;
+    const pad = 128;
+
+    const x0 = camX - halfW - pad;
+    const x1 = camX + halfW + pad;
+    const y0 = camY - halfH - pad;
+    const y1 = camY + halfH + pad;
+
+    const tx0 = Math.floor(x0 / this.tileSize);
+    const tx1 = Math.ceil(x1 / this.tileSize);
+    const ty0 = Math.floor(y0 / this.tileSize);
+    const ty1 = Math.ceil(y1 / this.tileSize);
+
+    for (let ty = ty0; ty <= ty1; ty++) {
+      const wy = ty * this.tileSize;
+      for (let tx = tx0; tx <= tx1; tx++) {
+        const wx = tx * this.tileSize;
+        const tile = this._sampleTile(wx, wy);
+        ctx.fillStyle = this._tileColor(tile, wx, wy);
+        ctx.fillRect(wx, wy, this.tileSize + 1, this.tileSize + 1);
+        this._drawTileDecor(ctx, tile, wx, wy);
+      }
+    }
+
+    this._drawPOIs(ctx);
+  }
+
+  canWalk(x, y) {
+    return this._sampleTile(x, y) !== "water";
+  }
+
+  isSolid(x, y) {
+    return !this.canWalk(x, y);
+  }
+
+  isWater(x, y) {
+    return this._sampleTile(x, y) === "water";
+  }
+
+  getGroundType(x, y) {
+    return this._sampleTile(x, y);
+  }
+
+  getMoveModifier(x, y) {
+    const t = this._sampleTile(x, y);
+    if (t === "road") return 1.10;
+    if (t === "sand") return 0.90;
+    if (t === "forest") return 0.84;
+    if (t === "rock") return 0.88;
+    return 1.0;
+  }
+
+  getZoneName(x, y) {
+    const t = this._sampleTile(x, y);
+    if (t === "water") return "Open Water";
+    if (t === "sand") return "Shoreline";
+    if (t === "forest") return "Deep Forest";
+    if (t === "rock") return "Stone Fields";
+    if (t === "road") return "Old Road";
+    return "Greenwild";
+  }
+
+  getMinimapCanvas() {
+    if (!this._minimap || this._minimapDirty) {
+      this._rebuildMinimap();
+    }
+    return this._minimap;
+  }
+
+  isRevealed(wx, wy, mode = this.mapMode) {
+    const set = mode === "large" ? this._revealedLarge : this._revealedSmall;
+    const size = mode === "large" ? 96 : 160;
+    const key = `${Math.floor(wx / size)},${Math.floor(wy / size)}`;
+    return set.has(key);
+  }
+
+  revealAround(x, y, radius) {
+    const addTo = (bucketSize, set) => {
+      const r = Math.max(bucketSize, radius | 0);
+      const x0 = Math.floor((x - r) / bucketSize);
+      const x1 = Math.floor((x + r) / bucketSize);
+      const y0 = Math.floor((y - r) / bucketSize);
+      const y1 = Math.floor((y + r) / bucketSize);
+
+      for (let by = y0; by <= y1; by++) {
+        for (let bx = x0; bx <= x1; bx++) {
+          const cx = bx * bucketSize + bucketSize * 0.5;
+          const cy = by * bucketSize + bucketSize * 0.5;
+          const dx = cx - x;
+          const dy = cy - y;
+          if (dx * dx + dy * dy <= r * r) {
+            set.add(`${bx},${by}`);
+          }
+        }
+      }
+    };
+
+    addTo(160, this._revealedSmall);
+    addTo(96, this._revealedLarge);
+    this._minimapDirty = true;
+  }
+
+  _tileColor(tile, x, y) {
+    const n = (hash2((x / this.tileSize) | 0, (y / this.tileSize) | 0, this.seed) >>> 0) & 7;
+
+    if (tile === "water") {
+      return n < 2 ? "#276caa" : n < 5 ? "#2f80c2" : "#3893d8";
+    }
+    if (tile === "sand") {
+      return n < 3 ? "#cab97f" : "#dbc98f";
+    }
+    if (tile === "road") {
+      return n < 3 ? "#798695" : "#8b98a6";
+    }
+    if (tile === "rock") {
+      return n < 3 ? "#70757d" : "#7d848d";
+    }
+    if (tile === "forest") {
+      return n < 3 ? "#2f5d33" : n < 6 ? "#386c3c" : "#2b542f";
+    }
+    return n < 3 ? "#63a34f" : n < 6 ? "#6fb55a" : "#7bc366";
+  }
+
+  _drawTileDecor(ctx, tile, wx, wy) {
+    const h = hash2((wx / this.tileSize) | 0, (wy / this.tileSize) | 0, this.seed) >>> 0;
+
+    if (tile === "grass") {
+      if (h % 17 === 0) {
+        ctx.fillStyle = "rgba(40,98,34,0.56)";
+        ctx.fillRect(wx + 7, wy + 7, 2, 7);
+        ctx.fillRect(wx + 10, wy + 5, 2, 9);
+      }
+      if (h % 29 === 0) {
+        ctx.fillStyle = "rgba(90,140,68,0.28)";
+        ctx.fillRect(wx + 14, wy + 4, 4, 3);
+      }
+    } else if (tile === "forest") {
+      if (h % 6 === 0) {
+        ctx.fillStyle = "rgba(26,58,30,0.88)";
+        ctx.beginPath();
+        ctx.arc(wx + 12, wy + 12, 7, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "rgba(34,74,38,0.84)";
+        ctx.beginPath();
+        ctx.arc(wx + 8, wy + 13, 5.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(wx + 15, wy + 9, 5.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (tile === "rock") {
+      if (h % 9 === 0) {
+        ctx.fillStyle = "rgba(90,96,108,0.55)";
+        ctx.fillRect(wx + 6, wy + 7, 8, 5);
+      }
+    } else if (tile === "water") {
+      if (h % 15 === 0) {
+        ctx.fillStyle = "rgba(255,255,255,0.08)";
+        ctx.fillRect(wx + 6, wy + 11, 8, 1);
+      }
+      if (h % 31 === 0) {
+        ctx.fillStyle = "rgba(255,255,255,0.05)";
+        ctx.fillRect(wx + 11, wy + 7, 4, 1);
+      }
+    } else if (tile === "sand") {
+      if (h % 23 === 0) {
+        ctx.fillStyle = "rgba(186,166,104,0.24)";
+        ctx.fillRect(wx + 9, wy + 9, 5, 2);
+      }
+    }
+  }
+
+  _drawPOIs(ctx) {
+    for (const d of this.docks) {
+      ctx.fillStyle = "rgba(110,82,52,0.95)";
+      ctx.fillRect(d.x - 12, d.y - 4, 24, 8);
+      ctx.fillRect(d.x - 6, d.y - 10, 12, 6);
+      ctx.strokeStyle = "rgba(50,34,20,0.85)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(d.x - 12, d.y - 4, 24, 8);
+    }
+
+    for (const w of this.waystones) {
+      ctx.fillStyle = "rgba(214,198,116,0.95)";
+      ctx.fillRect(w.x - 6, w.y - 18, 12, 20);
+      ctx.fillStyle = "rgba(255,235,140,0.85)";
+      ctx.fillRect(w.x - 3, w.y - 14, 6, 8);
+      ctx.fillStyle = "rgba(0,0,0,0.18)";
+      ctx.beginPath();
+      ctx.ellipse(w.x, w.y + 8, 10, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    for (const c of this.camps) {
+      ctx.fillStyle = "rgba(126,74,52,0.96)";
+      ctx.beginPath();
+      ctx.moveTo(c.x, c.y - 10);
+      ctx.lineTo(c.x + 12, c.y + 8);
+      ctx.lineTo(c.x - 12, c.y + 8);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(255,120,78,0.9)";
+      ctx.beginPath();
+      ctx.arc(c.x, c.y + 12, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    for (const d of this.dungeons) {
+      ctx.fillStyle = "rgba(70,56,84,0.96)";
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, 14, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(154,126,214,0.95)";
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, 7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  _rebuildMinimap() {
+    const size = 220;
+    const c = document.createElement("canvas");
+    c.width = size;
+    c.height = size;
+    const ctx = c.getContext("2d");
+
+    ctx.clearRect(0, 0, size, size);
+    ctx.fillStyle = "rgba(10,14,20,1)";
+    ctx.fillRect(0, 0, size, size);
+
+    const half = this.mapMode === "large"
+      ? Math.max(4000, this.boundsRadius)
+      : Math.max(2000, this.boundsRadius * 0.5);
+    const span = half * 2;
+
+    for (let py = 0; py < size; py++) {
+      for (let px = 0; px < size; px++) {
+        const wx = -half + (px / size) * span;
+        const wy = -half + (py / size) * span;
+
+        if (!this.isRevealed(wx, wy, this.mapMode)) {
+          ctx.fillStyle = "#0b1016";
+          ctx.fillRect(px, py, 1, 1);
+          continue;
+        }
+
+        const tile = this._sampleTile(wx, wy);
+        let color = "#5fa44f";
+        if (tile === "water") color = "#2d79bd";
+        else if (tile === "sand") color = "#d6c68c";
+        else if (tile === "road") color = "#8592a0";
+        else if (tile === "rock") color = "#767c86";
+        else if (tile === "forest") color = "#37653a";
+
+        ctx.fillStyle = color;
+        ctx.fillRect(px, py, 1, 1);
+      }
+    }
+
+    const plot = (wx, wy, color, r = 2) => {
+      if (!this.isRevealed(wx, wy, this.mapMode)) return;
+      const px = ((wx + half) / span) * size;
+      const py = ((wy + half) / span) * size;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(px, py, r, 0, Math.PI * 2);
+      ctx.fill();
+    };
+
+    for (const w of this.waystones) plot(w.x, w.y, "#f5dc6a", 2.8);
+    for (const d of this.docks) plot(d.x, d.y, "#79dbff", 2.5);
+    for (const c2 of this.camps) plot(c2.x, c2.y, "#ff7b6a", 2.2);
+    for (const dg of this.dungeons) plot(dg.x, dg.y, "#b68cff", 3);
+
+    this._minimap = c;
+    this._minimapDirty = false;
+  }
+
+  _sampleTile(x, y) {
+    if (x < -this.boundsRadius || x > this.boundsRadius) return "water";
+    if (y < -this.boundsRadius || y > this.boundsRadius) return "water";
+
+    const landA = fbm((x + this.seed * 0.11) * 0.00042, (y - this.seed * 0.07) * 0.00042, 4);
+    const landB = fbm((x - this.seed * 0.05) * 0.00078, (y + this.seed * 0.09) * 0.00078, 4);
+    const med = fbm((x + this.seed * 0.03) * 0.0019, (y + this.seed * 0.04) * 0.0019, 3);
+    const rockN = fbm((x - this.seed * 0.02) * 0.0053, (y + this.seed * 0.05) * 0.0053, 2);
+    const forestN = fbm((x + this.seed * 0.27) * 0.00165, (y - this.seed * 0.18) * 0.00165, 3);
+
+    const warpX = fbm((x + this.seed * 0.13) * 0.00072, (y - this.seed * 0.21) * 0.00072, 3) * 240;
+    const warpY = fbm((x - this.seed * 0.19) * 0.00072, (y + this.seed * 0.16) * 0.00072, 3) * 240;
+
+    const wx = x + warpX;
+    const wy = y + warpY;
+
+    const bandA = Math.abs(Math.sin(wx * 0.00094 + this.seed * 0.00017));
+    const bandB = Math.abs(Math.sin(wy * 0.00105 - this.seed * 0.00013));
+    const bandC = Math.abs(Math.sin((wx + wy) * 0.00058 + this.seed * 0.00009));
+
+    const lakeN = fbm((x + this.seed * 0.23) * 0.00095, (y - this.seed * 0.18) * 0.00095, 3);
+    const shoreNoise = fbm((x - this.seed * 0.12) * 0.0034, (y + this.seed * 0.08) * 0.0034, 2);
+
+    let land = landA * 0.60 + landB * 0.40;
+    land += med * 0.07;
+
+    if (bandA < 0.11) land -= 0.31;
+    else if (bandA < 0.15) land -= 0.13;
+
+    if (bandB < 0.10) land -= 0.22;
+    else if (bandB < 0.135) land -= 0.09;
+
+    if (bandC < 0.13) land -= 0.34;
+    else if (bandC < 0.17) land -= 0.14;
+
+    if (lakeN < -0.45) land -= 0.24;
+    else if (lakeN < -0.35) land -= 0.12;
+
+    const roadWarpX = fbm((x + this.seed * 0.41) * 0.00094, (y - this.seed * 0.27) * 0.00094, 2) * 88;
+    const roadWarpY = fbm((x - this.seed * 0.37) * 0.00094, (y + this.seed * 0.33) * 0.00094, 2) * 88;
+    const rx = x + roadWarpX;
+    const ry = y + roadWarpY;
+
+    const roadA = Math.abs(Math.sin(rx * 0.0017 + this.seed * 0.00021));
+    const roadB = Math.abs(Math.sin((rx - ry) * 0.00108 - this.seed * 0.00017));
+    const roadField = fbm((x + this.seed * 0.09) * 0.0035, (y - this.seed * 0.06) * 0.0035, 2);
+
+    if (land < 0.09) return "water";
+    if (land < 0.18 + shoreNoise * 0.02) return "sand";
+
+    if ((roadA < 0.008 || roadB < 0.007) && roadField > 0.31 && land > 0.47) {
+      return "road";
+    }
+
+    if (rockN > 0.65 && land > 0.34) return "rock";
+    if (forestN > 0.17 && land > 0.22) return "forest";
+    return "grass";
+  }
+
+  _chunkKey(cx, cy) {
+    return `${cx},${cy}`;
+  }
+
+  _queueAround(wx, wy, radiusChunks = 2) {
+    const ccx = Math.floor(wx / this.chunkSize);
+    const ccy = Math.floor(wy / this.chunkSize);
+
+    for (let cy = ccy - radiusChunks; cy <= ccy + radiusChunks; cy++) {
+      for (let cx = ccx - radiusChunks; cx <= ccx + radiusChunks; cx++) {
+        const key = this._chunkKey(cx, cy);
+        if (this._chunks.has(key) || this._queued.has(key)) continue;
+        this._queued.add(key);
+        this._buildQueue.push(key);
+      }
+    }
+  }
+
+  _buildChunk(cx, cy) {
+    const key = this._chunkKey(cx, cy);
+    this._chunks.set(key, { cx, cy });
+  }
+
+  _initPOIs() {
+    this.spawn = this._findGoodSpawn();
+
+    let wid = 1;
+    const waystoneRings = [520, 1250, 2050, 2950, 3850];
+    for (let ringIndex = 0; ringIndex < waystoneRings.length; ringIndex++) {
+      const ring = waystoneRings[ringIndex];
+      const count = 4 + ringIndex;
+
+      for (let i = 0; i < count; i++) {
+        const a = (i / count) * Math.PI * 2 + ringIndex * 0.17;
+        const sx = this.spawn.x + Math.cos(a) * ring;
+        const sy = this.spawn.y + Math.sin(a) * ring;
+
+        const p =
+          this._findWaystoneLandNear(sx, sy, 320) ||
+          this._findSafeLandPatchNear(sx, sy, 320) ||
+          this._findNearbyLand(sx, sy, 320, false, true);
+
+        if (!p) continue;
+        this.waystones.push({ id: wid++, x: p.x, y: p.y });
+      }
+    }
+
+    let did = 1;
+    const dockAngles = [0.35, 1.95, 3.7, 5.15];
+    for (const a of dockAngles) {
+      const sx = this.spawn.x + Math.cos(a) * 820;
+      const sy = this.spawn.y + Math.sin(a) * 820;
+      const shore = this._findNearbyShore(sx, sy, 440);
+      if (!shore) continue;
+      this.docks.push({ id: did++, x: shore.x, y: shore.y });
+    }
+
+    let cid = 1;
+    const campAngles = [0.9, 2.4, 4.4];
+    for (const a of campAngles) {
+      const sx = this.spawn.x + Math.cos(a) * 980;
+      const sy = this.spawn.y + Math.sin(a) * 980;
+      const cp =
+        this._findSafeLandPatchNear(sx, sy, 340) ||
+        this._findNearbyLand(sx, sy, 340, false, true);
+      if (!cp) continue;
+      this.camps.push({ id: cid++, x: cp.x, y: cp.y });
+    }
+
+    const dg =
+      this._findSafeLandPatchNear(this.spawn.x + 420, this.spawn.y + 220, 500) ||
+      this._findNearbyLand(this.spawn.x + 420, this.spawn.y + 220, 500, false, true) || {
+        x: this.spawn.x + 360,
+        y: this.spawn.y + 220,
+      };
+
+    this.dungeons.push({ id: 1, x: dg.x, y: dg.y, name: "Deep Ruin" });
+  }
+
+  _findGoodSpawn() {
+    const radii = [0, 48, 96, 144, 192, 240, 320, 420, 560, 720, 900, 1200];
+
+    for (const r of radii) {
+      const samples = r <= 240 ? 40 : 72;
+      for (let i = 0; i < samples; i++) {
+        const a = (i / samples) * Math.PI * 2 + r * 0.0007;
+        const x = Math.cos(a) * r;
+        const y = Math.sin(a) * r;
+
+        if (this._isSpawnCandidate(x, y)) {
+          return { x, y };
+        }
+      }
+    }
+
+    const fallback = this._findSafeLandPatchNear(0, 0, 1800);
+    if (fallback) return fallback;
+
+    return { x: 0, y: 0 };
+  }
+
+  _isSpawnCandidate(x, y) {
+    const t = this._sampleTile(x, y);
+    if (!(t === "grass" || t === "road")) return false;
+
+    if (this._isNearWater(x, y, 170)) return false;
+    if (!this._hasWalkablePatch(x, y, 72)) return false;
+    if (!this._hasWalkablePatch(x, y, 136)) return false;
+    if (this._isTrappedByNarrowLand(x, y)) return false;
+
+    return true;
+  }
+
+  _hasWalkablePatch(x, y, radius = 64) {
+    for (let r = 0; r <= radius; r += 16) {
+      const count = r === 0 ? 1 : 16;
+      for (let i = 0; i < count; i++) {
+        const a = count === 1 ? 0 : (i / count) * Math.PI * 2;
+        const px = x + Math.cos(a) * r;
+        const py = y + Math.sin(a) * r;
+        if (!this.canWalk(px, py)) return false;
+      }
+    }
+    return true;
+  }
+
+  _isNearWater(x, y, dist = 72) {
+    const step = this.tileSize;
+    for (let r = step; r <= dist; r += step) {
+      for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2;
+        const px = x + Math.cos(a) * r;
+        const py = y + Math.sin(a) * r;
+        if (this._sampleTile(px, py) === "water") return true;
+      }
+    }
+    return false;
+  }
+
+  _isTrappedInWaterPocket(x, y) {
+    if (this.canWalk(x, y)) return false;
+
+    let waterCount = 0;
+    let samples = 0;
+    for (let r = 16; r <= 120; r += 16) {
+      for (let i = 0; i < 20; i++) {
+        const a = (i / 20) * Math.PI * 2;
+        const px = x + Math.cos(a) * r;
+        const py = y + Math.sin(a) * r;
+        if (this._sampleTile(px, py) === "water") waterCount++;
+        samples++;
+      }
+    }
+
+    return samples > 0 && waterCount / samples > 0.55;
+  }
+
+  _isTrappedByNarrowLand(x, y) {
+    let blockedArcs = 0;
+    const testR = 88;
+
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const px = x + Math.cos(a) * testR;
+      const py = y + Math.sin(a) * testR;
+      if (!this.canWalk(px, py)) blockedArcs++;
+    }
+
+    return blockedArcs >= 4;
+  }
+
+  _findSafeLandPatchNear(x, y, maxR = 240) {
+    for (let r = 0; r <= maxR; r += 16) {
+      const samples = r === 0 ? 1 : 40;
+      for (let i = 0; i < samples; i++) {
+        const a = samples === 1 ? 0 : (i / samples) * Math.PI * 2;
+        const px = x + Math.cos(a) * r;
+        const py = y + Math.sin(a) * r;
+        if (this._isSpawnCandidate(px, py)) {
+          return { x: px, y: py };
+        }
+      }
+    }
+    return null;
+  }
+
+  _findNearbyLand(x, y, maxR = 240, allowNearWater = true, avoidWaterStrong = false) {
+    let best = null;
+    let bestScore = Infinity;
+
+    for (let r = 0; r <= maxR; r += 16) {
+      for (let i = 0; i < 32; i++) {
+        const a = (i / 32) * Math.PI * 2;
+        const px = x + Math.cos(a) * r;
+        const py = y + Math.sin(a) * r;
+        const t = this._sampleTile(px, py);
+
+        if (!(t === "grass" || t === "rock" || t === "sand" || t === "road" || t === "forest")) continue;
+        if (!allowNearWater && this._isNearWater(px, py, 80)) continue;
+        if (avoidWaterStrong && this._isNearWater(px, py, 120)) continue;
+
+        const score = r + (t === "grass" || t === "road" ? 0 : 12);
+        if (score < bestScore) {
+          bestScore = score;
+          best = { x: px, y: py };
+        }
+      }
+    }
+
+    return best;
+  }
+
+  _findWaystoneLandNear(x, y, maxR = 260) {
+    let best = null;
+    let bestScore = Infinity;
+
+    for (let r = 0; r <= maxR; r += 16) {
+      const samples = r === 0 ? 1 : 48;
+      for (let i = 0; i < samples; i++) {
+        const a = samples === 1 ? 0 : (i / samples) * Math.PI * 2;
+        const px = x + Math.cos(a) * r;
+        const py = y + Math.sin(a) * r;
+        const t = this._sampleTile(px, py);
+
+        if (!(t === "grass" || t === "road")) continue;
+        if (this._isNearWater(px, py, 110)) continue;
+        if (!this._hasWalkablePatch(px, py, 56)) continue;
+
+        const score = r;
+        if (score < bestScore) {
+          bestScore = score;
+          best = { x: px, y: py };
+        }
+      }
+    }
+
+    return best;
+  }
+
+  _findNearbyShore(x, y, maxR = 240) {
+    let best = null;
+    let bestScore = Infinity;
+
+    for (let r = 0; r <= maxR; r += 16) {
+      for (let i = 0; i < 48; i++) {
+        const a = (i / 48) * Math.PI * 2;
+        const px = x + Math.cos(a) * r;
+        const py = y + Math.sin(a) * r;
+        const t = this._sampleTile(px, py);
+
+        if (t !== "sand" && t !== "grass" && t !== "road") continue;
+
+        const waterTouch =
+          this.isWater(px + 24, py) ||
+          this.isWater(px - 24, py) ||
+          this.isWater(px, py + 24) ||
+          this.isWater(px, py - 24);
+
+        if (!waterTouch) continue;
+
+        const landBehind =
+          this.canWalk(px + 40, py) ||
+          this.canWalk(px - 40, py) ||
+          this.canWalk(px, py + 40) ||
+          this.canWalk(px, py - 40);
+
+        if (!landBehind) continue;
+
+        const usable =
+          this.canWalk(px + 18, py) ||
+          this.canWalk(px - 18, py) ||
+          this.canWalk(px, py + 18) ||
+          this.canWalk(px, py - 18);
+
+        if (!usable) continue;
+
+        const score = r + (t === "sand" ? 0 : 18);
+        if (score < bestScore) {
+          bestScore = score;
+          best = { x: px, y: py };
+        }
+      }
+    }
+
+    return best || this._findNearbyLand(x, y, maxR, true, false);
+  }
+}

@@ -1,10 +1,5 @@
 // src/ui.js
-// v59 RPG SHOP UI PASS (FULL FILE)
-// Focus:
-// - add camp shop menu
-// - keep quest / map / inventory panels
-// - stronger RPG camp feedback
-// - compatible with current game.js
+// v74 LOOT + REWARD PRESENTATION PASS (FULL FILE)
 
 import { clamp } from "./util.js";
 
@@ -59,6 +54,8 @@ export default class UI {
     this._syncViewFromCanvas();
 
     this._drawHUD(ctx, game);
+    this._drawRewardBuffs(ctx, game);
+    this._drawBossBar(ctx, game);
     this._drawSpellBar(ctx, game);
     this._drawMinimap(ctx, game);
     this._drawHelp(ctx, game);
@@ -74,7 +71,7 @@ export default class UI {
     else if (open === "map") this._drawMap(ctx, game);
     else if (open === "quests") this._drawQuests(ctx, game);
     else if (open === "shop") this._drawShop(ctx, game);
-    else if (open === "options") this._drawOptions(ctx, game);
+    else if (open === "options") this._drawOptions(ctx);
   }
 
   _syncViewFromCanvas() {
@@ -102,12 +99,12 @@ export default class UI {
 
     const x = 14;
     const y = 12;
-    const panelW = 388;
-    const panelH = 146;
+    const panelW = 418;
+    const panelH = 166;
 
     ctx.save();
 
-    this._panel(ctx, x, y, panelW, panelH, 16, "rgba(10,12,18,0.78)");
+    this._panel(ctx, x, y, panelW, panelH, 16, "rgba(10,12,18,0.80)");
 
     ctx.fillStyle = "rgba(246,248,252,0.96)";
     ctx.font = "bold 13px Arial";
@@ -116,13 +113,13 @@ export default class UI {
     const bx = x + 14;
     let by = y + 34;
 
-    this._bar(ctx, bx, by, 264, 15, hpP, "HP", `${Math.round(hero?.hp || 0)}/${Math.round(st.maxHp || 0)}`, "rgba(220,76,104,0.98)");
+    this._bar(ctx, bx, by, 276, 15, hpP, "HP", `${Math.round(hero?.hp || 0)}/${Math.round(st.maxHp || 0)}`, "rgba(220,76,104,0.98)");
     by += 25;
-    this._bar(ctx, bx, by, 264, 15, mpP, "MP", `${Math.round(hero?.mana || 0)}/${Math.round(st.maxMana || 0)}`, "rgba(82,150,255,0.98)");
+    this._bar(ctx, bx, by, 276, 15, mpP, "MP", `${Math.round(hero?.mana || 0)}/${Math.round(st.maxMana || 0)}`, "rgba(82,150,255,0.98)");
     by += 25;
-    this._bar(ctx, bx, by, 264, 12, xpP, "XP", `${Math.round(hero?.xp || 0)}/${Math.round(hero?.nextXp || 0)}`, "rgba(228,196,92,0.98)");
+    this._bar(ctx, bx, by, 276, 12, xpP, "XP", `${Math.round(hero?.xp || 0)}/${Math.round(hero?.nextXp || 0)}`, "rgba(228,196,92,0.98)");
 
-    const rx = x + 295;
+    const rx = x + 306;
     ctx.fillStyle = "rgba(222,230,244,0.90)";
     ctx.font = "13px Arial";
     ctx.fillText(`Lv ${hero?.level || 1}`, rx, y + 39);
@@ -133,22 +130,130 @@ export default class UI {
 
     ctx.fillStyle = "rgba(198,208,226,0.82)";
     ctx.font = "12px Arial";
-    ctx.fillText(`1 HP x${hero?.potions?.hp || 0}   2 MP x${hero?.potions?.mana || 0}`, x + 14, y + 131);
+    ctx.fillText(`1 HP x${hero?.potions?.hp || 0}   2 MP x${hero?.potions?.mana || 0}`, x + 14, y + 138);
+
+    const bossAlive = !!game?.dungeon?.boss?.enemy?.alive;
+    const activeQuest = (game?.quests || []).find(q => !q.turnedIn && !q.done);
+    const readyQuest = (game?.quests || []).find(q => !q.turnedIn && q.done);
 
     if (hero?.state?.sailing) {
       this._chip(ctx, x + panelW - 92, y + 10, 76, 18, "SAILING", "rgba(76,152,226,0.95)");
+    } else if (bossAlive) {
+      this._chip(ctx, x + panelW - 108, y + 10, 92, 18, "BOSS FLOOR", "rgba(206,102,86,0.96)");
     } else if (game?.dungeon?.active) {
       this._chip(ctx, x + panelW - 100, y + 10, 84, 18, `FLOOR ${game?.dungeon?.floor || 1}`, "rgba(144,96,220,0.95)");
     } else if (game?.menu?.open === "shop") {
       this._chip(ctx, x + panelW - 88, y + 10, 72, 18, "SHOP", "rgba(218,166,88,0.94)");
+    } else if (readyQuest) {
+      this._chip(ctx, x + panelW - 116, y + 10, 100, 18, "TURN-IN READY", "rgba(122,214,128,0.95)");
+    } else if (activeQuest?.eliteOnly) {
+      this._chip(ctx, x + panelW - 108, y + 10, 92, 18, "ELITE BOUNTY", "rgba(235,160,88,0.95)");
+    } else if (activeQuest) {
+      this._chip(ctx, x + panelW - 96, y + 10, 80, 18, "QUEST", "rgba(88,166,98,0.94)");
     } else {
-      const activeQuest = (game?.quests || []).find(q => !q.turnedIn && !q.done);
-      if (activeQuest) {
-        this._chip(ctx, x + panelW - 96, y + 10, 80, 18, "QUEST", "rgba(88,166,98,0.94)");
-      } else {
-        this._chip(ctx, x + panelW - 108, y + 10, 92, 18, "OVERWORLD", "rgba(88,166,98,0.94)");
-      }
+      this._chip(ctx, x + panelW - 108, y + 10, 92, 18, "OVERWORLD", "rgba(88,166,98,0.94)");
     }
+
+    ctx.restore();
+  }
+
+  _drawRewardBuffs(ctx, game) {
+    const st = game?.hero?.state || {};
+    const entries = [];
+
+    if ((st.campBuffT || 0) > 0) {
+      entries.push({
+        title: "Camp Blessing",
+        value: `+${st.campBuffPower || 0} power`,
+        time: `${Math.ceil(st.campBuffT || 0)}s`,
+        color: "rgba(112,196,112,0.95)",
+        fill: "rgba(26,48,28,0.90)",
+      });
+    }
+
+    if ((st.dungeonMomentumT || 0) > 0) {
+      entries.push({
+        title: "Dungeon Momentum",
+        value: `+${st.dungeonMomentumPower || 0} power`,
+        time: `${Math.ceil(st.dungeonMomentumT || 0)}s`,
+        color: "rgba(154,124,255,0.96)",
+        fill: "rgba(26,22,44,0.90)",
+      });
+    }
+
+    if ((st.eliteChainT || 0) > 0 && (st.eliteChainCount || 0) > 0) {
+      entries.push({
+        title: `Elite Chain x${st.eliteChainCount || 0}`,
+        value: `bonus run pressure`,
+        time: `${Math.ceil(st.eliteChainT || 0)}s`,
+        color: "rgba(255,180,102,0.96)",
+        fill: "rgba(48,28,14,0.90)",
+      });
+    }
+
+    if (!entries.length) return;
+
+    const x = 14;
+    let y = 186;
+
+    ctx.save();
+    for (const e of entries) {
+      this._panel(ctx, x, y, 210, 42, 12, e.fill);
+      ctx.fillStyle = e.color;
+      ctx.font = "bold 13px Arial";
+      ctx.fillText(e.title, x + 12, y + 16);
+      ctx.fillStyle = "rgba(232,238,252,0.90)";
+      ctx.font = "12px Arial";
+      ctx.fillText(e.value, x + 12, y + 32);
+
+      ctx.textAlign = "right";
+      ctx.fillStyle = "rgba(245,248,255,0.95)";
+      ctx.font = "bold 12px Arial";
+      ctx.fillText(e.time, x + 196, y + 24);
+      ctx.textAlign = "left";
+
+      y += 48;
+    }
+    ctx.restore();
+  }
+
+  _drawBossBar(ctx, game) {
+    const boss = game?.dungeon?.boss?.enemy;
+    if (!game?.dungeon?.active || !boss?.alive) return;
+
+    const hpP = clamp((boss.hp || 0) / Math.max(1, boss.maxHp || 1), 0, 1);
+    const phase = game?.dungeon?.boss?.phase || 1;
+
+    const w = Math.min(520, Math.max(340, Math.floor(this.w * 0.44)));
+    const h = 52;
+    const x = ((this.w - w) * 0.5) | 0;
+    const y = 48;
+
+    ctx.save();
+    this._panel(ctx, x, y, w, h, 14, "rgba(28,8,8,0.86)");
+
+    ctx.fillStyle = "rgba(255,214,190,0.96)";
+    ctx.font = "bold 15px Arial";
+    ctx.fillText("Dungeon Boss", x + 14, y + 18);
+
+    this._chip(ctx, x + w - 84, y + 10, 68, 18, `PHASE ${phase}`, phase >= 2 ? "rgba(220,112,80,0.96)" : "rgba(168,92,86,0.94)");
+
+    const barX = x + 14;
+    const barY = y + 28;
+    const barW = w - 28;
+    const barH = 14;
+
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    roundRectFill(ctx, barX, barY, barW, barH, 8);
+
+    ctx.fillStyle = phase >= 2 ? "rgba(236,96,86,0.98)" : "rgba(208,82,102,0.98)";
+    roundRectFill(ctx, barX, barY, Math.max(0, barW * hpP), barH, 8);
+
+    ctx.textAlign = "right";
+    ctx.fillStyle = "rgba(248,248,252,0.96)";
+    ctx.font = "bold 11px Arial";
+    ctx.fillText(`${Math.round(boss.hp || 0)} / ${Math.round(boss.maxHp || 0)}`, x + w - 16, y + 18);
+    ctx.textAlign = "left";
 
     ctx.restore();
   }
@@ -290,10 +395,14 @@ export default class UI {
 
     for (const c of game?.world?.camps || []) {
       if (distSq(hx, hy, c.x, c.y) < 100 * 100) {
-        const quest = (game?.quests || []).find(q => q.campId === c.id && !q.turnedIn);
-        if (quest?.done) text = "Press F to turn in quest • H to open shop";
-        else if (quest) text = "Press F to rest at camp • H to open shop";
-        else text = "Press F to take quest • H to open shop";
+        const campQuests = (game?.quests || []).filter(q => q.campId === c.id && !q.turnedIn);
+        const ready = campQuests.find(q => q.done);
+        const elite = campQuests.find(q => q.eliteOnly && !q.done);
+
+        if (ready) text = "Press F to turn in quest • H to open shop";
+        else if (elite) text = "Elite bounty posted • Press F at camp • H for shop";
+        else if (campQuests.length) text = "Press F to rest at camp • H to open shop";
+        else text = "Press F to check camp board • H to open shop";
         break;
       }
     }
@@ -329,7 +438,7 @@ export default class UI {
 
     if (!text) return;
 
-    const w = Math.min(500, Math.max(250, Math.floor(this.w * 0.52)));
+    const w = Math.min(520, Math.max(250, Math.floor(this.w * 0.56)));
     const h = 34;
     const x = ((this.w - w) * 0.5) | 0;
     const y = this.h - 128;
@@ -373,10 +482,10 @@ export default class UI {
     const inv = Array.isArray(hero?.inventory) ? hero.inventory : [];
     const equip = hero?.equip || {};
 
-    const x = Math.max(20, ((this.w - 820) * 0.5) | 0);
-    const y = Math.max(20, ((this.h - 500) * 0.5) | 0);
-    const w = Math.min(820, this.w - 40);
-    const h = Math.min(500, this.h - 40);
+    const x = Math.max(20, ((this.w - 860) * 0.5) | 0);
+    const y = Math.max(20, ((this.h - 520) * 0.5) | 0);
+    const w = Math.min(860, this.w - 40);
+    const h = Math.min(520, this.h - 40);
 
     ctx.save();
     this._bigPanel(ctx, x, y, w, h, "Inventory");
@@ -399,7 +508,7 @@ export default class UI {
     const cols = 2;
     const gap = 10;
     const cellW = Math.floor((rightW - 26 - gap) / cols);
-    const cellH = 72;
+    const cellH = 86;
     const startX = rightX + 12;
     const startY = y + 74;
 
@@ -408,7 +517,7 @@ export default class UI {
       const row = Math.floor(i / cols);
       const cx = startX + col * (cellW + gap);
       const cy = startY + row * (cellH + 8);
-      this._itemCard(ctx, cx, cy, cellW, cellH, inv[i], `${i + 1}`);
+      this._itemCard(ctx, cx, cy, cellW, cellH, inv[i], hero, `${i + 1}`);
     }
 
     if (inv.length === 0) {
@@ -416,6 +525,10 @@ export default class UI {
       ctx.font = "14px Arial";
       ctx.fillText("Backpack is empty.", rightX + 14, y + 76);
     }
+
+    ctx.fillStyle = "rgba(198,208,226,0.76)";
+    ctx.font = "12px Arial";
+    ctx.fillText("Press 1-9 to equip backpack items while this panel is open.", rightX + 12, y + h - 20);
 
     ctx.restore();
   }
@@ -460,11 +573,14 @@ export default class UI {
   _drawGod(ctx, game) {
     const hero = game?.hero;
     const stats = hero?.getStats?.() || {};
+    const campRenown = game?.progress?.campRenown || {};
+    const renownTotal = Object.values(campRenown).reduce((a, b) => a + (b || 0), 0);
+    const st = hero?.state || {};
 
-    const x = Math.max(60, ((this.w - 560) * 0.5) | 0);
-    const y = Math.max(32, ((this.h - 360) * 0.5) | 0);
-    const w = Math.min(560, this.w - 120);
-    const h = Math.min(360, this.h - 64);
+    const x = Math.max(54, ((this.w - 640) * 0.5) | 0);
+    const y = Math.max(26, ((this.h - 440) * 0.5) | 0);
+    const w = Math.min(640, this.w - 108);
+    const h = Math.min(440, this.h - 52);
 
     ctx.save();
     this._bigPanel(ctx, x, y, w, h, "God Menu");
@@ -478,8 +594,13 @@ export default class UI {
       `Armor: ${Math.round(stats.armor || 0)}`,
       `Crit: ${Math.round((stats.crit || 0) * 100)}%`,
       `Dungeon Best: ${game?.progress?.dungeonBest || 0}`,
+      `Elite Kills: ${game?.progress?.eliteKills || 0}`,
       `Waystones: ${countSetLike(game?.progress?.discoveredWaystones)}`,
       `Docks: ${countSetLike(game?.progress?.discoveredDocks)}`,
+      `Camp Renown Total: ${renownTotal}`,
+      `Camp Blessing: ${(st.campBuffT || 0) > 0 ? `${Math.ceil(st.campBuffT)}s` : "inactive"}`,
+      `Dungeon Momentum: ${(st.dungeonMomentumT || 0) > 0 ? `${Math.ceil(st.dungeonMomentumT)}s` : "inactive"}`,
+      `Elite Chain: ${(st.eliteChainT || 0) > 0 ? `x${st.eliteChainCount} (${Math.ceil(st.eliteChainT)}s)` : "inactive"}`,
     ];
 
     let ty = y + 72;
@@ -487,8 +608,12 @@ export default class UI {
     ctx.font = "15px Arial";
     for (const line of lines) {
       ctx.fillText(line, x + 22, ty);
-      ty += 28;
+      ty += 24;
     }
+
+    ctx.fillStyle = "rgba(204,214,232,0.78)";
+    ctx.font = "12px Arial";
+    ctx.fillText("Camp renown improves camp quality over time.", x + 22, y + h - 20);
 
     ctx.restore();
   }
@@ -496,6 +621,8 @@ export default class UI {
   _drawMap(ctx, game) {
     const mini = game?.world?.getMinimapCanvas?.();
     const discovered = [...(game?.progress?.discoveredWaystones || [])];
+    const eliteKills = game?.progress?.eliteKills || 0;
+    const bossAlive = !!game?.dungeon?.boss?.enemy?.alive;
 
     const x = Math.max(20, ((this.w - 860) * 0.5) | 0);
     const y = Math.max(20, ((this.h - 560) * 0.5) | 0);
@@ -549,6 +676,10 @@ export default class UI {
     ctx.fillText("1-9 = fast travel", sideX + 12, ty);
     ty += 20;
     ctx.fillText(`Unlocked stones: ${discovered.length}`, sideX + 12, ty);
+    ty += 20;
+    ctx.fillText(`Elite kills: ${eliteKills}`, sideX + 12, ty);
+    ty += 20;
+    ctx.fillText(`Dungeon state: ${bossAlive ? "boss active" : game?.dungeon?.active ? "in run" : "idle"}`, sideX + 12, ty);
 
     ty += 28;
     ctx.fillStyle = "rgba(232,238,252,0.94)";
@@ -573,10 +704,10 @@ export default class UI {
   _drawQuests(ctx, game) {
     const quests = Array.isArray(game?.quests) ? game.quests : [];
 
-    const x = Math.max(60, ((this.w - 700) * 0.5) | 0);
-    const y = Math.max(26, ((this.h - 460) * 0.5) | 0);
-    const w = Math.min(700, this.w - 120);
-    const h = Math.min(460, this.h - 52);
+    const x = Math.max(46, ((this.w - 760) * 0.5) | 0);
+    const y = Math.max(24, ((this.h - 500) * 0.5) | 0);
+    const w = Math.min(760, this.w - 92);
+    const h = Math.min(500, this.h - 48);
 
     ctx.save();
     this._bigPanel(ctx, x, y, w, h, "Quests");
@@ -584,28 +715,52 @@ export default class UI {
     let ty = y + 72;
     for (let i = 0; i < quests.length && i < 8; i++) {
       const q = quests[i];
-      this._panel(ctx, x + 16, ty - 16, w - 32, 68, 10, "rgba(14,20,30,0.72)");
+      const cardH = 82;
+      this._panel(ctx, x + 16, ty - 16, w - 32, cardH, 10, "rgba(14,20,30,0.72)");
 
-      ctx.fillStyle = q?.turnedIn
+      const titleColor = q?.turnedIn
         ? "rgba(170,170,170,0.80)"
         : q?.done
         ? "rgba(160,240,160,0.95)"
+        : q?.eliteOnly
+        ? "rgba(255,198,132,0.96)"
         : "rgba(236,240,248,0.94)";
+
+      ctx.fillStyle = titleColor;
       ctx.font = "bold 14px Arial";
       ctx.fillText(q?.name || `Quest ${i + 1}`, x + 28, ty);
 
+      const campLabel = `Camp ${q?.campId ?? "?"}`;
+      this._smallBadge(ctx, x + w - 132, ty - 13, 92, 18, campLabel, "rgba(70,108,150,0.95)");
+
+      if (q?.eliteOnly) {
+        this._smallBadge(ctx, x + w - 234, ty - 13, 88, 18, "ELITE", "rgba(205,132,64,0.96)");
+      }
+
       ctx.fillStyle = "rgba(204,214,232,0.82)";
       ctx.font = "12px Arial";
-      ctx.fillText((q?.desc || "").slice(0, 90), x + 28, ty + 16);
+      ctx.fillText((q?.desc || "").slice(0, 96), x + 28, ty + 16);
 
       ctx.fillStyle = "rgba(232,238,252,0.90)";
       ctx.fillText(
         `Progress: ${q?.have || 0}/${q?.need || 0} • Reward: ${q?.rewardGold || 0}G / ${q?.rewardXp || 0}XP`,
         x + 28,
-        ty + 34
+        ty + 36
       );
 
-      ty += 76;
+      ctx.fillStyle = q?.turnedIn
+        ? "rgba(170,170,170,0.78)"
+        : q?.done
+        ? "rgba(160,240,160,0.95)"
+        : "rgba(198,208,226,0.78)";
+      ctx.font = "12px Arial";
+      ctx.fillText(
+        q?.turnedIn ? "Status: turned in" : q?.done ? "Status: ready to turn in" : "Status: active",
+        x + 28,
+        ty + 55
+      );
+
+      ty += 90;
     }
 
     if (!quests.length) {
@@ -622,11 +777,12 @@ export default class UI {
     const hero = game?.hero;
     const stock = Array.isArray(shop.stock) ? shop.stock : [];
     const inv = Array.isArray(hero?.inventory) ? hero.inventory : [];
+    const renown = shop?.campId != null ? (game?.progress?.campRenown?.[shop.campId] || 0) : 0;
 
-    const x = Math.max(40, ((this.w - 760) * 0.5) | 0);
-    const y = Math.max(24, ((this.h - 500) * 0.5) | 0);
-    const w = Math.min(760, this.w - 80);
-    const h = Math.min(500, this.h - 48);
+    const x = Math.max(40, ((this.w - 780) * 0.5) | 0);
+    const y = Math.max(24, ((this.h - 520) * 0.5) | 0);
+    const w = Math.min(780, this.w - 80);
+    const h = Math.min(520, this.h - 48);
 
     ctx.save();
     this._bigPanel(ctx, x, y, w, h, `Camp Shop${shop.campId ? ` • Camp ${shop.campId}` : ""}`);
@@ -634,11 +790,14 @@ export default class UI {
     ctx.fillStyle = "rgba(232,238,252,0.94)";
     ctx.font = "bold 14px Arial";
     ctx.fillText(`Gold: ${hero?.gold || 0}`, x + 20, y + 60);
+    ctx.fillStyle = "rgba(198,208,226,0.80)";
+    ctx.font = "12px Arial";
+    ctx.fillText(`Camp renown: ${renown}`, x + 120, y + 60);
 
     const leftX = x + 18;
     const leftY = y + 84;
-    const leftW = 320;
-    const rightX = x + 354;
+    const leftW = 332;
+    const rightX = x + 368;
     const rightY = y + 84;
     const rightW = w - (rightX - x) - 18;
 
@@ -652,19 +811,21 @@ export default class UI {
         hotkey: "3",
         name: stock[0]?.name || "Weapon",
         price: stock[0]?.price || 0,
-        desc: stock[0] ? itemStatText(stock[0]) : "No stock"
+        desc: stock[0] ? itemStatText(stock[0]) : "No stock",
+        compare: stock[0] ? compareText(stock[0], hero?.equip || {}) : ""
       },
       {
         hotkey: "4",
         name: stock[1]?.name || "Armor",
         price: stock[1]?.price || 0,
-        desc: stock[1] ? itemStatText(stock[1]) : "No stock"
+        desc: stock[1] ? itemStatText(stock[1]) : "No stock",
+        compare: stock[1] ? compareText(stock[1], hero?.equip || {}) : ""
       },
     ];
 
     let by = leftY + 36;
     for (const row of buyRows) {
-      this._panel(ctx, leftX + 10, by, leftW - 20, 62, 10, "rgba(12,18,26,0.72)");
+      this._panel(ctx, leftX + 10, by, leftW - 20, 70, 10, "rgba(12,18,26,0.72)");
       this._hotkeyChip(ctx, leftX + 18, by + 10, row.hotkey);
       ctx.fillStyle = "rgba(242,246,255,0.95)";
       ctx.font = "bold 14px Arial";
@@ -672,10 +833,14 @@ export default class UI {
       ctx.fillStyle = "rgba(204,214,232,0.82)";
       ctx.font = "12px Arial";
       ctx.fillText(row.desc, leftX + 52, by + 39);
+      if (row.compare) {
+        ctx.fillStyle = compareColor(row.compare);
+        ctx.fillText(row.compare, leftX + 52, by + 55);
+      }
       ctx.fillStyle = "rgba(255,224,150,0.94)";
       ctx.font = "bold 13px Arial";
-      ctx.fillText(`${row.price}G`, leftX + leftW - 78, by + 28);
-      by += 72;
+      ctx.fillText(`${row.price}G`, leftX + leftW - 82, by + 28);
+      by += 80;
     }
 
     let sy = rightY + 36;
@@ -684,7 +849,7 @@ export default class UI {
       const item = inv[i];
       const sellPrice = Math.max(4, Math.round((item?.price || 10) * 0.45));
 
-      this._panel(ctx, rightX + 10, sy, rightW - 20, 62, 10, "rgba(12,18,26,0.72)");
+      this._panel(ctx, rightX + 10, sy, rightW - 20, 70, 10, "rgba(12,18,26,0.72)");
       this._hotkeyChip(ctx, rightX + 18, sy + 10, String(i + 5));
       ctx.fillStyle = rarityTextColor(item?.rarity);
       ctx.font = "bold 14px Arial";
@@ -692,10 +857,17 @@ export default class UI {
       ctx.fillStyle = "rgba(204,214,232,0.82)";
       ctx.font = "12px Arial";
       ctx.fillText(itemStatText(item), rightX + 52, sy + 39);
+
+      const cmp = compareText(item, hero?.equip || {});
+      if (cmp) {
+        ctx.fillStyle = compareColor(cmp);
+        ctx.fillText(cmp, rightX + 52, sy + 55);
+      }
+
       ctx.fillStyle = "rgba(160,235,160,0.95)";
       ctx.font = "bold 13px Arial";
-      ctx.fillText(`${sellPrice}G`, rightX + rightW - 78, sy + 28);
-      sy += 72;
+      ctx.fillText(`${sellPrice}G`, rightX + rightW - 82, sy + 28);
+      sy += 80;
     }
 
     if (sellCount === 0) {
@@ -746,10 +918,10 @@ export default class UI {
     ctx.fillText(item?.name || "Gear", x + 10, y + 29);
 
     ctx.fillStyle = "rgba(214,222,238,0.72)";
-    ctx.fillText(this._itemStatText(item), x + w - 122, y + 29);
+    ctx.fillText(itemStatText(item), x + w - 126, y + 29);
   }
 
-  _itemCard(ctx, x, y, w, h, item, hotkey = "") {
+  _itemCard(ctx, x, y, w, h, item, hero, hotkey = "") {
     this._panel(ctx, x, y, w, h, 12, "rgba(12,18,26,0.72)");
 
     if (hotkey) {
@@ -772,11 +944,18 @@ export default class UI {
 
     ctx.fillStyle = "rgba(222,230,244,0.82)";
     ctx.font = "12px Arial";
-    ctx.fillText(this._itemStatText(item), x + 10, y + 51);
+    ctx.fillText(itemStatText(item), x + 10, y + 50);
+
+    const cmp = compareText(item, hero?.equip || {});
+    if (cmp) {
+      ctx.fillStyle = compareColor(cmp);
+      ctx.font = "11px Arial";
+      ctx.fillText(cmp, x + 10, y + 65);
+    }
 
     ctx.fillStyle = "rgba(196,206,226,0.72)";
     ctx.font = "11px Arial";
-    ctx.fillText(`Lv ${item?.level || 1}`, x + 10, y + 66);
+    ctx.fillText(`Lv ${item?.level || 1}`, x + 10, y + 80);
   }
 
   _skillRow(ctx, x, y, w, index, def, cd, selected) {
@@ -821,9 +1000,14 @@ export default class UI {
     ctx.textAlign = "left";
   }
 
-  _itemStatText(item) {
-    if (!item || !item.stats) return "";
-    return itemStatText(item);
+  _smallBadge(ctx, x, y, w, h, text, color) {
+    ctx.fillStyle = color;
+    roundRectFill(ctx, x, y, w, h, 8);
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.font = "bold 10px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(text, x + w * 0.5, y + 12);
+    ctx.textAlign = "left";
   }
 
   _panel(ctx, x, y, w, h, r = 12, fill = "rgba(10,14,20,0.75)") {
@@ -890,6 +1074,34 @@ function itemStatText(item) {
   if (s.armor) parts.push(`ARM ${Math.round(s.armor)}`);
   if (s.crit) parts.push(`CRIT ${Math.round(s.crit * 100)}%`);
   return parts.join(" • ") || "No stats";
+}
+
+function compareText(item, equip) {
+  if (!item || !item.slot || !item.stats) return "";
+  const current = equip?.[item.slot];
+  if (!current?.stats) return "Empty slot";
+
+  const cur = current.stats;
+  const next = item.stats;
+
+  const dmgDiff = Math.round((next.dmg || 0) - (cur.dmg || 0));
+  const armDiff = Math.round((next.armor || 0) - (cur.armor || 0));
+  const critDiff = Math.round(((next.crit || 0) - (cur.crit || 0)) * 100);
+
+  const parts = [];
+  if (dmgDiff) parts.push(`DMG ${dmgDiff > 0 ? "+" : ""}${dmgDiff}`);
+  if (armDiff) parts.push(`ARM ${armDiff > 0 ? "+" : ""}${armDiff}`);
+  if (critDiff) parts.push(`CRIT ${critDiff > 0 ? "+" : ""}${critDiff}%`);
+
+  return parts.join(" • ") || "Similar";
+}
+
+function compareColor(text) {
+  if (!text) return "rgba(204,214,232,0.82)";
+  if (text === "Empty slot") return "rgba(160,235,160,0.95)";
+  if (text.includes("+")) return "rgba(160,235,160,0.95)";
+  if (text.includes("-")) return "rgba(255,170,170,0.95)";
+  return "rgba(204,214,232,0.82)";
 }
 
 function rarityTextColor(rarity) {
