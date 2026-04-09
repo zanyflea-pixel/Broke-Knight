@@ -1,5 +1,5 @@
 // src/world.js
-// v77 WORLD VISUAL EVOLUTION FOR CAMP TIERS (FULL FILE)
+// v90 CAMP LIFE PASS (FULL FILE)
 
 import { hash2, RNG } from "./util.js";
 
@@ -13,12 +13,16 @@ export default class World {
     this.boundsRadius = 5200;
 
     this.spawn = { x: 0, y: 0 };
+
     this.mapMode = "small";
+    this.minimapMode = "small";
 
     this.camps = [];
     this.docks = [];
     this.waystones = [];
     this.dungeons = [];
+
+    this.lastHero = { x: 0, y: 0 };
 
     this._miniCanvas = document.createElement("canvas");
     this._miniCanvas.width = 220;
@@ -27,8 +31,20 @@ export default class World {
 
     this._zoneCache = new Map();
 
+    this.exploreCell = 64;
+    this.explored = new Set();
+    this.exploreRevealRadius = 420;
+    this.exploreImmediateRadius = 140;
+    this.spawnRevealRadius = 220;
+    this._lastRevealX = null;
+    this._lastRevealY = null;
+    this._revealStep = 18;
+
     this._generatePOIs();
     this.spawn = this._findSafeLandPatchNear(0, 0, 420) || { x: 0, y: 0 };
+    this.lastHero.x = this.spawn.x;
+    this.lastHero.y = this.spawn.y;
+    this._revealAround(this.spawn.x, this.spawn.y, this.spawnRevealRadius);
     this._rebuildMinimap();
   }
 
@@ -44,7 +60,31 @@ export default class World {
 
   update(dt, hero) {
     void dt;
-    void hero;
+
+    if (!hero) return;
+
+    this.lastHero.x = hero.x || 0;
+    this.lastHero.y = hero.y || 0;
+
+    if (this._lastRevealX == null || this._lastRevealY == null) {
+      this._lastRevealX = this.lastHero.x;
+      this._lastRevealY = this.lastHero.y;
+      this._revealAround(this.lastHero.x, this.lastHero.y, this.exploreRevealRadius);
+      this._revealAround(this.lastHero.x, this.lastHero.y, this.exploreImmediateRadius);
+      return;
+    }
+
+    const dx = this.lastHero.x - this._lastRevealX;
+    const dy = this.lastHero.y - this._lastRevealY;
+    const movedFarEnough = dx * dx + dy * dy >= this._revealStep * this._revealStep;
+
+    if (movedFarEnough) {
+      this._lastRevealX = this.lastHero.x;
+      this._lastRevealY = this.lastHero.y;
+      this._revealAround(this.lastHero.x, this.lastHero.y, this.exploreRevealRadius);
+    }
+
+    this._revealAround(this.lastHero.x, this.lastHero.y, this.exploreImmediateRadius);
   }
 
   /* ===========================
@@ -104,6 +144,12 @@ export default class World {
 
     this._zoneCache.set(key, name);
     return name;
+  }
+
+  isExplored(x, y) {
+    const cx = Math.floor(x / this.exploreCell);
+    const cy = Math.floor(y / this.exploreCell);
+    return this.explored.has(`${cx},${cy}`);
   }
 
   _isNearWater(x, y, r = 64) {
@@ -191,6 +237,37 @@ export default class World {
     }
 
     return this._findNearbyLand(x, y, radius, false, false);
+  }
+
+  /* ===========================
+     EXPLORATION / MAP REVEAL
+  =========================== */
+
+  _revealAround(x, y, radius = 320) {
+    const cell = this.exploreCell;
+    const minX = Math.floor((x - radius) / cell);
+    const maxX = Math.floor((x + radius) / cell);
+    const minY = Math.floor((y - radius) / cell);
+    const maxY = Math.floor((y + radius) / cell);
+    let added = false;
+
+    for (let cy = minY; cy <= maxY; cy++) {
+      for (let cx = minX; cx <= maxX; cx++) {
+        const wx = cx * cell + cell * 0.5;
+        const wy = cy * cell + cell * 0.5;
+        const dx = wx - x;
+        const dy = wy - y;
+        if (dx * dx + dy * dy > radius * radius) continue;
+
+        const key = `${cx},${cy}`;
+        if (!this.explored.has(key)) {
+          this.explored.add(key);
+          added = true;
+        }
+      }
+    }
+
+    if (added) this._miniDirty = true;
   }
 
   /* ===========================
@@ -315,6 +392,7 @@ export default class World {
     this._drawGround(ctx, vb);
     this._drawWater(ctx, vb);
     this._drawRoadHints(ctx, vb);
+    this._drawScenery(ctx, vb);
     this._drawPOIs(ctx, vb);
   }
 
@@ -338,16 +416,28 @@ export default class World {
 
     for (let y = y0; y <= y1; y += t) {
       for (let x = x0; x <= x1; x += t) {
-        const water = this.isWater(x + t * 0.5, y + t * 0.5);
-        if (water) continue;
+        const cx = x + t * 0.5;
+        const cy = y + t * 0.5;
+        if (this.isWater(cx, cy)) continue;
 
-        const zone = this.getZoneName(x, y);
+        const zone = this.getZoneName(cx, cy);
         ctx.fillStyle = this._groundColor(zone, x, y);
         ctx.fillRect(x, y, t + 1, t + 1);
 
-        const n = Math.abs(hash2((x / t) | 0, (y / t) | 0, this.seed + 66)) % 100;
-        if (n < 8) this._drawGrassTuft(ctx, x + 10, y + 22);
-        else if (n > 94) this._drawPebble(ctx, x + 16, y + 18);
+        const detail = Math.abs(hash2((x / t) | 0, (y / t) | 0, this.seed + 66)) % 100;
+        const shore = this._isNearWater(cx, cy, 34);
+
+        if (detail < 6) {
+          this._drawGrassTuft(ctx, x + 10, y + 24, zone);
+        } else if (detail < 9) {
+          this._drawGrassTuft(ctx, x + 18, y + 23, zone);
+        } else if (detail < 11 && !shore) {
+          this._drawFlowerPatch(ctx, x + 16, y + 19, zone);
+        } else if (detail > 95) {
+          this._drawPebble(ctx, x + 16, y + 18, zone);
+        } else if (shore && detail > 84) {
+          this._drawReeds(ctx, x + 16, y + 22);
+        }
       }
     }
   }
@@ -361,17 +451,28 @@ export default class World {
 
     for (let y = y0; y <= y1; y += t) {
       for (let x = x0; x <= x1; x += t) {
-        if (!this.isWater(x + t * 0.5, y + t * 0.5)) continue;
+        const cx = x + t * 0.5;
+        const cy = y + t * 0.5;
+        if (!this.isWater(cx, cy)) continue;
 
         const n = this._terrainNoise(x, y);
-        ctx.fillStyle = n < -0.28 ? "#2b6ba0" : "#3d84b8";
+        const ripple = Math.abs(hash2((x / t) | 0, (y / t) | 0, 9182)) % 100;
+        const shade = ripple < 45 ? "#3d84b8" : "#387cad";
+        ctx.fillStyle = n < -0.28 ? "#2b6ba0" : shade;
         ctx.fillRect(x, y, t + 1, t + 1);
 
-        const foam = Math.abs(hash2((x / t) | 0, (y / t) | 0, 9182)) % 100;
-        if (foam < 14) {
+        if (this._isNearWater(cx, cy, 18)) {
+          // stable shoreline blend
+        }
+
+        if (ripple < 14) {
           ctx.fillStyle = "rgba(255,255,255,0.12)";
           ctx.fillRect(x + 4, y + 6, 12, 2);
           ctx.fillRect(x + 16, y + 18, 8, 2);
+        }
+        if (ripple > 86) {
+          ctx.fillStyle = "rgba(255,255,255,0.08)";
+          ctx.fillRect(x + 8, y + 12, 10, 2);
         }
       }
     }
@@ -382,15 +483,29 @@ export default class World {
     const ways = this.waystones;
 
     ctx.save();
-    ctx.strokeStyle = "rgba(194,170,120,0.14)";
-    ctx.lineWidth = 18;
-    ctx.lineCap = "round";
 
     for (const c of camps) {
       const nearestWay = this._nearestPOI(c.x, c.y, ways);
       if (!nearestWay) continue;
       if (!segmentIntersectsView(c.x, c.y, nearestWay.x, nearestWay.y, vb)) continue;
 
+      ctx.strokeStyle = "rgba(170,145,100,0.12)";
+      ctx.lineWidth = 22;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(c.x, c.y);
+      ctx.lineTo(nearestWay.x, nearestWay.y);
+      ctx.stroke();
+
+      ctx.strokeStyle = "rgba(196,170,120,0.14)";
+      ctx.lineWidth = 14;
+      ctx.beginPath();
+      ctx.moveTo(c.x, c.y);
+      ctx.lineTo(nearestWay.x, nearestWay.y);
+      ctx.stroke();
+
+      ctx.strokeStyle = "rgba(230,214,180,0.06)";
+      ctx.lineWidth = 6;
       ctx.beginPath();
       ctx.moveTo(c.x, c.y);
       ctx.lineTo(nearestWay.x, nearestWay.y);
@@ -398,6 +513,39 @@ export default class World {
     }
 
     ctx.restore();
+  }
+
+  _drawScenery(ctx, vb) {
+    const cell = 96;
+    const x0 = Math.floor(vb.x0 / cell) * cell;
+    const y0 = Math.floor(vb.y0 / cell) * cell;
+    const x1 = Math.ceil(vb.x1 / cell) * cell;
+    const y1 = Math.ceil(vb.y1 / cell) * cell;
+
+    for (let y = y0; y <= y1; y += cell) {
+      for (let x = x0; x <= x1; x += cell) {
+        const h = Math.abs(hash2((x / cell) | 0, (y / cell) | 0, this.seed + 3107)) % 1000;
+        const px = x + 48 + (((hash2(x | 0, y | 0, this.seed + 11) % 100) / 100) - 0.5) * 36;
+        const py = y + 48 + (((hash2(x | 0, y | 0, this.seed + 12) % 100) / 100) - 0.5) * 36;
+
+        if (!this.canWalk(px, py)) continue;
+        if (this._isNearWater(px, py, 32)) continue;
+        if (this._isNearCamp(px, py, 120)) continue;
+        if (this._isNearDock(px, py, 110)) continue;
+        if (this._isNearWaystone(px, py, 100)) continue;
+        if (this._isNearDungeon(px, py, 130)) continue;
+
+        const zone = this.getZoneName(px, py);
+
+        if (h < 28 && zone !== "Old Road" && zone !== "Stone Flats") {
+          this._drawTreeCluster(ctx, px, py, zone, h);
+        } else if (h >= 28 && h < 44) {
+          this._drawBushCluster(ctx, px, py, zone, h);
+        } else if (h >= 44 && h < 54 && zone !== "Old Road") {
+          this._drawRockCluster(ctx, px, py, zone, h);
+        }
+      }
+    }
   }
 
   _drawPOIs(ctx, vb) {
@@ -476,6 +624,8 @@ export default class World {
     this._drawCampfire(ctx, 10 * scale, 8 * scale, 1.0, false);
     this._drawCrate(ctx, 26 * scale, 8 * scale, 1.0);
     this._drawBanner(ctx, -2 * scale, -8 * scale, "#d9c787", 1.0);
+
+    this._drawCampNPC(ctx, -30 * scale, 14 * scale, "#6f86a8", false, 0.92);
     void camp;
   }
 
@@ -486,6 +636,9 @@ export default class World {
     this._drawCrate(ctx, -2 * scale, 24 * scale, 1.1);
     this._drawBanner(ctx, -36 * scale, -6 * scale, "#b8d987", 1.0);
     this._drawBanner(ctx, 36 * scale, -4 * scale, "#87c0d9", 1.0);
+
+    this._drawCampNPC(ctx, -10 * scale, 24 * scale, "#6f86a8", false, 0.95);
+    this._drawCampNPC(ctx, 34 * scale, 20 * scale, "#8b6a4a", true, 0.90);
     void camp;
   }
 
@@ -499,6 +652,12 @@ export default class World {
     this._drawBanner(ctx, 52 * scale, -10 * scale, "#9ec7ff", 1.1);
     this._drawCrate(ctx, -18 * scale, 28 * scale, 1.15);
     this._drawCrate(ctx, 18 * scale, 28 * scale, 1.15);
+
+    this._drawCampNPC(ctx, -48 * scale, 18 * scale, "#7f5da0", true, 0.94);
+    this._drawCampNPC(ctx, 0, 28 * scale, "#668b66", false, 0.98);
+    this._drawCampNPC(ctx, 48 * scale, 18 * scale, "#6f86a8", true, 0.94);
+    this._drawTrainingPost(ctx, -26 * scale, 30 * scale, 1.0);
+    this._drawMerchantStall(ctx, 30 * scale, 28 * scale, 0.92, "#b78b52");
     void camp;
   }
 
@@ -514,6 +673,14 @@ export default class World {
     this._drawCrate(ctx, 22 * scale, 34 * scale, 1.18);
     this._drawFencePost(ctx, -32 * scale, 26 * scale, 1.0);
     this._drawFencePost(ctx, 32 * scale, 26 * scale, 1.0);
+
+    this._drawCampNPC(ctx, -40 * scale, 28 * scale, "#6f86a8", true, 0.98);
+    this._drawCampNPC(ctx, -8 * scale, 30 * scale, "#7f5da0", false, 0.96);
+    this._drawCampNPC(ctx, 20 * scale, 30 * scale, "#668b66", false, 0.96);
+    this._drawCampNPC(ctx, 52 * scale, 24 * scale, "#8b6a4a", true, 0.98);
+    this._drawMerchantStall(ctx, -46 * scale, 28 * scale, 0.96, "#c49660");
+    this._drawForge(ctx, 40 * scale, 30 * scale, 1.0);
+    this._drawTrainingPost(ctx, -10 * scale, 34 * scale, 1.06);
     void camp;
   }
 
@@ -680,6 +847,130 @@ export default class World {
     ctx.restore();
   }
 
+  _drawCampNPC(ctx, x, y, cloth = "#6f86a8", guard = false, scale = 1) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    ctx.fillStyle = "rgba(0,0,0,0.14)";
+    ctx.beginPath();
+    ctx.ellipse(0, 8 * scale, 7 * scale, 3 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#4f3826";
+    ctx.fillRect(-1.5 * scale, -1 * scale, 3 * scale, 7 * scale);
+
+    ctx.fillStyle = cloth;
+    ctx.beginPath();
+    ctx.moveTo(-5 * scale, -1 * scale);
+    ctx.lineTo(5 * scale, -1 * scale);
+    ctx.lineTo(4 * scale, 7 * scale);
+    ctx.lineTo(0, 10 * scale);
+    ctx.lineTo(-4 * scale, 7 * scale);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "#f0c29f";
+    ctx.beginPath();
+    ctx.arc(0, -5 * scale, 4.4 * scale, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#4c2f23";
+    ctx.beginPath();
+    ctx.arc(0, -6.5 * scale, 4.6 * scale, Math.PI, 0);
+    ctx.fill();
+
+    if (guard) {
+      ctx.fillStyle = "#8d97a6";
+      ctx.fillRect(5 * scale, -1 * scale, 1.5 * scale, 13 * scale);
+      ctx.fillStyle = "#d8e5ff";
+      ctx.beginPath();
+      ctx.arc(6 * scale, -2 * scale, 2.2 * scale, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  _drawMerchantStall(ctx, x, y, scale = 1, canopy = "#b78b52") {
+    ctx.save();
+    ctx.translate(x, y);
+
+    ctx.fillStyle = "rgba(0,0,0,0.12)";
+    ctx.beginPath();
+    ctx.ellipse(0, 10 * scale, 18 * scale, 5 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#7a5a35";
+    ctx.fillRect(-14 * scale, 0, 28 * scale, 6 * scale);
+    ctx.fillRect(-12 * scale, -12 * scale, 2.5 * scale, 12 * scale);
+    ctx.fillRect(9.5 * scale, -12 * scale, 2.5 * scale, 12 * scale);
+
+    ctx.fillStyle = canopy;
+    ctx.beginPath();
+    ctx.moveTo(-16 * scale, -12 * scale);
+    ctx.lineTo(0, -21 * scale);
+    ctx.lineTo(16 * scale, -12 * scale);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "#d9c787";
+    ctx.fillRect(-8 * scale, 2 * scale, 4 * scale, 2.5 * scale);
+    ctx.fillStyle = "#87c0d9";
+    ctx.fillRect(-1 * scale, 2 * scale, 4 * scale, 2.5 * scale);
+    ctx.fillStyle = "#c7d971";
+    ctx.fillRect(6 * scale, 2 * scale, 4 * scale, 2.5 * scale);
+
+    ctx.restore();
+  }
+
+  _drawForge(ctx, x, y, scale = 1) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    ctx.fillStyle = "rgba(0,0,0,0.14)";
+    ctx.beginPath();
+    ctx.ellipse(0, 9 * scale, 18 * scale, 5 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#6f6458";
+    ctx.fillRect(-14 * scale, -2 * scale, 16 * scale, 9 * scale);
+    ctx.fillStyle = "#3f3a36";
+    ctx.fillRect(-12 * scale, 0, 12 * scale, 5 * scale);
+
+    ctx.fillStyle = "rgba(255,184,82,0.42)";
+    ctx.beginPath();
+    ctx.arc(-6 * scale, 2 * scale, 4 * scale, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#8d6b3b";
+    ctx.fillRect(4 * scale, 1 * scale, 10 * scale, 3 * scale);
+    ctx.fillStyle = "#b8bcc5";
+    ctx.fillRect(11 * scale, -3 * scale, 4 * scale, 4 * scale);
+
+    ctx.restore();
+  }
+
+  _drawTrainingPost(ctx, x, y, scale = 1) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    ctx.fillStyle = "rgba(0,0,0,0.12)";
+    ctx.beginPath();
+    ctx.ellipse(0, 9 * scale, 14 * scale, 4 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#7b5a39";
+    ctx.fillRect(-2 * scale, -12 * scale, 4 * scale, 20 * scale);
+    ctx.fillRect(-10 * scale, -12 * scale, 20 * scale, 3 * scale);
+
+    ctx.fillStyle = "#8e5c4d";
+    ctx.beginPath();
+    ctx.arc(8 * scale, -2 * scale, 5 * scale, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
   _drawWaystone(ctx, stone) {
     ctx.save();
     ctx.translate(stone.x, stone.y);
@@ -775,7 +1066,182 @@ export default class World {
   }
 
   /* ===========================
-     MINIMAP
+     WORLD DECOR
+  =========================== */
+
+  _drawTreeCluster(ctx, x, y, zone, h) {
+    const style = h % 3;
+    const scale = style === 0 ? 0.92 : style === 1 ? 1.0 : 1.08;
+
+    this._drawTree(ctx, x, y, scale, zone);
+
+    if (style >= 1) {
+      this._drawTree(ctx, x - 18, y + 8, scale * 0.82, zone);
+    }
+    if (style >= 2) {
+      this._drawTree(ctx, x + 20, y + 6, scale * 0.78, zone);
+    }
+  }
+
+  _drawTree(ctx, x, y, scale = 1, zone = "Green Reach") {
+    const top =
+      zone === "Pine Verge" ? "#325f39" :
+      zone === "Ash Fields" ? "#55614b" :
+      zone === "Whisper Grass" ? "#417245" :
+      "#3b6b3f";
+
+    const mid =
+      zone === "Pine Verge" ? "#417b49" :
+      zone === "Ash Fields" ? "#657159" :
+      zone === "Whisper Grass" ? "#4c8250" :
+      "#4a7b4b";
+
+    ctx.save();
+    ctx.translate(x, y);
+
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.beginPath();
+    ctx.ellipse(0, 12 * scale, 14 * scale, 6 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#6a4a2b";
+    ctx.fillRect(-3 * scale, 0, 6 * scale, 16 * scale);
+
+    ctx.fillStyle = top;
+    ctx.beginPath();
+    ctx.arc(0, -6 * scale, 12 * scale, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = mid;
+    ctx.beginPath();
+    ctx.arc(-7 * scale, 0, 9 * scale, 0, Math.PI * 2);
+    ctx.arc(7 * scale, 0, 9 * scale, 0, Math.PI * 2);
+    ctx.arc(0, 5 * scale, 10 * scale, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  _drawBushCluster(ctx, x, y, zone, h) {
+    const color =
+      zone === "Ash Fields" ? "#677054" :
+      zone === "Whisper Grass" ? "#5d8f5b" :
+      zone === "Stone Flats" ? "#66795d" :
+      "#588650";
+
+    ctx.save();
+    ctx.translate(x, y);
+
+    ctx.fillStyle = "rgba(0,0,0,0.12)";
+    ctx.beginPath();
+    ctx.ellipse(0, 7, 14, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(-6, 2, 6, 0, Math.PI * 2);
+    ctx.arc(2, -1, 7, 0, Math.PI * 2);
+    ctx.arc(9, 2, 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    if ((h % 2) === 0) {
+      ctx.fillStyle = "rgba(255,220,180,0.35)";
+      ctx.beginPath();
+      ctx.arc(1, 0, 1.5, 0, Math.PI * 2);
+      ctx.arc(7, 2, 1.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  _drawRockCluster(ctx, x, y, zone, h) {
+    const c1 =
+      zone === "Ash Fields" ? "#7e7b70" :
+      zone === "Stone Flats" ? "#868d82" :
+      "#80877b";
+
+    const c2 =
+      zone === "Ash Fields" ? "#67645b" :
+      zone === "Stone Flats" ? "#6d756b" :
+      "#697064";
+
+    ctx.save();
+    ctx.translate(x, y);
+
+    ctx.fillStyle = "rgba(0,0,0,0.12)";
+    ctx.beginPath();
+    ctx.ellipse(0, 6, 10, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = c1;
+    this._poly(ctx, [[-8, 5], [-6, -2], [0, -4], [4, 0], [2, 6]]);
+    ctx.fill();
+
+    ctx.fillStyle = c2;
+    this._poly(ctx, [[2, 6], [6, 1], [10, 3], [8, 8], [4, 9]]);
+    ctx.fill();
+
+    if ((h % 3) === 0) {
+      ctx.fillStyle = "rgba(255,255,255,0.10)";
+      ctx.fillRect(-2, -1, 4, 1.5);
+    }
+
+    ctx.restore();
+  }
+
+  _drawFlowerPatch(ctx, x, y, zone) {
+    const base =
+      zone === "Ash Fields" ? "rgba(209,196,146,0.65)" :
+      zone === "Whisper Grass" ? "rgba(240,208,255,0.65)" :
+      "rgba(255,228,170,0.65)";
+
+    ctx.fillStyle = base;
+    ctx.beginPath();
+    ctx.arc(x - 2, y, 1.6, 0, Math.PI * 2);
+    ctx.arc(x + 4, y - 1, 1.4, 0, Math.PI * 2);
+    ctx.arc(x + 1, y + 3, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(48,96,42,0.40)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x - 2, y + 2);
+    ctx.lineTo(x - 1, y + 6);
+    ctx.moveTo(x + 4, y + 1);
+    ctx.lineTo(x + 4, y + 6);
+    ctx.moveTo(x + 1, y + 4);
+    ctx.lineTo(x + 1, y + 7);
+    ctx.stroke();
+  }
+
+  _drawReeds(ctx, x, y) {
+    ctx.strokeStyle = "rgba(120,148,84,0.55)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x - 4, y + 4);
+    ctx.lineTo(x - 6, y - 6);
+    ctx.moveTo(x, y + 4);
+    ctx.lineTo(x - 1, y - 8);
+    ctx.moveTo(x + 4, y + 4);
+    ctx.lineTo(x + 6, y - 5);
+    ctx.moveTo(x + 8, y + 4);
+    ctx.lineTo(x + 10, y - 4);
+    ctx.stroke();
+  }
+
+  _poly(ctx, pts) {
+    if (!pts.length) return;
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) {
+      ctx.lineTo(pts[i][0], pts[i][1]);
+    }
+    ctx.closePath();
+  }
+
+  /* ===========================
+     MINIMAP / BIG MAP SOURCE
   =========================== */
 
   getMinimapCanvas() {
@@ -791,18 +1257,21 @@ export default class World {
 
     ctx.clearRect(0, 0, w, h);
 
-    const span = this.mapMode === "large"
-      ? Math.max(8000, this.boundsRadius * 2)
-      : Math.max(4000, this.boundsRadius);
-
+    const span = Math.max(4000, this.boundsRadius);
     const half = span * 0.5;
 
     for (let py = 0; py < h; py += 2) {
       for (let px = 0; px < w; px += 2) {
         const wx = (px / w) * span - half;
         const wy = (py / h) * span - half;
-        const water = this.isWater(wx, wy);
 
+        if (!this.isExplored(wx, wy)) {
+          ctx.fillStyle = "#06080c";
+          ctx.fillRect(px, py, 2, 2);
+          continue;
+        }
+
+        const water = this.isWater(wx, wy);
         if (water) ctx.fillStyle = "#356e9c";
         else {
           const zone = this.getZoneName(wx, wy);
@@ -814,16 +1283,16 @@ export default class World {
     }
 
     for (const c0 of this.camps) {
-      this._miniPoint(ctx, c0.x, c0.y, span, "#f3c46e", 3);
+      if (this.isExplored(c0.x, c0.y)) this._miniPoint(ctx, c0.x, c0.y, span, "#f3c46e", 3);
     }
     for (const w0 of this.waystones) {
-      this._miniPoint(ctx, w0.x, w0.y, span, "#bde4ff", 2.5);
+      if (this.isExplored(w0.x, w0.y)) this._miniPoint(ctx, w0.x, w0.y, span, "#bde4ff", 2.5);
     }
     for (const d0 of this.docks) {
-      this._miniPoint(ctx, d0.x, d0.y, span, "#d6c3a1", 2.5);
+      if (this.isExplored(d0.x, d0.y)) this._miniPoint(ctx, d0.x, d0.y, span, "#d6c3a1", 2.5);
     }
     for (const dg of this.dungeons) {
-      this._miniPoint(ctx, dg.x, dg.y, span, "#ff9f87", 3);
+      if (this.isExplored(dg.x, dg.y)) this._miniPoint(ctx, dg.x, dg.y, span, "#ff9f87", 3);
     }
 
     this._miniDirty = false;
@@ -913,21 +1382,21 @@ export default class World {
   }
 
   _groundColor(zone, x, y) {
-    const alt = Math.abs(hash2((x / 32) | 0, (y / 32) | 0, this.seed + 66)) % 12;
+    const alt = Math.abs(hash2((x / 32) | 0, (y / 32) | 0, this.seed + 66)) % 18;
 
-    if (zone === "Whisper Grass") return alt < 6 ? "#5f9a59" : "#679f61";
-    if (zone === "Old Road") return alt < 6 ? "#8b845f" : "#948c68";
-    if (zone === "Stone Flats") return alt < 6 ? "#7b876f" : "#869177";
-    if (zone === "High Meadow") return alt < 6 ? "#73ad63" : "#7cb56b";
-    if (zone === "Ash Fields") return alt < 6 ? "#7e7a67" : "#87836f";
-    if (zone === "Pine Verge") return alt < 6 ? "#547d4e" : "#5c8555";
-    if (zone === "Camp Grounds") return alt < 6 ? "#8b7d58" : "#958764";
-    if (zone === "Ruin Approach") return alt < 6 ? "#706a60" : "#7a7468";
-    if (zone === "Waystone Rise") return alt < 6 ? "#6d8a73" : "#76947c";
-    if (zone === "Shoreline") return alt < 6 ? "#8f9368" : "#989d72";
-    if (zone === "Riverbank") return alt < 6 ? "#6f9b65" : "#78a46d";
+    if (zone === "Whisper Grass") return alt < 6 ? "#5f9a59" : alt < 12 ? "#679f61" : "#73aa6c";
+    if (zone === "Old Road") return alt < 6 ? "#8b845f" : alt < 12 ? "#948c68" : "#9d9572";
+    if (zone === "Stone Flats") return alt < 6 ? "#7b876f" : alt < 12 ? "#869177" : "#909a80";
+    if (zone === "High Meadow") return alt < 6 ? "#73ad63" : alt < 12 ? "#7cb56b" : "#86bd74";
+    if (zone === "Ash Fields") return alt < 6 ? "#7e7a67" : alt < 12 ? "#87836f" : "#908b78";
+    if (zone === "Pine Verge") return alt < 6 ? "#547d4e" : alt < 12 ? "#5c8555" : "#648d5d";
+    if (zone === "Camp Grounds") return alt < 6 ? "#8b7d58" : alt < 12 ? "#958764" : "#9e906e";
+    if (zone === "Ruin Approach") return alt < 6 ? "#706a60" : alt < 12 ? "#7a7468" : "#847d72";
+    if (zone === "Waystone Rise") return alt < 6 ? "#6d8a73" : alt < 12 ? "#76947c" : "#7f9d85";
+    if (zone === "Shoreline") return alt < 6 ? "#8f9368" : alt < 12 ? "#989d72" : "#a2a67c";
+    if (zone === "Riverbank") return alt < 6 ? "#6f9b65" : alt < 12 ? "#78a46d" : "#82ad76";
 
-    return alt < 6 ? "#69995d" : "#72a265";
+    return alt < 6 ? "#69995d" : alt < 12 ? "#72a265" : "#7bac6e";
   }
 
   _miniGroundColor(zone) {
@@ -945,8 +1414,13 @@ export default class World {
     return "#72a265";
   }
 
-  _drawGrassTuft(ctx, x, y) {
-    ctx.strokeStyle = "rgba(36,76,32,0.45)";
+  _drawGrassTuft(ctx, x, y, zone = "Green Reach") {
+    const c =
+      zone === "Ash Fields" ? "rgba(88,108,70,0.42)" :
+      zone === "Stone Flats" ? "rgba(72,96,68,0.42)" :
+      "rgba(36,76,32,0.45)";
+
+    ctx.strokeStyle = c;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(x, y);
@@ -958,8 +1432,13 @@ export default class World {
     ctx.stroke();
   }
 
-  _drawPebble(ctx, x, y) {
-    ctx.fillStyle = "rgba(40,52,44,0.18)";
+  _drawPebble(ctx, x, y, zone = "Green Reach") {
+    const c =
+      zone === "Ash Fields" ? "rgba(76,70,62,0.24)" :
+      zone === "Stone Flats" ? "rgba(52,64,58,0.20)" :
+      "rgba(40,52,44,0.18)";
+
+    ctx.fillStyle = c;
     ctx.beginPath();
     ctx.arc(x, y, 2, 0, Math.PI * 2);
     ctx.arc(x + 4, y + 1, 1.5, 0, Math.PI * 2);

@@ -1,5 +1,5 @@
 // src/ui.js
-// v74 LOOT + REWARD PRESENTATION PASS (FULL FILE)
+// v88 MINIMAP LOCK + BIG MAP ZOOM FIX (FULL FILE)
 
 import { clamp } from "./util.js";
 
@@ -91,6 +91,7 @@ export default class UI {
       dmg: 10,
       armor: 2,
       crit: 0.05,
+      critMult: 1.7,
     };
 
     const hpP = clamp((hero?.hp || 0) / Math.max(1, st.maxHp || 1), 0, 1);
@@ -283,12 +284,11 @@ export default class UI {
         cd: 0,
       };
       const cd = Math.max(0, cds[key] || 0);
-      const active = (game?.selectedSkillSlot || 0) === i;
       const x = x0 + i * (slotSize + gap);
 
-      this._panel(ctx, x, y, slotSize, slotSize, 12, active ? "rgba(24,30,42,0.97)" : "rgba(14,18,26,0.90)");
-      ctx.strokeStyle = active ? "rgba(240,214,116,0.95)" : "rgba(255,255,255,0.09)";
-      ctx.lineWidth = active ? 2 : 1;
+      this._panel(ctx, x, y, slotSize, slotSize, 12, "rgba(14,18,26,0.90)");
+      ctx.strokeStyle = "rgba(255,255,255,0.08)";
+      ctx.lineWidth = 1;
       roundRect(ctx, x, y, slotSize, slotSize, 12);
       ctx.stroke();
 
@@ -309,11 +309,17 @@ export default class UI {
         ctx.fillStyle = "rgba(255,255,255,0.95)";
         ctx.font = "bold 15px Arial";
         ctx.fillText(cd.toFixed(cd >= 1 ? 1 : 2), x + slotSize * 0.5, y + 30);
+      } else {
+        ctx.fillStyle = "rgba(160,235,160,0.82)";
+        ctx.font = "bold 10px Arial";
+        ctx.fillText("READY", x + slotSize * 0.5, y + 58);
       }
 
-      ctx.font = "10px Arial";
-      ctx.fillStyle = "rgba(208,218,236,0.82)";
-      ctx.fillText(`${def.mana || 0} MP`, x + slotSize * 0.5, y + 58);
+      if (cd > 0.001) {
+        ctx.font = "10px Arial";
+        ctx.fillStyle = "rgba(208,218,236,0.82)";
+        ctx.fillText(`${def.mana || 0} MP`, x + slotSize * 0.5, y + 58);
+      }
     }
 
     ctx.textAlign = "left";
@@ -322,21 +328,45 @@ export default class UI {
 
   _drawMinimap(ctx, game) {
     const mini = this._mini || game?.world?.getMinimapCanvas?.();
-    if (!mini) return;
+    const hero = game?.hero;
+    const world = game?.world;
+    if (!mini || !hero || !world) return;
 
     const size = Math.max(136, Math.min(190, Math.floor(this.h * 0.24)));
     const x = this.w - size - 16;
     const y = 16;
-    const world = game?.world;
 
     ctx.save();
     this._panel(ctx, x - 6, y - 6, size + 12, size + 28, 14, "rgba(8,12,18,0.72)");
 
+    const padFactor = 0.16;
+    const sw = mini.width * 0.32;
+    const sh = mini.height * 0.32;
+
+    const span = Math.max(4000, world?.boundsRadius || 5200);
+    const half = span * 0.5;
+    const heroNormX = ((hero.x || 0) + half) / span;
+    const heroNormY = ((hero.y || 0) + half) / span;
+
+    const heroSrcX = heroNormX * mini.width;
+    const heroSrcY = heroNormY * mini.height;
+
+    const sx = heroSrcX - sw * 0.5;
+    const sy = heroSrcY - sh * 0.5;
+
     ctx.save();
     roundRect(ctx, x, y, size, size, 12);
     ctx.clip();
+    ctx.fillStyle = "#06080c";
+    ctx.fillRect(x, y, size, size);
+
+    const dx = x + ((-sx) / sw) * size;
+    const dy = y + ((-sy) / sh) * size;
+    const dw = (mini.width / sw) * size;
+    const dh = (mini.height / sh) * size;
+
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(mini, x, y, size, size);
+    ctx.drawImage(mini, dx, dy, dw, dh);
     ctx.imageSmoothingEnabled = true;
     ctx.restore();
 
@@ -345,22 +375,38 @@ export default class UI {
     roundRect(ctx, x, y, size, size, 12);
     ctx.stroke();
 
-    const span = world?.mapMode === "large"
-      ? Math.max(8000, world?.boundsRadius ? world.boundsRadius * 2 : 10400)
-      : Math.max(4000, world?.boundsRadius || 5200);
+    const cx = x + size * 0.5;
+    const cy = y + size * 0.5;
 
-    const half = span * 0.5;
-    const px = x + clamp(((game?.hero?.x || 0) + half) / span, 0, 1) * size;
-    const py = y + clamp(((game?.hero?.y || 0) + half) / span, 0, 1) * size;
-
-    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.strokeStyle = "rgba(255,255,255,0.20)";
+    ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.arc(px, py, 3, 0, Math.PI * 2);
+    ctx.moveTo(cx - 10, cy);
+    ctx.lineTo(cx + 10, cy);
+    ctx.moveTo(cx, cy - 10);
+    ctx.lineTo(cx, cy + 10);
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(255,255,255,0.98)";
+    ctx.beginPath();
+    ctx.arc(cx, cy, 3.2, 0, Math.PI * 2);
     ctx.fill();
+
+    const aim = hero?.lastMove || { x: 1, y: 0 };
+    const nx = clamp(aim.x || 0, -1, 1);
+    const ny = clamp(aim.y || 0, -1, 1);
+    const len = Math.hypot(nx, ny) || 1;
+
+    ctx.strokeStyle = "rgba(255,245,180,0.92)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + (nx / len) * 10, cy + (ny / len) * 10);
+    ctx.stroke();
 
     ctx.fillStyle = "rgba(238,244,255,0.96)";
     ctx.font = "bold 11px Arial";
-    ctx.fillText(`MINIMAP • ${world?.mapMode || "small"}`, x + 6, y + size + 17);
+    ctx.fillText("MINIMAP", x + 6, y + size + 17);
 
     ctx.restore();
   }
@@ -563,7 +609,7 @@ export default class UI {
       const key = loadout[i];
       const def = defs[key] || { key, name: key, mana: 0, cd: 0, color: "rgba(162,188,232,1)" };
       const cd = Math.max(0, cds[key] || 0);
-      this._skillRow(ctx, x + 18, sy, w - 36, i, def, cd, (game?.selectedSkillSlot || 0) === i);
+      this._skillRow(ctx, x + 18, sy, w - 36, i, def, cd, false);
       sy += 68;
     }
 
@@ -620,6 +666,8 @@ export default class UI {
 
   _drawMap(ctx, game) {
     const mini = game?.world?.getMinimapCanvas?.();
+    const world = game?.world;
+    const hero = game?.hero;
     const discovered = [...(game?.progress?.discoveredWaystones || [])];
     const eliteKills = game?.progress?.eliteKills || 0;
     const bossAlive = !!game?.dungeon?.boss?.enemy?.alive;
@@ -639,18 +687,63 @@ export default class UI {
 
     this._subPanel(ctx, mapX, mapY, mapW, mapH, "Explored Terrain");
 
-    if (mini) {
+    if (mini && world && hero) {
       const dx = mapX + 10;
       const dy = mapY + 24;
       const dw = mapW - 20;
       const dh = mapH - 34;
 
+      const span = Math.max(4000, world?.boundsRadius || 5200);
+      const half = span * 0.5;
+      const heroNormX = ((hero.x || 0) + half) / span;
+      const heroNormY = ((hero.y || 0) + half) / span;
+
+      const zoomMode = world?.mapMode || "small";
+      const zoomFactor = zoomMode === "large" ? 0.42 : 1.0;
+
+      const sw = mini.width * zoomFactor;
+      const sh = mini.height * zoomFactor;
+      const sx = heroNormX * mini.width - sw * 0.5;
+      const sy = heroNormY * mini.height - sh * 0.5;
+
       ctx.save();
       roundRect(ctx, dx, dy, dw, dh, 12);
       ctx.clip();
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(mini, dx, dy, dw, dh);
-      ctx.imageSmoothingEnabled = true;
+      ctx.fillStyle = "#06080c";
+      ctx.fillRect(dx, dy, dw, dh);
+
+      if (zoomMode === "small") {
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(mini, dx, dy, dw, dh);
+        ctx.imageSmoothingEnabled = true;
+      } else {
+        const imgX = dx + ((-sx) / sw) * dw;
+        const imgY = dy + ((-sy) / sh) * dh;
+        const imgW = (mini.width / sw) * dw;
+        const imgH = (mini.height / sh) * dh;
+
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(mini, imgX, imgY, imgW, imgH);
+        ctx.imageSmoothingEnabled = true;
+      }
+
+      const markerX = zoomMode === "small" ? dx + heroNormX * dw : dx + dw * 0.5;
+      const markerY = zoomMode === "small" ? dy + heroNormY * dh : dy + dh * 0.5;
+
+      ctx.strokeStyle = "rgba(255,255,255,0.22)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(markerX - 9, markerY);
+      ctx.lineTo(markerX + 9, markerY);
+      ctx.moveTo(markerX, markerY - 9);
+      ctx.lineTo(markerX, markerY + 9);
+      ctx.stroke();
+
+      ctx.fillStyle = "rgba(255,255,255,0.96)";
+      ctx.beginPath();
+      ctx.arc(markerX, markerY, 3.4, 0, Math.PI * 2);
+      ctx.fill();
+
       ctx.restore();
 
       ctx.strokeStyle = "rgba(255,255,255,0.18)";
@@ -666,12 +759,12 @@ export default class UI {
     let ty = mapY + 38;
     ctx.fillStyle = "rgba(234,240,252,0.94)";
     ctx.font = "bold 14px Arial";
-    ctx.fillText(`Map scale: ${game?.world?.mapMode || "small"}`, sideX + 12, ty);
+    ctx.fillText(`Map zoom: ${world?.mapMode || "small"}`, sideX + 12, ty);
     ty += 26;
 
     ctx.font = "13px Arial";
     ctx.fillStyle = "rgba(206,216,236,0.84)";
-    ctx.fillText("Z = change map scale", sideX + 12, ty);
+    ctx.fillText("Z = zoom map", sideX + 12, ty);
     ty += 20;
     ctx.fillText("1-9 = fast travel", sideX + 12, ty);
     ty += 20;
@@ -959,7 +1052,7 @@ export default class UI {
   }
 
   _skillRow(ctx, x, y, w, index, def, cd, selected) {
-    this._panel(ctx, x, y, w, 56, 12, selected ? "rgba(20,28,40,0.90)" : "rgba(12,18,26,0.72)");
+    this._panel(ctx, x, y, w, 56, 12, "rgba(12,18,26,0.72)");
 
     if (selected) {
       ctx.strokeStyle = "rgba(240,214,116,0.95)";
@@ -1073,6 +1166,7 @@ function itemStatText(item) {
   if (s.dmg) parts.push(`DMG ${Math.round(s.dmg)}`);
   if (s.armor) parts.push(`ARM ${Math.round(s.armor)}`);
   if (s.crit) parts.push(`CRIT ${Math.round(s.crit * 100)}%`);
+  if (s.critMult) parts.push(`CM ${Math.round(s.critMult * 100)}%`);
   return parts.join(" • ") || "No stats";
 }
 
@@ -1087,11 +1181,13 @@ function compareText(item, equip) {
   const dmgDiff = Math.round((next.dmg || 0) - (cur.dmg || 0));
   const armDiff = Math.round((next.armor || 0) - (cur.armor || 0));
   const critDiff = Math.round(((next.crit || 0) - (cur.crit || 0)) * 100);
+  const cmDiff = Math.round(((next.critMult || 0) - (cur.critMult || 0)) * 100);
 
   const parts = [];
   if (dmgDiff) parts.push(`DMG ${dmgDiff > 0 ? "+" : ""}${dmgDiff}`);
   if (armDiff) parts.push(`ARM ${armDiff > 0 ? "+" : ""}${armDiff}`);
   if (critDiff) parts.push(`CRIT ${critDiff > 0 ? "+" : ""}${critDiff}%`);
+  if (cmDiff) parts.push(`CM ${cmDiff > 0 ? "+" : ""}${cmDiff}%`);
 
   return parts.join(" • ") || "Similar";
 }

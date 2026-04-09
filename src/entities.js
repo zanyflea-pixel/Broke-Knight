@@ -1,249 +1,171 @@
 // src/entities.js
-// v75 ITEMIZATION DEPTH PASS (FULL FILE)
+// v90.2 HERO EQUIPMENT VISUAL PASS FIXED (FULL FILE)
 
-import { clamp, norm, RNG, hash2 } from "./util.js";
+import { clamp, dist2, norm, hash2, RNG } from "./util.js";
 
-/* ===========================
+/* =========================================================
    GEAR
-=========================== */
+========================================================= */
 
-export function makeGear(slot = "weapon", level = 1, rarity = null, seed = 0) {
-  const rr = new RNG(hash2(level | 0, slot.length | 0, seed | 0));
+const RARITIES = ["common", "uncommon", "rare", "epic"];
 
-  if (!rarity) {
-    const r = rr.float();
-    rarity =
-      r < 0.52 ? "common" :
-      r < 0.80 ? "uncommon" :
-      r < 0.94 ? "rare" :
-      "epic";
-  }
+const SLOT_POOLS = {
+  weapon: ["Rusty Sword", "Iron Blade", "Hunter Spear", "Knight Saber", "Moon Edge", "Storm Pike"],
+  armor: ["Cloth Vest", "Leather Coat", "Scale Armor", "Knight Mail", "Runed Plate"],
+  chest: ["Traveler Coat", "Guard Breastplate", "Templar Chest"],
+  helm: ["Leather Hood", "Iron Helm", "Knight Helm", "Runed Helm"],
+  boots: ["Field Boots", "Iron Greaves", "Swift Boots", "Storm Greaves"],
+  ring: ["Copper Ring", "Silver Ring", "Ruby Ring", "Moon Ring"],
+  trinket: ["Lucky Charm", "Bone Talisman", "Sun Relic", "Warden Idol"],
+};
 
-  const rarityMult =
-    rarity === "epic" ? 2.05 :
-    rarity === "rare" ? 1.52 :
-    rarity === "uncommon" ? 1.18 :
-    1.0;
+function seededChoice(arr, seed) {
+  const idx = Math.abs(hash2(seed | 0, arr.length | 0, 991)) % arr.length;
+  return arr[idx];
+}
 
+function rarityFromSeed(seed, explicit = null) {
+  if (explicit && RARITIES.includes(explicit)) return explicit;
+  const r = (Math.abs(hash2(seed | 0, 31415, 2718)) % 1000) / 1000;
+  if (r < 0.56) return "common";
+  if (r < 0.83) return "uncommon";
+  if (r < 0.95) return "rare";
+  return "epic";
+}
+
+function rarityMult(rarity) {
+  if (rarity === "epic") return 1.9;
+  if (rarity === "rare") return 1.45;
+  if (rarity === "uncommon") return 1.18;
+  return 1.0;
+}
+
+function rarityColor(rarity) {
+  if (rarity === "epic") return "#c89bff";
+  if (rarity === "rare") return "#8cd3ff";
+  if (rarity === "uncommon") return "#93e79a";
+  return "#d9dde7";
+}
+
+function makeStatsForSlot(slot, level, rarity, seed) {
   const lvl = Math.max(1, level | 0);
+  const mult = rarityMult(rarity);
+
   const stats = {
     dmg: 0,
     armor: 0,
     crit: 0,
     critMult: 0,
+    hp: 0,
+    mana: 0,
+    move: 0,
   };
 
-  const styleRoll = rr.float();
+  const rollA = (Math.abs(hash2(seed | 0, 101, 17)) % 1000) / 1000;
+  const rollB = (Math.abs(hash2(seed | 0, 202, 29)) % 1000) / 1000;
+  const rollC = (Math.abs(hash2(seed | 0, 303, 41)) % 1000) / 1000;
 
-  switch (slot) {
-    case "weapon": {
-      const base = 4 + lvl * 1.95 + rr.range(0, 5);
-      stats.dmg = Math.max(1, Math.round(base * rarityMult));
-
-      if (styleRoll < 0.28) {
-        stats.crit = +(0.01 + lvl * 0.0009 + rr.range(0.00, 0.025) * rarityMult).toFixed(3);
-      } else if (styleRoll < 0.48) {
-        stats.critMult = +(0.08 + lvl * 0.003 + rr.range(0.00, 0.10)).toFixed(3);
-      } else if (styleRoll < 0.62 && rarity !== "common") {
-        stats.dmg += Math.max(1, Math.round(lvl * 0.35));
-      }
-
-      if (rarity === "epic" && rr.float() < 0.45) {
-        stats.crit = +(stats.crit + 0.02 + rr.range(0.00, 0.02)).toFixed(3);
-      }
-      break;
-    }
-
-    case "armor":
-    case "chest": {
-      const base = 2 + lvl * 1.55 + rr.range(0, 4);
-      stats.armor = Math.max(1, Math.round(base * rarityMult));
-
-      if (styleRoll < 0.22) {
-        stats.dmg = Math.max(0, Math.round(lvl * 0.22));
-      } else if (styleRoll < 0.38) {
-        stats.crit = +(0.005 + rr.range(0.00, 0.012)).toFixed(3);
-      }
-
-      if (rarity === "epic" && rr.float() < 0.38) {
-        stats.armor += Math.max(1, Math.round(lvl * 0.3));
-      }
-      break;
-    }
-
-    case "helm": {
-      const base = 1 + lvl * 1.05 + rr.range(0, 3);
-      stats.armor = Math.max(1, Math.round(base * rarityMult));
-
-      if (styleRoll < 0.34) {
-        stats.crit = +(0.006 + lvl * 0.0005 + rr.range(0.00, 0.012)).toFixed(3);
-      } else if (styleRoll < 0.52 && rarity !== "common") {
-        stats.critMult = +(0.05 + rr.range(0.00, 0.07)).toFixed(3);
-      }
-      break;
-    }
-
-    case "boots": {
-      const base = 1 + lvl * 0.95 + rr.range(0, 2.5);
-      stats.armor = Math.max(1, Math.round(base * rarityMult));
-
-      if (styleRoll < 0.30) {
-        stats.crit = +(0.007 + rr.range(0.00, 0.015)).toFixed(3);
-      } else if (styleRoll < 0.52) {
-        stats.dmg = Math.max(0, Math.round(lvl * 0.18));
-      }
-      break;
-    }
-
-    case "ring": {
-      stats.crit = +(0.012 + lvl * 0.0011 + rr.range(0.00, 0.03) * rarityMult).toFixed(3);
-
-      if (styleRoll < 0.34) {
-        stats.dmg = Math.max(1, Math.round(lvl * 0.45 * rarityMult));
-      } else if (styleRoll < 0.67) {
-        stats.critMult = +(0.10 + lvl * 0.0025 + rr.range(0.00, 0.08)).toFixed(3);
-      } else {
-        stats.armor = Math.max(0, Math.round(lvl * 0.20));
-      }
-      break;
-    }
-
-    case "trinket": {
-      if (styleRoll < 0.33) {
-        stats.dmg = Math.max(1, Math.round((1 + lvl * 0.60) * rarityMult));
-        stats.crit = +(0.008 + rr.range(0.00, 0.018)).toFixed(3);
-      } else if (styleRoll < 0.66) {
-        stats.critMult = +(0.12 + lvl * 0.003 + rr.range(0.00, 0.10)).toFixed(3);
-        stats.crit = +(0.006 + rr.range(0.00, 0.012)).toFixed(3);
-      } else {
-        stats.armor = Math.max(1, Math.round((1 + lvl * 0.45) * rarityMult));
-        stats.dmg = Math.max(0, Math.round(lvl * 0.25));
-      }
-      break;
-    }
-
-    default: {
-      stats.armor = Math.max(0, Math.round((1 + lvl * 0.6) * rarityMult));
-      break;
-    }
+  if (slot === "weapon") {
+    stats.dmg = Math.round((5 + lvl * 1.8 + rollA * 3.2) * mult);
+    stats.crit = +(0.01 + rollB * 0.06 + (rarity === "rare" ? 0.02 : 0) + (rarity === "epic" ? 0.04 : 0)).toFixed(3);
+    stats.critMult = +(0.08 + rollC * 0.22 + (rarity === "epic" ? 0.20 : rarity === "rare" ? 0.10 : 0)).toFixed(3);
+  } else if (slot === "armor" || slot === "chest") {
+    stats.armor = Math.round((2 + lvl * 1.35 + rollA * 2.6) * mult);
+    stats.hp = Math.round((8 + lvl * 2.0 + rollB * 10) * (0.7 + mult * 0.35));
+  } else if (slot === "helm") {
+    stats.armor = Math.round((1 + lvl * 0.85 + rollA * 1.8) * mult);
+    stats.hp = Math.round((4 + lvl * 1.1 + rollB * 6) * (0.75 + mult * 0.25));
+  } else if (slot === "boots") {
+    stats.armor = Math.round((1 + lvl * 0.6 + rollA * 1.2) * Math.max(1, mult * 0.9));
+    stats.move = +(0.03 + rollB * 0.06 + (rarity === "rare" ? 0.03 : 0) + (rarity === "epic" ? 0.05 : 0)).toFixed(3);
+  } else if (slot === "ring") {
+    stats.crit = +(0.02 + rollA * 0.05 + (rarity === "rare" ? 0.02 : 0) + (rarity === "epic" ? 0.03 : 0)).toFixed(3);
+    stats.critMult = +(0.05 + rollB * 0.16 + (rarity === "epic" ? 0.12 : 0)).toFixed(3);
+    stats.dmg = Math.round((lvl * 0.6 + rollC * 2.2) * (0.55 + mult * 0.5));
+  } else if (slot === "trinket") {
+    stats.mana = Math.round((8 + lvl * 1.6 + rollA * 8) * (0.75 + mult * 0.25));
+    stats.hp = Math.round((5 + lvl * 1.2 + rollB * 5) * (0.7 + mult * 0.25));
+    stats.dmg = Math.round((lvl * 0.35 + rollC * 1.8) * (0.45 + mult * 0.45));
   }
 
-  cleanupStats(stats);
+  return stats;
+}
 
-  return {
-    slot,
-    level: lvl,
-    rarity,
-    name: gearName(slot, rarity, rr, stats),
+function gearPrice(item) {
+  const s = item.stats || {};
+  const score =
+    (s.dmg || 0) * 2.2 +
+    (s.armor || 0) * 1.7 +
+    (s.crit || 0) * 120 +
+    (s.critMult || 0) * 90 +
+    (s.hp || 0) * 0.28 +
+    (s.mana || 0) * 0.20 +
+    (s.move || 0) * 90;
+
+  return Math.max(10, Math.round(10 + score * 0.9 + item.level * 2.4));
+}
+
+export function makeGear(slot = "weapon", level = 1, rarity = null, seed = 1) {
+  const realSlot = SLOT_POOLS[slot] ? slot : "weapon";
+  const realRarity = rarityFromSeed(seed, rarity);
+  const nameCore = seededChoice(SLOT_POOLS[realSlot], seed);
+  const stats = makeStatsForSlot(realSlot, level, realRarity, seed);
+
+  const item = {
+    id: `${realSlot}-${level}-${seed}-${realRarity}`,
+    slot: realSlot,
+    level: Math.max(1, level | 0),
+    rarity: realRarity,
+    name: nameCore,
     stats,
-    price: gearPrice(slot, lvl, rarityMult, stats, rr),
-  };
-}
-
-function cleanupStats(stats) {
-  for (const k of Object.keys(stats)) {
-    if (k === "crit" || k === "critMult") {
-      stats[k] = +Math.max(0, stats[k] || 0).toFixed(3);
-    } else {
-      stats[k] = Math.max(0, Math.round(stats[k] || 0));
-    }
-  }
-}
-
-function gearPrice(slot, lvl, rarityMult, stats, rr) {
-  const statScore =
-    (stats.dmg || 0) * 2.2 +
-    (stats.armor || 0) * 1.8 +
-    (stats.crit || 0) * 130 +
-    (stats.critMult || 0) * 75;
-
-  const slotMod =
-    slot === "weapon" ? 1.18 :
-    slot === "ring" ? 1.12 :
-    slot === "trinket" ? 1.12 :
-    slot === "armor" || slot === "chest" ? 1.06 :
-    1.0;
-
-  return Math.max(
-    6,
-    Math.round((lvl * 8 + statScore + rr.range(0, 8)) * rarityMult * slotMod)
-  );
-}
-
-function gearName(slot, rarity, rr, stats) {
-  const rarityPrefix =
-    rarity === "epic" ? ["Mythic", "Ancient", "Kingsfall", "Stormforged", "Voidtouched"] :
-    rarity === "rare" ? ["Runed", "Gilded", "Knight's", "Hunter's", "Moonlit"] :
-    rarity === "uncommon" ? ["Sturdy", "Traveler's", "Mercenary's", "Polished", "Ironbound"] :
-    ["Plain", "Worn", "Old", "Simple", "Rough"];
-
-  const offensiveTag =
-    (stats.critMult || 0) >= 0.14 ? ["Executioner's", "Duelist's", "Ravager's"] :
-    (stats.crit || 0) >= 0.04 ? ["Keen", "Deadeye", "Lucky"] :
-    (stats.dmg || 0) >= (stats.armor || 0) + 4 ? ["Heavy", "Savage", "Warborn"] :
-    ["Guarded", "Balanced", "Tempered"];
-
-  const namesBySlot = {
-    weapon: ["Blade", "Sword", "Wand", "Glaive", "Staff", "Edge"],
-    armor: ["Armor", "Mail", "Plate", "Guard", "Cuirass"],
-    chest: ["Chestplate", "Vest", "Cuirass", "Tunic"],
-    helm: ["Helm", "Cap", "Hood", "Crown", "Visor"],
-    boots: ["Boots", "Greaves", "Striders", "Treads", "Walkers"],
-    ring: ["Ring", "Band", "Loop", "Seal", "Signet"],
-    trinket: ["Charm", "Idol", "Relic", "Totem", "Sigil"],
+    color: rarityColor(realRarity),
+    price: 0,
   };
 
-  const suffixPool =
-    slot === "weapon" ? ["of Cuts", "of Sparks", "of Ruin", "of Reach"] :
-    slot === "armor" || slot === "chest" ? ["of Guard", "of Stone", "of Resolve"] :
-    slot === "helm" ? ["of Sight", "of Thought", "of Focus"] :
-    slot === "boots" ? ["of Motion", "of Dust", "of Trails"] :
-    slot === "ring" ? ["of Fortune", "of Precision", "of Teeth"] :
-    ["of Secrets", "of Echoes", "of Hunger"];
-
-  const core = rr.pick(namesBySlot[slot] || ["Gear"]);
-  const prefixA = rr.pick(rarityPrefix);
-  const prefixB = rr.float() < 0.42 ? rr.pick(offensiveTag) : null;
-  const suffix = rr.float() < 0.55 ? rr.pick(suffixPool) : null;
-
-  let name = prefixB ? `${prefixB} ${core}` : `${prefixA} ${core}`;
-  if (suffix) name += ` ${suffix}`;
-  return name;
+  item.price = gearPrice(item);
+  return item;
 }
 
-/* ===========================
+/* =========================================================
    HERO
-=========================== */
+========================================================= */
 
 export class Hero {
   constructor(x = 0, y = 0) {
     this.x = x;
     this.y = y;
-
     this.vx = 0;
     this.vy = 0;
 
-    this.radius = 10;
-    this.r = 14;
+    this.r = 12;
+    this.radius = this.r;
 
     this.level = 1;
     this.xp = 0;
-    this.nextXp = 30;
-    this.gold = 0;
+    this.nextXp = 24;
 
     this.maxHp = 100;
-    this.hp = 100;
-
+    this.hp = this.maxHp;
     this.maxMana = 60;
-    this.mana = 60;
+    this.mana = this.maxMana;
 
-    this.hpRegen = 1.5;
-    this.manaRegen = 6.0;
+    this.hpRegen = 0.9;
+    this.manaRegen = 3.2;
+    this.baseMove = 140;
 
+    this.gold = 0;
     this.inventory = [];
-    this.equip = {};
+    this.equip = {
+      weapon: makeGear("weapon", 1, "common", 101),
+      armor: makeGear("armor", 1, "common", 202),
+      helm: null,
+      boots: null,
+      ring: null,
+      trinket: null,
+    };
     this.potions = { hp: 2, mana: 1 };
 
+    this.lastMove = { x: 1, y: 0 };
     this.state = {
       sailing: false,
       dashT: 0,
@@ -256,31 +178,656 @@ export class Hero {
       eliteChainCount: 0,
     };
 
-    this.lastMove = { x: 1, y: 0 };
-
-    this.animT = 0;
-    this.alive = true;
-    this.dead = false;
-  }
-
-  getMoveSpeed(game = null) {
-    const base = this.state?.sailing ? 175 : 140;
-    const terrainMod = game?.world?.getMoveModifier?.(this.x, this.y) ?? 1;
-    return base * terrainMod;
+    this._animWalk = 0;
   }
 
   update(dt) {
-    if (this.dead) return;
-
-    this.hp = clamp(this.hp + this.hpRegen * dt, 0, this.maxHp);
-    this.mana = clamp(this.mana + this.manaRegen * dt, 0, this.maxMana);
-
     this.state.dashT = Math.max(0, (this.state.dashT || 0) - dt);
     this.state.hurtT = Math.max(0, (this.state.hurtT || 0) - dt);
 
-    if (Math.abs(this.vx) + Math.abs(this.vy) > 4) {
-      this.animT += dt * 8.5;
+    const moving = Math.abs(this.vx) + Math.abs(this.vy) > 6;
+    if (moving) this._animWalk += dt * 8;
+    else this._animWalk += dt * 2;
+
+    const stats = this.getStats();
+    this.maxHp = stats.maxHp;
+    this.maxMana = stats.maxMana;
+
+    this.hp = Math.min(this.maxHp, this.hp + stats.hpRegen * dt);
+    this.mana = Math.min(this.maxMana, this.mana + stats.manaRegen * dt);
+  }
+
+  getStats() {
+    const stats = {
+      maxHp: 100 + (this.level - 1) * 12,
+      maxMana: 60 + (this.level - 1) * 7,
+      dmg: 8 + (this.level - 1) * 2.2,
+      armor: 1 + (this.level - 1) * 0.45,
+      crit: 0.04,
+      critMult: 1.60,
+      move: this.baseMove,
+      hpRegen: this.hpRegen + (this.level - 1) * 0.06,
+      manaRegen: this.manaRegen + (this.level - 1) * 0.12,
+    };
+
+    for (const item of Object.values(this.equip || {})) {
+      if (!item?.stats) continue;
+      const s = item.stats;
+      stats.maxHp += s.hp || 0;
+      stats.maxMana += s.mana || 0;
+      stats.dmg += s.dmg || 0;
+      stats.armor += s.armor || 0;
+      stats.crit += s.crit || 0;
+      stats.critMult += s.critMult || 0;
+      stats.move += (s.move || 0) * 100;
     }
+
+    return stats;
+  }
+
+  getMoveSpeed(game) {
+    let speed = this.getStats().move;
+
+    const mult = game?.world?.getMoveModifier?.(this.x, this.y) ?? 1;
+    speed *= mult;
+
+    if (this.state?.dashT > 0) speed *= 1.24;
+    if (this.state?.sailing) speed *= 1.10;
+
+    return speed;
+  }
+
+  spendMana(cost) {
+    const c = Math.max(0, +cost || 0);
+    if (this.mana < c) return false;
+    this.mana -= c;
+    return true;
+  }
+
+  usePotion(kind) {
+    if (kind === "mana") {
+      if ((this.potions.mana || 0) <= 0) return false;
+      if (this.mana >= this.maxMana) return false;
+      this.potions.mana--;
+      this.mana = Math.min(this.maxMana, this.mana + Math.round(this.maxMana * 0.50));
+      return true;
+    }
+
+    if ((this.potions.hp || 0) <= 0) return false;
+    if (this.hp >= this.maxHp) return false;
+    this.potions.hp--;
+    this.hp = Math.min(this.maxHp, this.hp + Math.round(this.maxHp * 0.48));
+    return true;
+  }
+
+  giveXP(amount) {
+    let gain = Math.max(0, Math.round(amount || 0));
+
+    while (gain > 0) {
+      const need = Math.max(1, this.nextXp - this.xp);
+      const take = Math.min(need, gain);
+      this.xp += take;
+      gain -= take;
+
+      if (this.xp >= this.nextXp) {
+        this.xp -= this.nextXp;
+        this.level++;
+        this.nextXp = Math.round(this.nextXp * 1.32 + 10);
+
+        const stats = this.getStats();
+        this.maxHp = stats.maxHp;
+        this.maxMana = stats.maxMana;
+        this.hp = this.maxHp;
+        this.mana = this.maxMana;
+      }
+    }
+  }
+
+  takeDamage(amount) {
+    const raw = Math.max(1, +amount || 1);
+    const armor = this.getStats().armor || 0;
+    const reduced = Math.max(1, raw * (100 / (100 + armor * 12)));
+    const dealt = Math.round(reduced);
+
+    this.hp = Math.max(0, this.hp - dealt);
+    this.state.hurtT = 0.20;
+    return dealt;
+  }
+
+  draw(ctx) {
+    const hurt = (this.state?.hurtT || 0) > 0;
+    const sailing = !!this.state?.sailing;
+    const facing = norm(this.lastMove?.x || 1, this.lastMove?.y || 0);
+    const bob = Math.sin(this._animWalk) * 1.5;
+    const legA = Math.sin(this._animWalk) * 4;
+    const legB = Math.sin(this._animWalk + Math.PI) * 4;
+
+    ctx.save();
+    ctx.translate(this.x, this.y + bob);
+
+    ctx.fillStyle = sailing ? "rgba(0,0,0,0.16)" : "rgba(0,0,0,0.20)";
+    ctx.beginPath();
+    ctx.ellipse(0, 16, sailing ? 16 : 12, sailing ? 7 : 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (sailing) {
+      this._drawBoat(ctx, facing);
+      this._drawHeroUpper(ctx, facing, hurt, true);
+      ctx.restore();
+      return;
+    }
+
+    this._drawCape(ctx, facing, hurt);
+    this._drawLeg(ctx, -5, 8, legA, this.equip?.boots, hurt);
+    this._drawLeg(ctx, 5, 8, legB, this.equip?.boots, hurt);
+    this._drawHeroTorso(ctx, hurt);
+    this._drawArmor(ctx, this.equip?.armor || this.equip?.chest, hurt);
+    this._drawAccessoryGlow(ctx, hurt);
+    this._drawArm(ctx, -8, -1, -0.3, hurt, false);
+    this._drawWeaponArm(ctx, facing, hurt);
+    this._drawHead(ctx, hurt);
+    this._drawHelm(ctx, this.equip?.helm, hurt);
+
+    ctx.fillStyle = hurt ? "#ffb9b9" : "#e6d7a4";
+    ctx.fillRect(-4, 4, 8, 2);
+
+    ctx.restore();
+  }
+
+  _drawBoat(ctx, facing) {
+    ctx.save();
+    ctx.translate(0, 4);
+
+    ctx.fillStyle = "#5d3e22";
+    ctx.beginPath();
+    ctx.moveTo(-18, 6);
+    ctx.lineTo(-10, -6);
+    ctx.lineTo(10, -6);
+    ctx.lineTo(18, 6);
+    ctx.lineTo(12, 10);
+    ctx.lineTo(-12, 10);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "#84562f";
+    ctx.beginPath();
+    ctx.moveTo(-14, 4);
+    ctx.lineTo(-8, -2);
+    ctx.lineTo(8, -2);
+    ctx.lineTo(14, 4);
+    ctx.lineTo(9, 7);
+    ctx.lineTo(-9, 7);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(255,255,255,0.15)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-7, 0);
+    ctx.lineTo(7, 0);
+    ctx.stroke();
+
+    ctx.strokeStyle = "rgba(210,235,255,0.38)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(-facing.x * 10 - 4, -facing.y * 6 + 9);
+    ctx.lineTo(-facing.x * 16 - 7, -facing.y * 10 + 12);
+    ctx.moveTo(-facing.x * 10 + 4, -facing.y * 6 + 9);
+    ctx.lineTo(-facing.x * 16 + 7, -facing.y * 10 + 12);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  _drawHeroUpper(ctx, facing, hurt, seated = false) {
+    this._drawHead(ctx, hurt);
+    this._drawHelm(ctx, this.equip?.helm, hurt);
+
+    ctx.fillStyle = hurt ? "#d76e78" : "#7b4d9c";
+    if (typeof ctx.roundRect === "function") {
+      ctx.beginPath();
+      ctx.roundRect(-7, -2, 14, 12, 4);
+      ctx.fill();
+    } else {
+      ctx.fillRect(-7, -2, 14, 12);
+    }
+
+    this._drawArmor(ctx, this.equip?.armor || this.equip?.chest, hurt);
+    this._drawWeaponArm(ctx, facing, hurt, seated);
+  }
+
+  _drawCape(ctx, facing, hurt) {
+    ctx.save();
+    const sway = facing.x * 2.4;
+    ctx.fillStyle = hurt ? "#873c46" : "#5b2f6e";
+    ctx.beginPath();
+    ctx.moveTo(-7, -2);
+    ctx.lineTo(-11 - sway, 10);
+    ctx.lineTo(0, 15);
+    ctx.lineTo(11 - sway, 10);
+    ctx.lineTo(7, -2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  _drawLeg(ctx, x, y, swing, boots, hurt) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(swing * 0.03);
+
+    ctx.fillStyle = hurt ? "#6d5f6f" : "#4f5b74";
+    ctx.fillRect(-2.5, 0, 5, 10);
+
+    const bootColor = boots ? this._gearVisualColor(boots, "#7a5b42") : "#684f39";
+    ctx.fillStyle = hurt ? "#8b7070" : bootColor;
+    ctx.fillRect(-3.5, 9, 7, 4);
+
+    ctx.restore();
+  }
+
+  _drawHeroTorso(ctx, hurt) {
+    ctx.fillStyle = hurt ? "#936a72" : "#55698a";
+    ctx.beginPath();
+    ctx.moveTo(-8, -2);
+    ctx.lineTo(8, -2);
+    ctx.lineTo(10, 8);
+    ctx.lineTo(0, 13);
+    ctx.lineTo(-10, 8);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = hurt ? "#b88c8c" : "#d0d8ea";
+    ctx.fillRect(-3, 1, 6, 7);
+  }
+
+  _drawArmor(ctx, armorItem, hurt) {
+    if (!armorItem) return;
+
+    const col = this._gearVisualColor(armorItem, "#8994a8");
+    const trim = this._gearTrimColor(armorItem);
+
+    ctx.fillStyle = hurt ? "#9f7e7e" : col;
+    ctx.beginPath();
+    ctx.moveTo(-9, -2);
+    ctx.lineTo(9, -2);
+    ctx.lineTo(10, 8);
+    ctx.lineTo(0, 13);
+    ctx.lineTo(-10, 8);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = hurt ? "#d4a7a7" : trim;
+    ctx.fillRect(-5, 0, 10, 2);
+    ctx.fillRect(-4, 4, 8, 5);
+
+    ctx.fillStyle = hurt ? "#ac8b8b" : this._shade(col, -18);
+    ctx.fillRect(-11, 0, 3, 5);
+    ctx.fillRect(8, 0, 3, 5);
+  }
+
+  _drawAccessoryGlow(ctx, hurt) {
+    const ring = this.equip?.ring;
+    const trinket = this.equip?.trinket;
+    if (!ring && !trinket) return;
+
+    ctx.save();
+    ctx.globalAlpha = hurt ? 0.45 : 0.85;
+
+    ctx.fillStyle = ring ? "#ffd97a" : "#9ad4ff";
+    ctx.beginPath();
+    ctx.arc(6, 1, 1.8, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (trinket) {
+      ctx.fillStyle = "#aee0ff";
+      ctx.beginPath();
+      ctx.arc(-6, 2, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  _drawArm(ctx, x, y, rot, hurt, weaponSide = false) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rot);
+
+    ctx.fillStyle = hurt ? "#e3a3a3" : "#f2c7a7";
+    ctx.fillRect(-2, 0, 4, 10);
+
+    if (!weaponSide) {
+      ctx.fillStyle = hurt ? "#9f7e7e" : "#6b7894";
+      ctx.fillRect(-2.5, -1, 5, 4);
+    }
+
+    ctx.restore();
+  }
+
+  _drawWeaponArm(ctx, facing, hurt, seated = false) {
+    const angle = Math.atan2(facing.y, facing.x);
+    const armX = 8;
+    const armY = -1;
+
+    ctx.save();
+    ctx.translate(armX, armY);
+    ctx.rotate(angle);
+
+    ctx.fillStyle = hurt ? "#e3a3a3" : "#f2c7a7";
+    ctx.fillRect(-2, -1, 4, 11);
+
+    ctx.fillStyle = hurt ? "#9f7e7e" : "#6b7894";
+    ctx.fillRect(-2.5, -2, 5, 4);
+
+    const weapon = this.equip?.weapon;
+    this._drawWeapon(ctx, weapon, hurt, seated);
+
+    ctx.restore();
+  }
+
+  _drawWeapon(ctx, weaponItem, hurt, seated = false) {
+    const wcol = weaponItem ? this._gearVisualColor(weaponItem, "#b6bcc7") : "#a9b0bc";
+    const trim = weaponItem ? this._gearTrimColor(weaponItem) : "#e7edf8";
+    const kind = (weaponItem?.name || "").toLowerCase();
+
+    ctx.fillStyle = hurt ? "#866b6b" : "#6e4c2e";
+    ctx.fillRect(-1.5, 7, 3, 11);
+
+    if (kind.includes("spear") || kind.includes("pike")) {
+      ctx.fillStyle = hurt ? "#b7a3a3" : wcol;
+      ctx.fillRect(-1, -8, 2, 18);
+
+      ctx.fillStyle = hurt ? "#f0bcbc" : trim;
+      ctx.beginPath();
+      ctx.moveTo(0, -13);
+      ctx.lineTo(5, -5);
+      ctx.lineTo(0, -2);
+      ctx.lineTo(-5, -5);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      ctx.fillStyle = hurt ? "#b9a6a6" : wcol;
+      ctx.fillRect(-2.5, -10, 5, 18);
+
+      ctx.fillStyle = hurt ? "#f1c0c0" : trim;
+      ctx.beginPath();
+      ctx.moveTo(-2.5, -10);
+      ctx.lineTo(0, -15);
+      ctx.lineTo(2.5, -10);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = hurt ? "#8e7070" : "#8d6a3c";
+      ctx.fillRect(-5, 6, 10, 2.5);
+    }
+
+    if (!seated && weaponItem?.rarity === "epic") {
+      ctx.save();
+      ctx.globalAlpha = 0.22;
+      ctx.strokeStyle = trim;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(0, -6, 6, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  _drawHead(ctx, hurt) {
+    ctx.fillStyle = hurt ? "#e6a8a8" : "#f3c7a5";
+    ctx.beginPath();
+    ctx.arc(0, -9, 7.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = hurt ? "#5d3f3f" : "#5a3829";
+    ctx.beginPath();
+    ctx.arc(0, -11, 7.5, Math.PI, 0);
+    ctx.fill();
+
+    ctx.fillStyle = "#1b1e24";
+    ctx.fillRect(-3.5, -9, 1.5, 1.5);
+    ctx.fillRect(2, -9, 1.5, 1.5);
+  }
+
+  _drawHelm(ctx, helmItem, hurt) {
+    if (!helmItem) return;
+
+    const base = this._gearVisualColor(helmItem, "#8d97a6");
+    const trim = this._gearTrimColor(helmItem);
+
+    ctx.fillStyle = hurt ? "#ab8b8b" : base;
+    ctx.beginPath();
+    ctx.arc(0, -10.5, 8, Math.PI, 0);
+    ctx.fill();
+    ctx.fillRect(-6.5, -10.5, 13, 3.5);
+
+    ctx.fillStyle = hurt ? "#d6a7a7" : trim;
+    ctx.fillRect(-2, -16, 4, 3);
+
+    if (
+      helmItem?.rarity === "rare" ||
+      helmItem?.rarity === "epic" ||
+      (helmItem?.name || "").toLowerCase().includes("helm")
+    ) {
+      ctx.fillStyle = hurt ? "#9d7a7a" : this._shade(base, -16);
+      ctx.fillRect(-7, -8, 2, 5);
+      ctx.fillRect(5, -8, 2, 5);
+    }
+  }
+
+  _gearVisualColor(item, fallback) {
+    const slot = item?.slot || "";
+    const rarity = item?.rarity || "common";
+
+    if (slot === "weapon") {
+      if (rarity === "epic") return "#cab7ff";
+      if (rarity === "rare") return "#b7ddff";
+      if (rarity === "uncommon") return "#c2d8c4";
+      return "#c2c7cf";
+    }
+
+    if (slot === "armor" || slot === "chest" || slot === "helm") {
+      if (rarity === "epic") return "#7860b2";
+      if (rarity === "rare") return "#5c7faa";
+      if (rarity === "uncommon") return "#6b8560";
+      return "#7f8a97";
+    }
+
+    if (slot === "boots") {
+      if (rarity === "epic") return "#7d60a8";
+      if (rarity === "rare") return "#637da0";
+      if (rarity === "uncommon") return "#6f6b44";
+      return "#7a5b42";
+    }
+
+    return fallback;
+  }
+
+  _gearTrimColor(item) {
+    const rarity = item?.rarity || "common";
+    if (rarity === "epic") return "#ead4ff";
+    if (rarity === "rare") return "#d6f0ff";
+    if (rarity === "uncommon") return "#def6c9";
+    return "#e5dcc2";
+  }
+
+  _shade(hex, amt = 0) {
+    const s = String(hex || "#888888").replace("#", "");
+    if (s.length !== 6) return hex;
+    const r = clamp(parseInt(s.slice(0, 2), 16) + amt, 0, 255);
+    const g = clamp(parseInt(s.slice(2, 4), 16) + amt, 0, 255);
+    const b = clamp(parseInt(s.slice(4, 6), 16) + amt, 0, 255);
+    return `rgb(${r},${g},${b})`;
+  }
+}
+
+/* =========================================================
+   ENEMY
+========================================================= */
+
+export class Enemy {
+  constructor(x = 0, y = 0, level = 1, kind = "blob", seed = 1, elite = false) {
+    this.x = x;
+    this.y = y;
+    this.seed = seed | 0;
+    this.kind = kind || "blob";
+    this.level = Math.max(1, level | 0);
+    this.tier = Math.max(1, Math.floor((this.level + 1) / 3));
+    this.elite = !!elite;
+    this.boss = false;
+
+    this.alive = true;
+    this.dead = false;
+
+    this.home = { x, y };
+    this.campId = null;
+
+    this._rng = new RNG(hash2(this.seed, 8801));
+    this._wanderA = this._rng.float() * Math.PI * 2;
+    this._attackCd = 0;
+    this._specialCd = 1.1 + this._rng.float() * 1.8;
+    this._hurtT = 0;
+    this._anim = this._rng.float() * 10;
+
+    if (this.kind === "brute") {
+      this.r = 15;
+      this.speed = 58 + this.level * 0.45;
+      this.touchDps = 7 + this.level * 0.48;
+      this.maxHp = 42 + this.level * 9;
+      this.color = "#8f5c4f";
+    } else if (this.kind === "stalker") {
+      this.r = 11;
+      this.speed = 92 + this.level * 0.75;
+      this.touchDps = 5 + this.level * 0.42;
+      this.maxHp = 28 + this.level * 6;
+      this.color = "#5f7b58";
+    } else if (this.kind === "caster") {
+      this.r = 11;
+      this.speed = 50 + this.level * 0.35;
+      this.touchDps = 3 + this.level * 0.20;
+      this.maxHp = 24 + this.level * 5;
+      this.color = "#6c62a8";
+    } else {
+      this.kind = "blob";
+      this.r = 12;
+      this.speed = 68 + this.level * 0.5;
+      this.touchDps = 4 + this.level * 0.30;
+      this.maxHp = 30 + this.level * 6;
+      this.color = "#8e4b4b";
+    }
+
+    if (this.elite) {
+      this.maxHp = Math.round(this.maxHp * 1.75);
+      this.touchDps *= 1.28;
+      this.speed *= 1.08;
+      this.r += 2;
+    }
+
+    this.radius = this.r;
+    this.hp = this.maxHp;
+    this.vx = 0;
+    this.vy = 0;
+  }
+
+  update(dt, hero, world, game) {
+    if (!this.alive || !hero) return;
+
+    this._anim += dt * (2 + this.speed * 0.02);
+    this._attackCd = Math.max(0, this._attackCd - dt);
+    this._specialCd = Math.max(0, this._specialCd - dt);
+    this._hurtT = Math.max(0, this._hurtT - dt);
+
+    const dx = hero.x - this.x;
+    const dy = hero.y - this.y;
+    const d2 = dx * dx + dy * dy;
+    const d = Math.sqrt(d2 || 1);
+
+    const calmHome =
+      this.campId != null &&
+      game?.menu?.open === "shop" &&
+      game?.shop?.campId === this.campId;
+
+    let targetX = this.x;
+    let targetY = this.y;
+    let desiredSpeed = this.speed;
+
+    if (calmHome) {
+      targetX = this.home?.x ?? this.x;
+      targetY = this.home?.y ?? this.y;
+      desiredSpeed *= 0.85;
+    } else if (this.kind === "caster") {
+      if (d < 120) {
+        targetX = this.x - dx;
+        targetY = this.y - dy;
+      } else if (d < 280) {
+        targetX = hero.x;
+        targetY = hero.y;
+      } else {
+        this._wanderA += dt * 0.55;
+        targetX = (this.home?.x ?? this.x) + Math.cos(this._wanderA) * 22;
+        targetY = (this.home?.y ?? this.y) + Math.sin(this._wanderA) * 22;
+        desiredSpeed *= 0.6;
+      }
+
+      if (this._specialCd <= 0 && d < 260 && game?.projectiles) {
+        this._specialCd = this.elite ? 1.6 : 2.3;
+        const n = norm(dx, dy);
+        game.projectiles.push(
+          new Projectile(
+            this.x + n.x * 14,
+            this.y + n.y * 14,
+            n.x * 170,
+            n.y * 170,
+            4 + this.level * 0.85 + (this.elite ? 3 : 0),
+            1.8,
+            this.level,
+            {
+              friendly: false,
+              onHitHero: true,
+              color: this.elite ? "rgba(255,164,120,0.96)" : "rgba(204,172,255,0.94)",
+              radius: this.elite ? 5 : 4,
+              hitRadius: this.elite ? 20 : 17,
+            }
+          )
+        );
+      }
+    } else if (d < 260) {
+      targetX = hero.x;
+      targetY = hero.y;
+      if (this.kind === "stalker") desiredSpeed *= 1.16;
+      if (this.kind === "brute") desiredSpeed *= 0.96;
+    } else {
+      this._wanderA += dt * (0.45 + (this.seed % 5) * 0.02);
+      const hr = this.kind === "brute" ? 18 : 30;
+      targetX = (this.home?.x ?? this.x) + Math.cos(this._wanderA) * hr;
+      targetY = (this.home?.y ?? this.y) + Math.sin(this._wanderA) * hr;
+      desiredSpeed *= 0.52;
+    }
+
+    const n = norm(targetX - this.x, targetY - this.y);
+    this.vx += (n.x * desiredSpeed - this.vx) * 0.12;
+    this.vy += (n.y * desiredSpeed - this.vy) * 0.12;
+
+    const nx = this.x + this.vx * dt;
+    const ny = this.y + this.vy * dt;
+
+    if (!world) {
+      this.x = nx;
+      this.y = ny;
+    } else {
+      if (world.canWalk?.(nx, this.y)) this.x = nx;
+      else this.vx *= -0.15;
+
+      if (world.canWalk?.(this.x, ny)) this.y = ny;
+      else this.vy *= -0.15;
+    }
+  }
+
+  takeDamage(amount) {
+    const dmg = Math.max(1, Math.round(amount || 1));
+    this.hp -= dmg;
+    this._hurtT = 0.16;
 
     if (this.hp <= 0) {
       this.hp = 0;
@@ -289,934 +836,312 @@ export class Hero {
     }
   }
 
-  getStats() {
-    let dmg = 10;
-    let armor = 2;
-    let crit = 0.05;
-    let critMult = 1.7;
-
-    for (const key of Object.keys(this.equip || {})) {
-      const it = this.equip[key];
-      if (!it?.stats) continue;
-
-      dmg += it.stats.dmg || 0;
-      armor += it.stats.armor || 0;
-      crit += it.stats.crit || 0;
-      critMult += it.stats.critMult || 0;
-    }
-
-    return {
-      dmg,
-      armor,
-      crit,
-      critMult,
-      maxHp: this.maxHp,
-      maxMana: this.maxMana,
-    };
+  xpValue() {
+    const base = 5 + this.level * 1.2;
+    if (this.boss) return Math.round(base * 5.0);
+    if (this.elite) return Math.round(base * 2.1);
+    return Math.round(base);
   }
 
-  takeDamage(amount = 0) {
-    const stats = this.getStats();
-    const reduced = Math.max(1, amount - (stats.armor || 0) * 0.35);
-    this.hp = Math.max(0, this.hp - reduced);
-    this.state.hurtT = 0.18;
-
-    if (this.hp <= 0) {
-      this.alive = false;
-      this.dead = true;
-    }
-
-    return Math.round(reduced);
-  }
-
-  spendMana(cost = 0) {
-    if (this.mana < cost) return false;
-    this.mana -= cost;
-    return true;
-  }
-
-  heal(amount = 0) {
-    this.hp = clamp(this.hp + amount, 0, this.maxHp);
-  }
-
-  restoreMana(amount = 0) {
-    this.mana = clamp(this.mana + amount, 0, this.maxMana);
-  }
-
-  gainXp(amount = 0) {
-    this.xp += Math.max(0, amount | 0);
-
-    while (this.xp >= this.nextXp) {
-      this.xp -= this.nextXp;
-      this.level += 1;
-      this.nextXp = Math.floor(this.nextXp * 1.22 + 8);
-      this.maxHp += 10;
-      this.maxMana += 6;
-      this.hp = this.maxHp;
-      this.mana = this.maxMana;
-    }
-  }
-
-  giveXP(amount = 0) {
-    this.gainXp(amount);
-  }
-
-  usePotion(kind = "hp") {
-    const st = this.getStats();
-
-    if (kind === "hp") {
-      if ((this.potions.hp || 0) <= 0) return false;
-      if (this.hp >= st.maxHp) return false;
-      this.hp = Math.min(st.maxHp, this.hp + 45);
-      this.potions.hp -= 1;
-      return true;
-    }
-
-    if (kind === "mana") {
-      if ((this.potions.mana || 0) <= 0) return false;
-      if (this.mana >= st.maxMana) return false;
-      this.mana = Math.min(st.maxMana, this.mana + 35);
-      this.potions.mana -= 1;
-      return true;
-    }
-
-    return false;
+  lootBonus() {
+    if (this.boss) return 4;
+    if (this.elite) return 2;
+    return 0;
   }
 
   draw(ctx) {
-    const moving = Math.abs(this.vx) + Math.abs(this.vy) > 4;
-    const bob = moving ? Math.sin(this.animT) * 0.8 : 0;
-
-    const fx = this.lastMove.x || 1;
-    const fy = this.lastMove.y || 0;
+    const hurt = this._hurtT > 0;
+    const bob = Math.sin(this._anim) * (this.kind === "blob" ? 1.5 : 1.0);
 
     ctx.save();
     ctx.translate(this.x, this.y + bob);
 
     ctx.fillStyle = "rgba(0,0,0,0.18)";
     ctx.beginPath();
-    ctx.ellipse(0, 10, 8, 3.5, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, this.r + 4, this.r * 0.9, 4 + this.r * 0.18, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = this.state.hurtT > 0 ? "#ffd3d3" : "#e9eef8";
+    if (this.kind === "brute") this._drawBrute(ctx, hurt);
+    else if (this.kind === "stalker") this._drawStalker(ctx, hurt);
+    else if (this.kind === "caster") this._drawCaster(ctx, hurt);
+    else this._drawBlob(ctx, hurt);
+
+    if (this.elite || this.boss) {
+      ctx.strokeStyle = this.boss ? "rgba(255,158,112,0.95)" : "rgba(255,224,140,0.92)";
+      ctx.lineWidth = this.boss ? 2.5 : 2;
+      ctx.beginPath();
+      ctx.arc(0, -this.r * 0.2, this.r + 3, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    if (this.hp < this.maxHp || this.elite || this.boss) {
+      const w = Math.max(22, this.r * 2.2);
+      const p = clamp(this.hp / Math.max(1, this.maxHp), 0, 1);
+
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.fillRect(-w * 0.5, -this.r - 14, w, 4);
+
+      ctx.fillStyle = this.boss ? "#ff8b6b" : this.elite ? "#f1ca5e" : "#d85f76";
+      ctx.fillRect(-w * 0.5, -this.r - 14, w * p, 4);
+    }
+
+    ctx.restore();
+  }
+
+  _drawBlob(ctx, hurt) {
+    ctx.fillStyle = hurt ? "#d78383" : this.color;
     ctx.beginPath();
-    ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+    ctx.arc(0, 0, this.r, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = "#55627a";
+    ctx.fillStyle = hurt ? "#f1b0b0" : "#c86868";
     ctx.beginPath();
-    ctx.arc(0, 0, this.radius - 3.2, 0, Math.PI * 2);
+    ctx.arc(-5, -3, 4, 0, Math.PI * 2);
+    ctx.arc(4, -1, 5, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = "#f2d5bf";
+    ctx.fillStyle = "#13161d";
+    ctx.fillRect(-4.5, -2, 2, 2);
+    ctx.fillRect(2.5, -2, 2, 2);
+  }
+
+  _drawBrute(ctx, hurt) {
+    ctx.fillStyle = hurt ? "#cf9690" : "#7f564d";
+    if (typeof ctx.roundRect === "function") {
+      ctx.beginPath();
+      ctx.roundRect(-this.r, -this.r + 2, this.r * 2, this.r * 2 - 2, 5);
+      ctx.fill();
+    } else {
+      ctx.fillRect(-this.r, -this.r + 2, this.r * 2, this.r * 2 - 2);
+    }
+
+    ctx.fillStyle = hurt ? "#e6b4ac" : "#b6866c";
+    ctx.fillRect(-this.r + 3, -this.r + 5, this.r * 2 - 6, 6);
+
+    ctx.fillStyle = "#222831";
+    ctx.fillRect(-6, -3, 3, 3);
+    ctx.fillRect(3, -3, 3, 3);
+
+    ctx.fillStyle = hurt ? "#c28282" : "#604139";
+    ctx.fillRect(-this.r - 2, 2, 4, 7);
+    ctx.fillRect(this.r - 2, 2, 4, 7);
+  }
+
+  _drawStalker(ctx, hurt) {
+    ctx.fillStyle = hurt ? "#95b58e" : "#58724f";
     ctx.beginPath();
-    ctx.arc(0, -2, 5.3, 0, Math.PI * 2);
+    ctx.arc(0, 0, this.r, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.strokeStyle = "#242a35";
-    ctx.lineWidth = 2.2;
+    ctx.fillStyle = hurt ? "#b5d7ad" : "#86a177";
     ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(fx * 13, fy * 13);
+    ctx.moveTo(-this.r + 2, -1);
+    ctx.lineTo(0, -this.r - 5);
+    ctx.lineTo(this.r - 2, -1);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "#14181e";
+    ctx.fillRect(-4, -2, 2, 2);
+    ctx.fillRect(2, -2, 2, 2);
+  }
+
+  _drawCaster(ctx, hurt) {
+    ctx.fillStyle = hurt ? "#a39bcf" : "#6054a6";
+    ctx.beginPath();
+    ctx.arc(0, 0, this.r - 1, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = hurt ? "#c9c3ea" : "#a79be2";
+    ctx.beginPath();
+    ctx.arc(0, -this.r + 2, 7, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#151924";
+    ctx.fillRect(-3.5, -1, 2, 2);
+    ctx.fillRect(1.5, -1, 2, 2);
+
+    ctx.strokeStyle = hurt ? "#f1c9c9" : "#d5d0ff";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, this.r + 4, Math.PI * 0.15, Math.PI * 0.85);
     ctx.stroke();
-
-    ctx.fillStyle = "#242a35";
-    ctx.beginPath();
-    ctx.arc(-1.7, -3.2, 0.9, 0, Math.PI * 2);
-    ctx.arc(1.7, -3.2, 0.9, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.restore();
   }
 }
 
-/* ===========================
-   ENEMY
-=========================== */
-
-export class Enemy {
-  constructor(x = 0, y = 0, tier = 1, kind = "blob", seed = 1, elite = null) {
-    this.x = x;
-    this.y = y;
-
-    this.vx = 0;
-    this.vy = 0;
-
-    this.tier = Math.max(1, tier | 0);
-    this.kind = kind || "blob";
-    this.seed = seed | 0;
-
-    if (elite == null) {
-      const eliteRoll = Math.abs(hash2((x * 0.25) | 0, (y * 0.25) | 0, seed | 0)) % 100;
-      this.elite = eliteRoll < 9;
-    } else {
-      this.elite = !!elite;
-    }
-
-    this.r = this.kind === "brute" ? 16 : this.kind === "stalker" ? 11 : this.kind === "caster" ? 12 : 13;
-    if (this.elite) this.r += 3;
-    this.radius = this.r;
-
-    this.speed =
-      this.kind === "stalker" ? 92 + this.tier * 2 :
-      this.kind === "brute" ? 52 + this.tier * 1.4 :
-      this.kind === "caster" ? 58 + this.tier * 1.5 :
-      68 + this.tier * 1.8;
-
-    if (this.elite) this.speed *= 1.08;
-
-    this.maxHp =
-      this.kind === "brute" ? 34 + this.tier * 16 :
-      this.kind === "caster" ? 20 + this.tier * 9 :
-      this.kind === "stalker" ? 22 + this.tier * 10 :
-      26 + this.tier * 12;
-
-    if (this.elite) this.maxHp = Math.round(this.maxHp * 1.85);
-    this.hp = this.maxHp;
-
-    this.touchDps =
-      this.kind === "brute" ? 18 + this.tier * 1.6 :
-      this.kind === "stalker" ? 14 + this.tier * 1.2 :
-      this.kind === "caster" ? 10 + this.tier :
-      12 + this.tier * 1.1;
-
-    if (this.elite) this.touchDps *= 1.35;
-
-    this.alive = true;
-    this.dead = false;
-    this.hitFlash = 0;
-    this.animT = Math.random() * Math.PI * 2;
-    this.attackCd = 0;
-
-    this.variant = Math.abs(hash2((x * 7) | 0, (y * 7) | 0, seed)) % 4;
-
-    this.home = { x, y };
-    this.campId = null;
-
-    this.state = "idle";
-    this.aggroT = 0;
-    this.wanderT = 0;
-    this.wanderDir = { x: 0, y: 0 };
-
-    this.behaviorSeed = Math.abs(hash2(x | 0, y | 0, seed | 0)) % 10000;
-    this.sideSign = (this.behaviorSeed % 2 === 0) ? 1 : -1;
-
-    this.strafeT = 0;
-    this.burstShotsLeft = 0;
-    this.burstGapT = 0;
-    this.chargeT = 0;
-    this.cooldownT = 0;
-    this.pulse = 0;
-    this.lungeDir = { x: 0, y: 0 };
-
-    this.preferredRange =
-      this.kind === "caster" ? 180 + (this.behaviorSeed % 30) :
-      this.kind === "stalker" ? 120 + (this.behaviorSeed % 24) :
-      this.kind === "brute" ? 70 + (this.behaviorSeed % 16) :
-      92 + (this.behaviorSeed % 18);
-  }
-
-  xpValue() {
-    const base =
-      this.kind === "brute" ? 9 :
-      this.kind === "caster" ? 8 :
-      this.kind === "stalker" ? 7 :
-      6;
-
-    return Math.round((base + this.tier * 2) * (this.elite ? 2.2 : 1));
-  }
-
-  lootBonus() {
-    return this.elite ? 2 : 0;
-  }
-
-  update(dt, hero, world, game) {
-    if (!this.alive || !hero) return;
-
-    this.animT += dt * (this.elite ? 7.8 : 6.1);
-    this.hitFlash = Math.max(0, this.hitFlash - dt * 6);
-    this.attackCd = Math.max(0, this.attackCd - dt);
-    this.aggroT = Math.max(0, this.aggroT - dt);
-    this.wanderT = Math.max(0, this.wanderT - dt);
-    this.strafeT = Math.max(0, this.strafeT - dt);
-    this.burstGapT = Math.max(0, this.burstGapT - dt);
-    this.chargeT = Math.max(0, this.chargeT - dt);
-    this.cooldownT = Math.max(0, this.cooldownT - dt);
-    this.pulse += dt * (this.elite ? 1.6 : 1.2);
-
-    const hx = hero.x;
-    const hy = hero.y;
-    const dx = hx - this.x;
-    const dy = hy - this.y;
-    const d = Math.hypot(dx, dy) || 0.0001;
-    const toHero = { x: dx / d, y: dy / d };
-    const side = { x: -toHero.y * this.sideSign, y: toHero.x * this.sideSign };
-
-    const home = this.home || { x: this.x, y: this.y };
-    const hdx = hx - home.x;
-    const hdy = hy - home.y;
-    const heroFromHome = Math.hypot(hdx, hdy);
-
-    const backDx = home.x - this.x;
-    const backDy = home.y - this.y;
-    const distFromHome = Math.hypot(backDx, backDy);
-
-    const campAggroRadius =
-      this.kind === "stalker" ? 240 :
-      this.kind === "caster" ? 220 :
-      this.kind === "brute" ? 200 :
-      210;
-
-    const leashRadius =
-      this.kind === "stalker" ? 320 :
-      this.kind === "caster" ? 300 :
-      this.kind === "brute" ? 260 :
-      280;
-
-    const hardLeash =
-      this.kind === "stalker" ? 420 :
-      this.kind === "caster" ? 390 :
-      this.kind === "brute" ? 340 :
-      360;
-
-    const directAggroRadius =
-      this.kind === "stalker" ? 150 :
-      this.kind === "caster" ? 170 :
-      this.kind === "brute" ? 110 :
-      135;
-
-    const aggroBoost = this.elite ? 1.15 : 1.0;
-
-    if (d < directAggroRadius * aggroBoost || heroFromHome < campAggroRadius * aggroBoost) {
-      this.aggroT = 2.8;
-      this.state = "aggro";
-    }
-
-    if (distFromHome > hardLeash) {
-      this.state = "return";
-      this.aggroT = 0;
-      this.chargeT = 0;
-      this.burstShotsLeft = 0;
-    } else if (this.aggroT <= 0) {
-      if (distFromHome > leashRadius) this.state = "return";
-      else if (this.state === "aggro") this.state = "idle";
-    }
-
-    let move = { x: 0, y: 0 };
-    let moveSpeed = this.speed * 0.92;
-
-    if (this.state === "aggro") {
-      if (this.kind === "stalker") {
-        this._updateStalker(dt, d, toHero, side);
-        move = this._stalkerMove(d, toHero, side);
-        moveSpeed = this.speed * (this.elite ? 1.06 : 1.0);
-      } else if (this.kind === "brute") {
-        this._updateBrute(dt, d, toHero);
-        move = this._bruteMove(d, toHero);
-        moveSpeed = this.speed;
-      } else if (this.kind === "caster") {
-        this._updateCaster(dt, d, toHero, side, game);
-        move = this._casterMove(d, toHero, side);
-        moveSpeed = this.speed * 0.95;
-      } else {
-        this._updateBlob(dt, d, toHero, side);
-        move = this._blobMove(d, toHero, side);
-        moveSpeed = this.speed * 0.98;
-      }
-    } else if (this.state === "return") {
-      const bd = Math.hypot(backDx, backDy) || 0.0001;
-      move.x = backDx / bd;
-      move.y = backDy / bd;
-      moveSpeed = this.speed * 0.82;
-
-      if (bd < 12) {
-        this.state = "idle";
-        this.wanderT = 0;
-        this.chargeT = 0;
-      }
-    } else {
-      if (this.wanderT <= 0) {
-        this.wanderT = 0.8 + Math.random() * 1.5;
-        const ang = Math.random() * Math.PI * 2;
-        this.wanderDir.x = Math.cos(ang);
-        this.wanderDir.y = Math.sin(ang);
-      }
-
-      move.x = this.wanderDir.x;
-      move.y = this.wanderDir.y;
-      moveSpeed = this.speed * 0.34;
-
-      if (distFromHome > 70) {
-        const bd = Math.hypot(backDx, backDy) || 1;
-        move.x = backDx / bd;
-        move.y = backDy / bd;
-        moveSpeed = this.speed * 0.48;
-      }
-    }
-
-    const len = Math.hypot(move.x, move.y) || 1;
-    move.x /= len;
-    move.y /= len;
-
-    const nx = this.x + move.x * moveSpeed * dt;
-    const ny = this.y + move.y * moveSpeed * dt;
-
-    if (!world?.canWalk || world.canWalk(nx, this.y)) this.x = nx;
-    if (!world?.canWalk || world.canWalk(this.x, ny)) this.y = ny;
-  }
-
-  _updateBlob(dt, d, toHero, side) {
-    if (this.strafeT <= 0) {
-      this.strafeT = 0.8 + ((this.behaviorSeed % 40) / 40) * 0.8;
-      this.sideSign *= -1;
-    }
-
-    if (d < 78 && this.cooldownT <= 0) {
-      this.cooldownT = this.elite ? 0.55 : 0.7;
-      this.sideSign *= -1;
-    }
-
-    void dt;
-    void toHero;
-    void side;
-  }
-
-  _blobMove(d, toHero, side) {
-    const push = d > 95 ? 1.0 : d < 64 ? -0.22 : 0.48;
-    const wobble = 0.36 + Math.sin(this.pulse * 5 + this.variant) * 0.16;
-
-    return {
-      x: toHero.x * push + side.x * wobble,
-      y: toHero.y * push + side.y * wobble,
-    };
-  }
-
-  _updateStalker(dt, d, toHero, side) {
-    if (this.strafeT <= 0) {
-      this.strafeT = 1.1 + ((this.behaviorSeed % 55) / 55) * 0.8;
-      this.sideSign *= -1;
-    }
-
-    if (this.chargeT <= 0 && this.cooldownT <= 0 && d > 75 && d < 165) {
-      this.chargeT = this.elite ? 0.42 : 0.32;
-      this.cooldownT = this.elite ? 1.2 : 1.45;
-      this.lungeDir = {
-        x: toHero.x * 0.92 + side.x * 0.18,
-        y: toHero.y * 0.92 + side.y * 0.18,
-      };
-      const ln = Math.hypot(this.lungeDir.x, this.lungeDir.y) || 1;
-      this.lungeDir.x /= ln;
-      this.lungeDir.y /= ln;
-    }
-
-    void dt;
-    void d;
-  }
-
-  _stalkerMove(d, toHero, side) {
-    if (this.chargeT > 0) {
-      return {
-        x: this.lungeDir.x,
-        y: this.lungeDir.y,
-      };
-    }
-
-    const distBias = d > this.preferredRange ? 0.84 : d < 78 ? -0.34 : 0.12;
-    const orbit = 1.15;
-
-    return {
-      x: toHero.x * distBias + side.x * orbit,
-      y: toHero.y * distBias + side.y * orbit,
-    };
-  }
-
-  _updateBrute(dt, d, toHero) {
-    if (this.chargeT <= 0 && this.cooldownT <= 0 && d > 58 && d < 150) {
-      this.chargeT = this.elite ? 0.78 : 0.62;
-      this.cooldownT = this.elite ? 1.9 : 2.25;
-      this.lungeDir = { x: toHero.x, y: toHero.y };
-    }
-
-    void dt;
-  }
-
-  _bruteMove(d, toHero) {
-    if (this.chargeT > 0.36) {
-      return { x: 0, y: 0 };
-    }
-
-    if (this.chargeT > 0) {
-      return {
-        x: this.lungeDir.x,
-        y: this.lungeDir.y,
-      };
-    }
-
-    if (d < 66) {
-      return {
-        x: toHero.x * 0.28,
-        y: toHero.y * 0.28,
-      };
-    }
-
-    return {
-      x: toHero.x,
-      y: toHero.y,
-    };
-  }
-
-  _updateCaster(dt, d, toHero, side, game) {
-    if (this.strafeT <= 0) {
-      this.strafeT = 1.0 + ((this.behaviorSeed % 60) / 60) * 1.0;
-      this.sideSign *= -1;
-    }
-
-    const fireRange = this.elite ? 290 : 260;
-    if (d < fireRange) {
-      if (this.burstShotsLeft <= 0 && this.attackCd <= 0) {
-        this.burstShotsLeft = this.elite ? 3 : 2;
-        this.burstGapT = 0;
-        this.attackCd = this.elite ? 1.15 : 1.55;
-      }
-
-      if (this.burstShotsLeft > 0 && this.burstGapT <= 0) {
-        this.burstGapT = this.elite ? 0.16 : 0.22;
-        this.burstShotsLeft--;
-
-        const lead = 0.10 + (this.elite ? 0.04 : 0);
-        const aim = {
-          x: heroLeadX(game?.hero, lead) - this.x,
-          y: heroLeadY(game?.hero, lead) - this.y,
-        };
-        const n = norm(aim.x, aim.y);
-
-        const spread = (Math.random() - 0.5) * (this.elite ? 0.10 : 0.16);
-        const cs = Math.cos(spread);
-        const sn = Math.sin(spread);
-        const rx = n.x * cs - n.y * sn;
-        const ry = n.x * sn + n.y * cs;
-
-        const p = new Projectile(
-          this.x + rx * 12,
-          this.y + ry * 12,
-          rx * (this.elite ? 255 : 225),
-          ry * (this.elite ? 255 : 225),
-          Math.round((6 + this.tier * 2.2) * (this.elite ? 1.4 : 1)),
-          1.2,
-          this.tier,
-          {
-            color: this.elite ? "rgba(255,210,120,0.95)" : "rgba(255,120,120,0.92)",
-            radius: this.elite ? 6 : 5,
-            type: "enemy_bolt",
-            hitRadius: this.elite ? 18 : 16,
-            onHitHero: true,
-            friendly: false,
-          }
-        );
-
-        if (game?.projectiles?.push) game.projectiles.push(p);
-      }
-    }
-
-    void dt;
-    void toHero;
-    void side;
-  }
-
-  _casterMove(d, toHero, side) {
-    const desired = this.preferredRange;
-    let distBias = 0;
-
-    if (d < desired - 28) distBias = -0.95;
-    else if (d > desired + 34) distBias = 0.55;
-    else distBias = 0.08;
-
-    const orbit = this.elite ? 0.95 : 0.72;
-
-    return {
-      x: toHero.x * distBias + side.x * orbit,
-      y: toHero.y * distBias + side.y * orbit,
-    };
-  }
-
-  takeDamage(amount = 0) {
-    this.hp -= Math.max(1, amount | 0);
-    this.hitFlash = 1;
-    this.aggroT = Math.max(this.aggroT, 3.2);
-    this.state = "aggro";
-    this.sideSign *= -1;
-
-    if (this.hp <= 0) {
-      this.alive = false;
-      this.dead = true;
-    }
-  }
-
-  draw(ctx) {
-    const bob = Math.sin(this.animT * 1.2) * (this.elite ? 1.3 : 0.9);
-    const pulse = 1 + Math.sin(this.animT * 2.1) * (this.elite ? 0.07 : 0.04);
-
-    ctx.save();
-    ctx.translate(this.x, this.y + bob);
-    ctx.scale(pulse, pulse);
-
-    ctx.fillStyle = this.elite ? "rgba(255,215,120,0.20)" : "rgba(0,0,0,0.16)";
-    ctx.beginPath();
-    ctx.ellipse(0, this.radius + 1, this.radius * 0.85, 4, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    let main = "#cc4444";
-    let dark = "#8f2323";
-
-    if (this.kind === "caster") {
-      main = "#7db7ff";
-      dark = "#356fbb";
-    } else if (this.kind === "stalker") {
-      main = "#5fd17c";
-      dark = "#2f8244";
-    } else if (this.kind === "brute") {
-      main = "#d98a4e";
-      dark = "#96541f";
-    }
-
-    if (this.elite) {
-      main =
-        this.kind === "caster" ? "#ffd87e" :
-        this.kind === "stalker" ? "#ffb86b" :
-        this.kind === "brute" ? "#ff9f5f" :
-        "#ffc16b";
-      dark = "#7a4a16";
-    }
-
-    if (this.hitFlash > 0) {
-      main = "#ffffff";
-      dark = "#d9d9d9";
-    }
-
-    ctx.fillStyle = main;
-
-    if (this.kind === "brute") {
-      if (ctx.roundRect) {
-        ctx.beginPath();
-        ctx.roundRect(-this.radius, -this.radius + 1, this.radius * 2, this.radius * 2 - 2, 5);
-        ctx.fill();
-      } else {
-        ctx.fillRect(-this.radius, -this.radius + 1, this.radius * 2, this.radius * 2 - 2);
-      }
-
-      if (this.chargeT > 0.36) {
-        ctx.strokeStyle = "rgba(255,220,150,0.90)";
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.arc(0, 0, this.radius + 5, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-    } else if (this.kind === "stalker") {
-      ctx.beginPath();
-      ctx.moveTo(0, -this.radius - 2);
-      ctx.lineTo(this.radius + 1, this.radius - 2);
-      ctx.lineTo(-this.radius - 1, this.radius - 2);
-      ctx.closePath();
-      ctx.fill();
-
-      if (this.chargeT > 0) {
-        ctx.strokeStyle = "rgba(200,255,200,0.90)";
-        ctx.lineWidth = 2.5;
-        ctx.beginPath();
-        ctx.arc(0, 0, this.radius + 4, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-    } else if (this.kind === "caster") {
-      ctx.beginPath();
-      ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.strokeStyle = this.elite ? "rgba(255,233,180,0.70)" : "rgba(255,255,255,0.35)";
-      ctx.lineWidth = this.elite ? 3 : 2;
-      ctx.beginPath();
-      ctx.arc(0, 0, this.radius + 2, 0, Math.PI * 2);
-      ctx.stroke();
-
-      if (this.burstShotsLeft > 0) {
-        ctx.strokeStyle = "rgba(255,180,180,0.92)";
-        ctx.lineWidth = 2.5;
-        ctx.beginPath();
-        ctx.arc(0, 0, this.radius + 6, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-    } else {
-      if (this.variant === 0) {
-        ctx.beginPath();
-        ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (this.variant === 1) {
-        ctx.fillRect(-this.radius, -this.radius + 1, this.radius * 2, this.radius * 2 - 2);
-      } else if (this.variant === 2) {
-        ctx.beginPath();
-        ctx.moveTo(0, -this.radius);
-        ctx.lineTo(this.radius, this.radius - 1);
-        ctx.lineTo(-this.radius, this.radius - 1);
-        ctx.closePath();
-        ctx.fill();
-      } else {
-        ctx.beginPath();
-        ctx.ellipse(0, 0, this.radius + 1.5, this.radius - 2, 0, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-
-    if (this.elite) {
-      ctx.strokeStyle = "rgba(255,224,140,0.95)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(0, 0, this.radius + 3.5, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-
-    ctx.fillStyle = dark;
-    if (this.kind === "brute") {
-      ctx.fillRect(-this.radius * 0.65, -2, this.radius * 1.3, 5);
-    } else if (this.kind === "stalker") {
-      ctx.beginPath();
-      ctx.moveTo(-5, 1);
-      ctx.lineTo(0, 5);
-      ctx.lineTo(5, 1);
-      ctx.closePath();
-      ctx.fill();
-    } else if (this.kind === "caster") {
-      ctx.beginPath();
-      ctx.arc(0, 2, 4.2, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      ctx.beginPath();
-      ctx.arc(0, 2, 4, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    ctx.fillStyle = "#181d25";
-    ctx.beginPath();
-    ctx.arc(-2.2, -1.5, 1.1, 0, Math.PI * 2);
-    ctx.arc(2.2, -1.5, 1.1, 0, Math.PI * 2);
-    ctx.fill();
-
-    if (this.elite) {
-      ctx.fillStyle = "rgba(255,230,160,0.98)";
-      ctx.beginPath();
-      ctx.moveTo(-5, -this.radius - 4);
-      ctx.lineTo(-1.5, -this.radius - 10);
-      ctx.lineTo(0, -this.radius - 5);
-      ctx.lineTo(1.5, -this.radius - 10);
-      ctx.lineTo(5, -this.radius - 4);
-      ctx.closePath();
-      ctx.fill();
-    }
-
-    ctx.restore();
-  }
-}
-
-/* ===========================
+/* =========================================================
    PROJECTILE
-=========================== */
+========================================================= */
 
 export class Projectile {
-  constructor(x, y, vx, vy, dmg = 10, life = 1, level = 1, meta = {}) {
-    this.x = x;
-    this.y = y;
-    this.vx = vx;
-    this.vy = vy;
-
-    this.dmg = Math.max(1, Math.round(dmg || 1));
-    this.life = Math.max(0.05, +life || 1);
-    this.level = Math.max(1, level | 0);
-
-    this.meta = {
-      color: "rgba(255,209,102,0.95)",
-      radius: 4,
-      type: "bolt",
-      hitRadius: 18,
-      pierce: false,
-      friendly: true,
-      critChance: 0,
-      critMult: 1.7,
-      hitColor: null,
-      ...meta,
-    };
-
-    this.radius = Math.max(2, this.meta.radius || 4);
-    this.hitRadius = Math.max(6, this.meta.hitRadius || 18);
-    this.friendly = this.meta.friendly !== false;
-
+  constructor(x, y, vx, vy, dmg, life, level, meta = {}) {
+    this.x = x || 0;
+    this.y = y || 0;
+    this.vx = vx || 0;
+    this.vy = vy || 0;
+    this.dmg = dmg || 1;
+    this.life = life || 1;
+    this.maxLife = this.life;
+    this.level = level || 1;
+    this.meta = meta || {};
+    this.friendly = !!meta.friendly;
+    this.nova = !!meta.nova;
+    this.radius = meta.radius || (this.nova ? 10 : 4);
+    this.hitRadius = meta.hitRadius || 16;
+    this.color = meta.color || (this.friendly ? "#9dd7ff" : "#ffad8c");
     this.alive = true;
-    this.dead = false;
-    this.t = 0;
+    this._age = 0;
   }
 
   update(dt, world) {
-    if (!this.alive) return;
-
-    this.t += dt;
+    this._age += dt;
     this.life -= dt;
-
     if (this.life <= 0) {
       this.alive = false;
-      this.dead = true;
       return;
     }
 
-    if (this.meta?.nova) return;
-
-    const nx = this.x + this.vx * dt;
-    const ny = this.y + this.vy * dt;
-
-    if (world?.isSolid?.(nx, ny)) {
-      this.alive = false;
-      this.dead = true;
+    if (this.nova) {
+      const p = clamp(this._age / Math.max(0.001, this.maxLife), 0, 1);
+      this.radius = this.hitRadius * (0.25 + p * 0.85);
       return;
     }
 
-    this.x = nx;
-    this.y = ny;
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+
+    if (world && !this.meta?.ignoreWalls) {
+      if (world.isSolid?.(this.x, this.y)) {
+        this.alive = false;
+      }
+    }
   }
 
   draw(ctx) {
-    if (!this.alive) return;
-
     ctx.save();
 
-    if (this.meta?.nova) {
-      ctx.strokeStyle = this.meta?.color || "rgba(214,245,255,0.9)";
-      ctx.lineWidth = 2;
+    if (this.nova) {
+      const alpha = clamp(this.life / Math.max(0.001, this.maxLife), 0, 1);
+      ctx.globalAlpha = 0.32 * alpha;
+      ctx.fillStyle = this.color;
       ctx.beginPath();
-      ctx.arc(this.x, this.y, this.hitRadius * 0.8, 0, Math.PI * 2);
-      ctx.stroke();
-
-      ctx.globalAlpha = 0.12;
-      ctx.fillStyle = this.meta?.color || "rgba(214,245,255,0.9)";
-      ctx.beginPath();
-      ctx.arc(this.x, this.y, this.hitRadius, 0, Math.PI * 2);
+      ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
       ctx.fill();
 
+      ctx.globalAlpha = 0.75 * alpha;
+      ctx.strokeStyle = this.color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+      ctx.stroke();
       ctx.restore();
       return;
     }
 
-    const glow = this.radius + (this.meta.type === "orb" ? 4 : 2);
-
-    ctx.globalAlpha = 0.18;
-    ctx.fillStyle = this.meta?.color || "rgba(255,209,102,0.95)";
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, glow, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = this.meta?.color || "rgba(255,209,102,0.95)";
+    ctx.fillStyle = this.color;
     ctx.beginPath();
     ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
     ctx.fill();
 
-    if (this.meta.type === "spark" || this.meta.type === "enemy_bolt") {
-      ctx.strokeStyle = "rgba(255,255,255,0.45)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(this.x - this.vx * 0.012, this.y - this.vy * 0.012);
-      ctx.lineTo(this.x, this.y);
-      ctx.stroke();
-    }
+    ctx.globalAlpha = 0.28;
+    ctx.strokeStyle = this.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(this.x - this.vx * 0.03, this.y - this.vy * 0.03);
+    ctx.lineTo(this.x, this.y);
+    ctx.stroke();
 
     ctx.restore();
   }
 }
 
-/* ===========================
+/* =========================================================
    LOOT
-=========================== */
+========================================================= */
 
 export class Loot {
-  constructor(x, y, kind = "gold", data = {}) {
+  constructor(x = 0, y = 0, kind = "gold", data = {}) {
     this.x = x;
     this.y = y;
     this.kind = kind;
     this.data = data || {};
-
     this.alive = true;
-    this.dead = false;
-    this.age = 0;
-    this.r = 11;
+    this.t = 0;
+
+    this.vx = ((hash2(x | 0, y | 0, 444) % 100) / 100 - 0.5) * 24;
+    this.vy = -20 - ((hash2(x | 0, y | 0, 555) % 100) / 100) * 14;
   }
 
   update(dt, hero) {
-    if (!this.alive) return;
+    this.t += dt;
 
-    this.age += dt;
+    if (this.t < 0.22) {
+      this.x += this.vx * dt;
+      this.y += this.vy * dt;
+      this.vx *= 0.92;
+      this.vy *= 0.92;
+    }
 
-    const dx = hero.x - this.x;
-    const dy = hero.y - this.y;
-    const d2 = dx * dx + dy * dy;
+    if (!hero) return;
 
-    if (d2 < 150 * 150 && d2 > 1e-6) {
-      const n = norm(dx, dy);
-      const speed = d2 < 40 * 40 ? 260 : d2 < 90 * 90 ? 180 : 110;
-      this.x += n.x * speed * dt;
-      this.y += n.y * speed * dt;
+    const d2 = dist2(this.x, this.y, hero.x, hero.y);
+    const pullR = 72 * 72;
+    if (d2 < pullR) {
+      const n = norm(hero.x - this.x, hero.y - this.y);
+      const pull = 90 + Math.max(0, 72 - Math.sqrt(d2)) * 3.0;
+      this.x += n.x * pull * dt;
+      this.y += n.y * pull * dt;
     }
 
     if (d2 < 18 * 18) {
       this.alive = false;
-      this.dead = true;
     }
   }
 
   draw(ctx) {
-    if (!this.alive) return;
-
-    const bob = Math.sin(this.age * 5) * 2;
-    const x = this.x;
-    const y = this.y + bob;
+    const bob = Math.sin(this.t * 5) * 1.6;
 
     ctx.save();
+    ctx.translate(this.x, this.y + bob);
 
     if (this.kind === "gold") {
-      ctx.fillStyle = "#ffd654";
+      ctx.fillStyle = "#f4ca5e";
       ctx.beginPath();
-      ctx.arc(x, y, 6, 0, Math.PI * 2);
+      ctx.arc(0, 0, 5, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.strokeStyle = "rgba(255,255,255,0.5)";
-      ctx.lineWidth = 1;
+      ctx.fillStyle = "rgba(255,245,210,0.72)";
       ctx.beginPath();
-      ctx.arc(x, y, 3.2, 0, Math.PI * 2);
-      ctx.stroke();
+      ctx.arc(-1, -1, 2, 0, Math.PI * 2);
+      ctx.fill();
     } else if (this.kind === "potion") {
-      ctx.fillStyle = this.data?.potionType === "mana" ? "#5a96ff" : "#eb526c";
+      const mana = this.data?.potionType === "mana";
+      ctx.fillStyle = mana ? "#66a9ff" : "#d95f76";
+
+      if (typeof ctx.roundRect === "function") {
+        ctx.beginPath();
+        ctx.roundRect(-5, -4, 10, 12, 3);
+        ctx.fill();
+      } else {
+        ctx.fillRect(-5, -4, 10, 12);
+      }
+
+      ctx.fillStyle = "#cfc7b1";
+      ctx.fillRect(-2.5, -7, 5, 4);
+    } else {
+      const item = this.data || {};
+      ctx.fillStyle = item.color || rarityColor(item.rarity);
       ctx.beginPath();
-      ctx.arc(x, y, 6, 0, Math.PI * 2);
+      ctx.arc(0, 0, 6, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.fillStyle = "rgba(255,255,255,0.55)";
-      ctx.fillRect(x - 1, y - 7, 2, 3);
-    } else {
-      const rarity = this.data?.rarity;
-      ctx.fillStyle =
-        rarity === "epic" ? "#d79cff" :
-        rarity === "rare" ? "#90cfff" :
-        rarity === "uncommon" ? "#98e798" :
-        "#d8d8d8";
-      ctx.fillRect(x - 5, y - 5, 10, 10);
-
-      ctx.strokeStyle = "rgba(255,255,255,0.35)";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x - 5, y - 5, 10, 10);
+      ctx.strokeStyle = "rgba(255,255,255,0.28)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(0, 0, 8.5, 0, Math.PI * 2);
+      ctx.stroke();
     }
 
     ctx.restore();
   }
-}
-
-function heroLeadX(hero, t) {
-  return (hero?.x || 0) + (hero?.vx || 0) * t;
-}
-
-function heroLeadY(hero, t) {
-  return (hero?.y || 0) + (hero?.vy || 0) * t;
 }

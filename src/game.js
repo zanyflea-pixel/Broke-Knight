@@ -1,5 +1,5 @@
 // src/game.js
-// v76 CAMP / TOWN PROGRESSION SYSTEMS PASS (FULL FILE)
+// v87 MAP CONTROLS FIX PASS (FULL FILE)
 
 import World from "./world.js";
 import { clamp, lerp, dist2, norm, RNG, hash2 } from "./util.js";
@@ -22,7 +22,7 @@ export default class Game {
 
     this.input = new Input(window);
     this.ui = new UI(canvas);
-    this.save = new Save("broke-knight-save-v76");
+    this.save = new Save("broke-knight-save-v87");
 
     this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
     this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
@@ -55,7 +55,7 @@ export default class Game {
       cleanupTimer: 0,
       cleanupEvery: 0.55,
       touchDamageTick: 0.18,
-      campRespawnCheckEvery: 2.6,
+      campRespawnCheckEvery: 4.8,
       campAggroRadius: 340,
     };
 
@@ -100,6 +100,8 @@ export default class Game {
     this._cachedNearbyWaystone = null;
     this._cachedNearbyDungeon = null;
     this._nearbyPoiTimer = 0;
+
+    this._campRespawnState = {};
 
     this.shop = {
       campId: null,
@@ -503,6 +505,35 @@ export default class Game {
     return tier >= 4 ? 205 : tier >= 3 ? 178 : tier >= 2 ? 150 : 118;
   }
 
+  _campRespawnDelay(campId) {
+    const tier = this._campTier(campId);
+    if (tier >= 4) return 40;
+    if (tier >= 3) return 32;
+    if (tier >= 2) return 24;
+    return 18;
+  }
+
+  _campIsActivelyShopping(campId) {
+    return this.menu.open === "shop" && this.shop?.campId === campId;
+  }
+
+  _campShouldStayCalm(camp) {
+    const safeRadius = this._campSafeRadius(camp.id);
+    const calmRadius = safeRadius + 110;
+    const heroNear = dist2(this.hero.x, this.hero.y, camp.x, camp.y) < calmRadius * calmRadius;
+    return heroNear || this._campIsActivelyShopping(camp.id);
+  }
+
+  _setCampRespawnLock(campId, extra = 0) {
+    const base = this._campRespawnDelay(campId) + Math.max(0, extra);
+    const until = this.time + base;
+    this._campRespawnState[campId] = Math.max(this._campRespawnState[campId] || 0, until);
+  }
+
+  _campRespawnUnlocked(campId) {
+    return (this._campRespawnState[campId] || 0) <= this.time;
+  }
+
   _grantCampBlessing(campId, strong = false) {
     const bless = this._campBlessingStats(campId, strong);
     this.hero.state.campBuffT = Math.max(this.hero.state.campBuffT || 0, bless.time);
@@ -726,7 +757,11 @@ export default class Game {
     if (this.input.wasPressed("i")) this.menu.open = this.menu.open === "inventory" ? null : "inventory";
     if (this.input.wasPressed("k")) this.menu.open = this.menu.open === "skills" ? null : "skills";
     if (this.input.wasPressed("g")) this.menu.open = this.menu.open === "god" ? null : "god";
-    if (this.input.wasPressed("m")) this.menu.open = this.menu.open === "map" ? null : "map";
+
+    if (this.input.wasPressed("m")) {
+      this.menu.open = this.menu.open === "map" ? null : "map";
+    }
+
     if (this.input.wasPressed("j")) this.menu.open = this.menu.open === "quests" ? null : "quests";
     if (this.input.wasPressed("Escape")) this.menu.open = null;
 
@@ -856,6 +891,7 @@ export default class Game {
     this._refreshShopForCamp(camp);
     this.menu.open = "shop";
     this.ui.open?.("shop");
+    this._setCampRespawnLock(camp.id, 8);
     this._msg(`${camp.name || `Camp ${camp.id}`} • ${this._campTierName(camp.id)} shop`, 1.1);
   }
 
@@ -958,6 +994,7 @@ export default class Game {
     replacement.price = Math.max(14, Math.round(replacement.price * (1.10 * this._campPriceMultiplier(campId))));
     this.shop.stock[index] = replacement;
 
+    this._setCampRespawnLock(campId, 8);
     this._saveSoon();
   }
 
@@ -974,6 +1011,7 @@ export default class Game {
 
     this.hero.gold += sellPrice;
     inv.splice(index, 1);
+    this._setCampRespawnLock(this.shop.campId, 8);
     this._msg(`Sold ${item.name} for ${sellPrice}G`, 1.1);
     this._saveSoon();
   }
@@ -1301,6 +1339,10 @@ export default class Game {
     const st = this.hero.state || {};
     let goldBonus = enemy.elite ? 6 + enemy.tier * 2 : 0;
 
+    if (enemy.campId != null) {
+      this._setCampRespawnLock(enemy.campId, enemy.elite ? 10 : 0);
+    }
+
     if (enemy.boss) {
       goldBonus += 40 + (enemy.tier || 1) * 6;
       this._msg(`Boss defeated • +${goldBonus} Gold`, 1.5);
@@ -1468,7 +1510,9 @@ export default class Game {
     for (const camp of camps) {
       const tier = this._campTier(camp.id);
       const safeRadius = this._campSafeRadius(camp.id);
-      const heroNear = dist2(this.hero.x, this.hero.y, camp.x, camp.y) < (safeRadius + 95) * (safeRadius + 95);
+
+      if (!this._campRespawnUnlocked(camp.id)) continue;
+      if (this._campShouldStayCalm(camp)) continue;
 
       let campCount = 0;
       let campEliteCount = 0;
@@ -1481,9 +1525,10 @@ export default class Game {
       }
 
       const desired =
-        tier >= 4 ? 1 :
-        tier >= 3 ? (heroNear ? 2 : 1) :
-        heroNear ? 3 : 2;
+        tier >= 4 ? 0 :
+        tier >= 3 ? 0 :
+        tier >= 2 ? 1 :
+        2;
 
       if (campCount >= desired) continue;
 
@@ -1491,15 +1536,15 @@ export default class Game {
       for (let i = 0; i < missing; i++) {
         if (this.enemies.length >= this.perf.maxEnemies) break;
 
-        const minR = safeRadius + 18;
+        const minR = safeRadius + 70;
         const ang = Math.random() * Math.PI * 2;
-        const rr = minR + 42 + Math.random() * 56;
+        const rr = minR + 40 + Math.random() * 80;
         const ex = camp.x + Math.cos(ang) * rr;
         const ey = camp.y + Math.sin(ang) * rr;
 
         if (!this.world.canWalk(ex, ey)) continue;
         if (this.world._isNearWater?.(ex, ey, 40)) continue;
-        if (dist2(ex, ey, this.hero.x, this.hero.y) < 190 * 190) continue;
+        if (dist2(ex, ey, this.hero.x, this.hero.y) < 280 * 280) continue;
 
         const roll = Math.random();
         const kind =
@@ -1509,9 +1554,10 @@ export default class Game {
           "blob";
 
         const eliteChance =
-          tier >= 4 ? 0.01 :
-          tier >= 3 ? 0.03 :
-          campEliteCount > 0 ? 0.02 : (heroNear ? 0.14 : 0.10);
+          tier >= 4 ? 0 :
+          tier >= 3 ? 0.01 :
+          tier >= 2 ? 0.02 :
+          campEliteCount > 0 ? 0.01 : 0.08;
 
         const elite = Math.random() < eliteChance;
 
@@ -1520,6 +1566,10 @@ export default class Game {
         e.campId = camp.id;
         this.enemies.push(e);
         if (elite) campEliteCount++;
+      }
+
+      if (missing > 0) {
+        this._setCampRespawnLock(camp.id, tier >= 2 ? 8 : 4);
       }
     }
   }
@@ -1555,6 +1605,7 @@ export default class Game {
 
   _applyEnemyTouchDamage(e) {
     if (!e?.alive) return;
+    if (e.kind === "caster") return;
 
     const close = dist2(e.x, e.y, this.hero.x, this.hero.y) < (e.radius + 16) ** 2;
     if (!close) return;
@@ -2108,6 +2159,7 @@ export default class Game {
 
   _interactCamp(camp) {
     this.progress.visitedCamps?.add?.(camp.id);
+    this._setCampRespawnLock(camp.id, 10);
 
     const renown = this._campRenown(camp.id);
     const tier = this._campTier(camp.id);
@@ -2141,6 +2193,7 @@ export default class Game {
 
       this._grantCampBlessing(camp.id, true);
       this._grantCampRestSupplies(camp.id);
+      this._setCampRespawnLock(camp.id, 16);
 
       if (tier >= 3 && Math.random() < 0.30) {
         const bonusGold = 10 + tier * 4;
@@ -2184,7 +2237,7 @@ export default class Game {
 
     if (this.input.wasPressed("z")) {
       this.world?.toggleMapScale?.();
-      this._msg(`Map scale: ${this.world.mapMode}`, 1.2);
+      this._msg(`Map zoom: ${this.world?.mapMode || "small"}`, 1.0);
     }
 
     const ways = [...(this.world?.waystones || [])].filter((w) =>
@@ -2480,6 +2533,8 @@ export default class Game {
       msgT: this.msgT,
       zoneMsg: this.zoneMsg,
       zoneMsgT: this.zoneMsgT,
+      campRespawnState: this._campRespawnState,
+      worldMapMode: this.world?.mapMode || "small",
     });
   }
 
@@ -2522,6 +2577,16 @@ export default class Game {
       this.questTurnIn = { ...data.questTurnIn };
     }
 
+    if (data.campRespawnState && typeof data.campRespawnState === "object") {
+      this._campRespawnState = { ...data.campRespawnState };
+    }
+
+    if (typeof data.worldMapMode === "string") {
+      this.world.mapMode = data.worldMapMode === "large" ? "large" : "small";
+    } else {
+      this.world.mapMode = "small";
+    }
+
     this.hero.vx = 0;
     this.hero.vy = 0;
     this.hero.state.sailing = false;
@@ -2532,15 +2597,21 @@ export default class Game {
 
     const camps = this.world?.camps || [];
     for (const camp of camps) {
-      for (let i = 0; i < 2; i++) {
-        const a = (i / 2) * Math.PI * 2 + (camp.id || 0) * 0.33;
-        const ex = camp.x + Math.cos(a) * 110;
-        const ey = camp.y + Math.sin(a) * 110;
+      const tier = this._campTier(camp.id);
+      const starterCount = tier >= 3 ? 0 : tier >= 2 ? 1 : 2;
+
+      for (let i = 0; i < starterCount; i++) {
+        const a = (i / Math.max(1, starterCount)) * Math.PI * 2 + (camp.id || 0) * 0.33;
+        const safe = this._campSafeRadius(camp.id);
+        const ring = safe + 86;
+        const ex = camp.x + Math.cos(a) * ring;
+        const ey = camp.y + Math.sin(a) * ring;
+
         if (!this.world?.canWalk?.(ex, ey)) continue;
         if (this.world?._isNearWater?.(ex, ey, 48)) continue;
 
         const kind = i === 0 ? "blob" : "stalker";
-        const elite = i === 1 && Math.random() < 0.12;
+        const elite = false;
         const e = new Enemy(
           ex,
           ey,
@@ -2554,6 +2625,8 @@ export default class Game {
         this.enemies.push(e);
         if (this.enemies.length >= 10) return;
       }
+
+      this._setCampRespawnLock(camp.id, 12);
     }
   }
 
