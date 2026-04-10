@@ -1,5 +1,5 @@
 // src/entities.js
-// v90.2 HERO EQUIPMENT VISUAL PASS FIXED (FULL FILE)
+// v95.2 AIM-FACING HERO WEAPON (FULL FILE)
 
 import { clamp, dist2, norm, hash2, RNG } from "./util.js";
 
@@ -166,12 +166,16 @@ export class Hero {
     this.potions = { hp: 2, mana: 1 };
 
     this.lastMove = { x: 1, y: 0 };
+    this.aimDir = { x: 1, y: 0 };
+
     this.state = {
       sailing: false,
       dashT: 0,
       hurtT: 0,
       campBuffT: 0,
       campBuffPower: 0,
+      campBuffType: "",
+      campBuffName: "",
       dungeonMomentumT: 0,
       dungeonMomentumPower: 0,
       eliteChainT: 0,
@@ -186,8 +190,7 @@ export class Hero {
     this.state.hurtT = Math.max(0, (this.state.hurtT || 0) - dt);
 
     const moving = Math.abs(this.vx) + Math.abs(this.vy) > 6;
-    if (moving) this._animWalk += dt * 8;
-    else this._animWalk += dt * 2;
+    this._animWalk += dt * (moving ? 8 : 2);
 
     const stats = this.getStats();
     this.maxHp = stats.maxHp;
@@ -195,6 +198,12 @@ export class Hero {
 
     this.hp = Math.min(this.maxHp, this.hp + stats.hpRegen * dt);
     this.mana = Math.min(this.maxMana, this.mana + stats.manaRegen * dt);
+
+    if (moving) {
+      const mv = norm(this.vx, this.vy);
+      this.lastMove.x = mv.x;
+      this.lastMove.y = mv.y;
+    }
   }
 
   getStats() {
@@ -227,7 +236,6 @@ export class Hero {
 
   getMoveSpeed(game) {
     let speed = this.getStats().move;
-
     const mult = game?.world?.getMoveModifier?.(this.x, this.y) ?? 1;
     speed *= mult;
 
@@ -294,10 +302,16 @@ export class Hero {
     return dealt;
   }
 
+  _getFacing() {
+    const aim = norm(this.aimDir?.x || 0, this.aimDir?.y || 0);
+    if (Math.abs(aim.x) > 0.001 || Math.abs(aim.y) > 0.001) return aim;
+    return norm(this.lastMove?.x || 1, this.lastMove?.y || 0);
+  }
+
   draw(ctx) {
     const hurt = (this.state?.hurtT || 0) > 0;
     const sailing = !!this.state?.sailing;
-    const facing = norm(this.lastMove?.x || 1, this.lastMove?.y || 0);
+    const facing = this._getFacing();
     const bob = Math.sin(this._animWalk) * 1.5;
     const legA = Math.sin(this._animWalk) * 4;
     const legB = Math.sin(this._animWalk + Math.PI) * 4;
@@ -531,35 +545,37 @@ export class Hero {
     const trim = weaponItem ? this._gearTrimColor(weaponItem) : "#e7edf8";
     const kind = (weaponItem?.name || "").toLowerCase();
 
+    // Handle is anchored in the hand. Blade points in facing direction because
+    // the whole arm + weapon group is rotated together.
     ctx.fillStyle = hurt ? "#866b6b" : "#6e4c2e";
-    ctx.fillRect(-1.5, 7, 3, 11);
+    ctx.fillRect(-1.5, 6, 3, 10);
 
     if (kind.includes("spear") || kind.includes("pike")) {
       ctx.fillStyle = hurt ? "#b7a3a3" : wcol;
-      ctx.fillRect(-1, -8, 2, 18);
+      ctx.fillRect(-1, -12, 2, 18);
 
       ctx.fillStyle = hurt ? "#f0bcbc" : trim;
       ctx.beginPath();
-      ctx.moveTo(0, -13);
-      ctx.lineTo(5, -5);
-      ctx.lineTo(0, -2);
-      ctx.lineTo(-5, -5);
+      ctx.moveTo(0, -17);
+      ctx.lineTo(5, -10);
+      ctx.lineTo(0, -6);
+      ctx.lineTo(-5, -10);
       ctx.closePath();
       ctx.fill();
     } else {
       ctx.fillStyle = hurt ? "#b9a6a6" : wcol;
-      ctx.fillRect(-2.5, -10, 5, 18);
+      ctx.fillRect(-2.5, -14, 5, 20);
 
       ctx.fillStyle = hurt ? "#f1c0c0" : trim;
       ctx.beginPath();
-      ctx.moveTo(-2.5, -10);
-      ctx.lineTo(0, -15);
-      ctx.lineTo(2.5, -10);
+      ctx.moveTo(-2.5, -14);
+      ctx.lineTo(0, -20);
+      ctx.lineTo(2.5, -14);
       ctx.closePath();
       ctx.fill();
 
       ctx.fillStyle = hurt ? "#8e7070" : "#8d6a3c";
-      ctx.fillRect(-5, 6, 10, 2.5);
+      ctx.fillRect(-5, 5, 10, 2.5);
     }
 
     if (!seated && weaponItem?.rarity === "epic") {
@@ -568,7 +584,7 @@ export class Hero {
       ctx.strokeStyle = trim;
       ctx.lineWidth = 1.2;
       ctx.beginPath();
-      ctx.arc(0, -6, 6, 0, Math.PI * 2);
+      ctx.arc(0, -8, 6, 0, Math.PI * 2);
       ctx.stroke();
       ctx.restore();
     }
@@ -708,6 +724,30 @@ export class Enemy {
       this.touchDps = 3 + this.level * 0.20;
       this.maxHp = 24 + this.level * 5;
       this.color = "#6c62a8";
+    } else if (this.kind === "wolf") {
+      this.r = 10;
+      this.speed = 100 + this.level * 0.80;
+      this.touchDps = 5 + this.level * 0.34;
+      this.maxHp = 22 + this.level * 4;
+      this.color = "#8a745b";
+    } else if (this.kind === "scout") {
+      this.r = 9;
+      this.speed = 112 + this.level * 0.90;
+      this.touchDps = 4 + this.level * 0.28;
+      this.maxHp = 18 + this.level * 3.8;
+      this.color = "#b1ae63";
+    } else if (this.kind === "ashling") {
+      this.r = 12;
+      this.speed = 72 + this.level * 0.55;
+      this.touchDps = 6 + this.level * 0.38;
+      this.maxHp = 34 + this.level * 6.2;
+      this.color = "#7f7670";
+    } else if (this.kind === "unknown") {
+      this.r = 16;
+      this.speed = 86 + this.level * 0.70;
+      this.touchDps = 10 + this.level * 0.62;
+      this.maxHp = 64 + this.level * 12;
+      this.color = "#6f47c2";
     } else {
       this.kind = "blob";
       this.r = 12;
@@ -792,6 +832,29 @@ export class Enemy {
           )
         );
       }
+    } else if (this.kind === "wolf" || this.kind === "scout") {
+      if (d < 240) {
+        targetX = hero.x;
+        targetY = hero.y;
+        desiredSpeed *= this.kind === "scout" ? 1.18 : 1.10;
+      } else {
+        this._wanderA += dt * 0.8;
+        const hr = this.kind === "scout" ? 46 : 34;
+        targetX = (this.home?.x ?? this.x) + Math.cos(this._wanderA) * hr;
+        targetY = (this.home?.y ?? this.y) + Math.sin(this._wanderA) * hr;
+        desiredSpeed *= 0.75;
+      }
+    } else if (this.kind === "unknown") {
+      if (d < 320) {
+        targetX = hero.x;
+        targetY = hero.y;
+        desiredSpeed *= 1.08;
+      } else {
+        this._wanderA += dt * 0.52;
+        targetX = (this.home?.x ?? this.x) + Math.cos(this._wanderA) * 40;
+        targetY = (this.home?.y ?? this.y) + Math.sin(this._wanderA) * 40;
+        desiredSpeed *= 0.7;
+      }
     } else if (d < 260) {
       targetX = hero.x;
       targetY = hero.y;
@@ -840,12 +903,16 @@ export class Enemy {
     const base = 5 + this.level * 1.2;
     if (this.boss) return Math.round(base * 5.0);
     if (this.elite) return Math.round(base * 2.1);
+    if (this.kind === "unknown") return Math.round(base * 2.8);
+    if (this.kind === "brute" || this.kind === "ashling") return Math.round(base * 1.35);
+    if (this.kind === "wolf" || this.kind === "scout") return Math.round(base * 1.10);
     return Math.round(base);
   }
 
   lootBonus() {
     if (this.boss) return 4;
     if (this.elite) return 2;
+    if (this.kind === "unknown") return 2;
     return 0;
   }
 
@@ -864,24 +931,35 @@ export class Enemy {
     if (this.kind === "brute") this._drawBrute(ctx, hurt);
     else if (this.kind === "stalker") this._drawStalker(ctx, hurt);
     else if (this.kind === "caster") this._drawCaster(ctx, hurt);
+    else if (this.kind === "wolf") this._drawWolf(ctx, hurt);
+    else if (this.kind === "scout") this._drawScout(ctx, hurt);
+    else if (this.kind === "ashling") this._drawAshling(ctx, hurt);
+    else if (this.kind === "unknown") this._drawUnknown(ctx, hurt);
     else this._drawBlob(ctx, hurt);
 
-    if (this.elite || this.boss) {
-      ctx.strokeStyle = this.boss ? "rgba(255,158,112,0.95)" : "rgba(255,224,140,0.92)";
+    if (this.elite || this.boss || this.kind === "unknown") {
+      ctx.strokeStyle =
+        this.boss ? "rgba(255,158,112,0.95)" :
+        this.kind === "unknown" ? "rgba(182,142,255,0.94)" :
+        "rgba(255,224,140,0.92)";
       ctx.lineWidth = this.boss ? 2.5 : 2;
       ctx.beginPath();
       ctx.arc(0, -this.r * 0.2, this.r + 3, 0, Math.PI * 2);
       ctx.stroke();
     }
 
-    if (this.hp < this.maxHp || this.elite || this.boss) {
+    if (this.hp < this.maxHp || this.elite || this.boss || this.kind === "unknown") {
       const w = Math.max(22, this.r * 2.2);
       const p = clamp(this.hp / Math.max(1, this.maxHp), 0, 1);
 
       ctx.fillStyle = "rgba(0,0,0,0.35)";
       ctx.fillRect(-w * 0.5, -this.r - 14, w, 4);
 
-      ctx.fillStyle = this.boss ? "#ff8b6b" : this.elite ? "#f1ca5e" : "#d85f76";
+      ctx.fillStyle =
+        this.boss ? "#ff8b6b" :
+        this.kind === "unknown" ? "#9c72ff" :
+        this.elite ? "#f1ca5e" :
+        "#d85f76";
       ctx.fillRect(-w * 0.5, -this.r - 14, w * p, 4);
     }
 
@@ -966,6 +1044,86 @@ export class Enemy {
     ctx.beginPath();
     ctx.arc(0, 0, this.r + 4, Math.PI * 0.15, Math.PI * 0.85);
     ctx.stroke();
+  }
+
+  _drawWolf(ctx, hurt) {
+    ctx.fillStyle = hurt ? "#c7a992" : "#8a745b";
+    ctx.beginPath();
+    ctx.ellipse(0, 0, this.r + 1, this.r - 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = hurt ? "#dfc6b4" : "#bda58c";
+    ctx.beginPath();
+    ctx.moveTo(-6, -5);
+    ctx.lineTo(-1, -this.r - 3);
+    ctx.lineTo(2, -5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(6, -5);
+    ctx.lineTo(1, -this.r - 3);
+    ctx.lineTo(-2, -5);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "#181b21";
+    ctx.fillRect(-4, -1, 2, 2);
+    ctx.fillRect(2, -1, 2, 2);
+  }
+
+  _drawScout(ctx, hurt) {
+    ctx.fillStyle = hurt ? "#d5d39d" : "#b1ae63";
+    ctx.beginPath();
+    ctx.arc(0, 0, this.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = hurt ? "#ece8be" : "#d8d287";
+    ctx.beginPath();
+    ctx.arc(0, -this.r + 2, 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#181b21";
+    ctx.fillRect(-3, -1, 2, 2);
+    ctx.fillRect(1, -1, 2, 2);
+  }
+
+  _drawAshling(ctx, hurt) {
+    ctx.fillStyle = hurt ? "#c2b7af" : "#7f7670";
+    ctx.beginPath();
+    ctx.arc(0, 0, this.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = hurt ? "#dfcfc6" : "#a29890";
+    ctx.beginPath();
+    ctx.arc(-5, -2, 4, 0, Math.PI * 2);
+    ctx.arc(4, 0, 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#1c1f26";
+    ctx.fillRect(-4, -2, 2, 2);
+    ctx.fillRect(2, -2, 2, 2);
+  }
+
+  _drawUnknown(ctx, hurt) {
+    ctx.fillStyle = hurt ? "#b7a3eb" : "#6f47c2";
+    ctx.beginPath();
+    ctx.arc(0, 0, this.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = hurt ? "#d9cdf8" : "#9b7cff";
+    ctx.beginPath();
+    ctx.arc(0, -this.r + 2, 7, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = hurt ? "#f0ddff" : "#d8c8ff";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, this.r + 4, 0.3, Math.PI - 0.3);
+    ctx.stroke();
+
+    ctx.fillStyle = "#141824";
+    ctx.fillRect(-4, -2, 2, 2);
+    ctx.fillRect(2, -2, 2, 2);
   }
 }
 
