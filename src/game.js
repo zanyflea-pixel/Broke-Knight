@@ -1,5 +1,5 @@
 // src/game.js
-// v87 MAP CONTROLS FIX PASS (FULL FILE)
+// v97.0 DRAGON TERRITORY PASS + ENCOUNTER WARNINGS (FULL FILE)
 
 import World from "./world.js";
 import { clamp, lerp, dist2, norm, RNG, hash2 } from "./util.js";
@@ -22,7 +22,7 @@ export default class Game {
 
     this.input = new Input(window);
     this.ui = new UI(canvas);
-    this.save = new Save("broke-knight-save-v87");
+    this.save = new Save("broke-knight-save-v97-0");
 
     this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
     this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
@@ -45,18 +45,27 @@ export default class Game {
     };
 
     this.perf = {
-      enemyUpdateRadius: 980,
+      enemyUpdateRadius: 1040,
       lootUpdateRadius: 760,
-      projectileUpdateRadius: 1260,
-      spawnRadius: 940,
+      projectileUpdateRadius: 1320,
+      spawnRadius: 1040,
       drawPad: 150,
-      maxEnemies: 28,
+
+      maxEnemies: 58,
       maxLoot: 90,
+
       cleanupTimer: 0,
       cleanupEvery: 0.55,
       touchDamageTick: 0.18,
-      campRespawnCheckEvery: 4.8,
+      campRespawnCheckEvery: 8.5,
       campAggroRadius: 340,
+
+      discoverableLocalCap: 10,
+      discoverableWideCap: 18,
+      unknownLocalCap: 13,
+      unknownWideCap: 23,
+      spawnMinDistance: 460,
+      spawnMaxDistance: 1100,
     };
 
     this.time = 0;
@@ -65,6 +74,9 @@ export default class Game {
 
     this._spawnTimer = 0;
     this._campRespawnT = 0;
+    this._unknownBossSpawnT = 0;
+    this._dragonCheckT = 0;
+    this._dragonTerritoryT = 0;
     this._rng = new RNG(hash2(this.seed, 9001));
 
     this.menu = { open: null };
@@ -94,6 +106,13 @@ export default class Game {
     this._killFlashT = 0;
     this._combatTextT = 0;
     this._levelSeen = this.hero.level || 1;
+
+    this._dragonWarned = {
+      NW: false,
+      NE: false,
+      SW: false,
+      SE: false,
+    };
 
     this._cachedNearbyCamp = null;
     this._cachedNearbyDock = null;
@@ -161,20 +180,26 @@ export default class Game {
     if (!this.hero.equip) this.hero.equip = {};
     if (!this.hero.potions) this.hero.potions = { hp: 2, mana: 1 };
     if (!this.hero.lastMove) this.hero.lastMove = { x: 1, y: 0 };
+    if (!this.hero.aimDir) this.hero.aimDir = { x: 1, y: 0 };
     if (!this.hero.state) this.hero.state = {};
     if (typeof this.hero.state.sailing !== "boolean") this.hero.state.sailing = false;
     if (typeof this.hero.state.dashT !== "number") this.hero.state.dashT = 0;
     if (typeof this.hero.state.hurtT !== "number") this.hero.state.hurtT = 0;
     if (typeof this.hero.state.campBuffT !== "number") this.hero.state.campBuffT = 0;
     if (typeof this.hero.state.campBuffPower !== "number") this.hero.state.campBuffPower = 0;
+    if (typeof this.hero.state.campBuffType !== "string") this.hero.state.campBuffType = "";
+    if (typeof this.hero.state.campBuffName !== "string") this.hero.state.campBuffName = "";
     if (typeof this.hero.state.dungeonMomentumT !== "number") this.hero.state.dungeonMomentumT = 0;
     if (typeof this.hero.state.dungeonMomentumPower !== "number") this.hero.state.dungeonMomentumPower = 0;
     if (typeof this.hero.state.eliteChainT !== "number") this.hero.state.eliteChainT = 0;
     if (typeof this.hero.state.eliteChainCount !== "number") this.hero.state.eliteChainCount = 0;
+    if (typeof this.hero.state.slowT !== "number") this.hero.state.slowT = 0;
+    if (typeof this.hero.state.poisonT !== "number") this.hero.state.poisonT = 0;
 
     this._ensureWorldPopulation();
     this._ensureCampQuests();
     this._ensureHeroSafe();
+    this._ensureCornerDragons();
 
     this._msg("Broke Knight ready", 1.8);
   }
@@ -204,7 +229,10 @@ export default class Game {
     this._tickCooldowns(dt);
     this._tickBuffs(dt);
     this._updateFx(dt);
+
     this._updateMouseWorld();
+    this._updateHeroAimFromMouse();
+
     this._handleMenus();
 
     this._dockToggleCd = Math.max(0, this._dockToggleCd - dt);
@@ -246,14 +274,23 @@ export default class Game {
     this.hero.update?.(dt);
     this._checkLevelUpMessage();
 
+    if (!this.dungeon.active) {
+      this.world.update?.(dt, this.hero);
+    }
+
     if (this.dungeon.active) {
       this._updateDungeon(dt);
     } else {
-      this.world.update?.(dt, this.hero);
       this._spawnWorldEnemies(dt);
+      this._spawnUnknownBorderBosses(dt);
       this._respawnCampEnemies(dt);
       this._updateOverworldEnemies(dt);
+      this._updateDragons(dt);
+      this._updateDragonTerritories(dt);
+      this._updateVariantAbilities(dt);
       this._applyCampSafeZones(dt);
+      this._ensureCornerDragonsPeriodic(dt);
+      this._checkDragonWarnings();
     }
 
     this._updateProjectiles(dt);
@@ -327,7 +364,9 @@ export default class Game {
     }
 
     this._drawBossTelegraphWorld(ctx, vb);
+    this._drawDragonTerritoryRings(ctx, vb);
     this._drawFxWorld(ctx, vb);
+    this._drawEnemyOverlays(ctx, vb);
     this.hero.draw?.(ctx);
 
     if (this.dungeon.active) {
@@ -409,11 +448,27 @@ export default class Game {
 
   _tickBuffs(dt) {
     const st = this.hero.state || {};
+
     st.campBuffT = Math.max(0, (st.campBuffT || 0) - dt);
     st.dungeonMomentumT = Math.max(0, (st.dungeonMomentumT || 0) - dt);
     st.eliteChainT = Math.max(0, (st.eliteChainT || 0) - dt);
 
-    if (st.campBuffT <= 0) st.campBuffPower = 0;
+    if (st.campBuffT > 0) {
+      const p = Math.max(0, st.campBuffPower || 0);
+
+      if (st.campBuffType === "river") {
+        this.hero.mana = Math.min(this.hero.maxMana, this.hero.mana + dt * (1.2 + p * 0.28));
+      } else if (st.campBuffType === "oak") {
+        this.hero.hp = Math.min(this.hero.maxHp, this.hero.hp + dt * (0.55 + p * 0.10));
+      }
+    }
+
+    if (st.campBuffT <= 0) {
+      st.campBuffPower = 0;
+      st.campBuffType = "";
+      st.campBuffName = "";
+    }
+
     if (st.dungeonMomentumT <= 0) st.dungeonMomentumPower = 0;
     if (st.eliteChainT <= 0) st.eliteChainCount = 0;
   }
@@ -433,132 +488,6 @@ export default class Game {
       f.y -= f.speed * dt;
     }
     this.floatingTexts = this.floatingTexts.filter((f) => f.t > 0);
-  }
-
-  _currentDamageBonus() {
-    const st = this.hero.state || {};
-    const camp = st.campBuffT > 0 ? st.campBuffPower || 0 : 0;
-    const dungeon = st.dungeonMomentumT > 0 ? st.dungeonMomentumPower || 0 : 0;
-    const chain = Math.max(0, Math.min(6, st.eliteChainCount || 0));
-    return camp + dungeon + chain;
-  }
-
-  _currentIncomingDamageMult() {
-    const st = this.hero.state || {};
-    let mult = 1;
-    if (st.campBuffT > 0) mult -= Math.min(0.22, (st.campBuffPower || 0) * 0.016);
-    if (st.dungeonMomentumT > 0) mult -= Math.min(0.10, (st.dungeonMomentumPower || 0) * 0.012);
-    return Math.max(0.68, mult);
-  }
-
-  _campRenown(campId) {
-    return this.progress?.campRenown?.[campId] || 0;
-  }
-
-  _campTier(campId) {
-    const renown = this._campRenown(campId);
-    if (renown >= 6) return 4;
-    if (renown >= 4) return 3;
-    if (renown >= 2) return 2;
-    return 1;
-  }
-
-  _campTierName(campId) {
-    const t = this._campTier(campId);
-    if (t >= 4) return "Stronghold";
-    if (t >= 3) return "Keep";
-    if (t >= 2) return "Camp";
-    return "Outpost";
-  }
-
-  _campPriceMultiplier(campId) {
-    const tier = this._campTier(campId);
-    return tier >= 4 ? 0.82 : tier >= 3 ? 0.88 : tier >= 2 ? 0.94 : 1.0;
-  }
-
-  _campQuestRewardMultiplier(campId) {
-    const tier = this._campTier(campId);
-    return tier >= 4 ? 1.32 : tier >= 3 ? 1.22 : tier >= 2 ? 1.10 : 1.0;
-  }
-
-  _campBlessingStats(campId, strong = false) {
-    const tier = this._campTier(campId);
-    const renown = this._campRenown(campId);
-    const basePower = strong ? 5 : 3;
-    const baseTime = strong ? 120 : 75;
-
-    const power =
-      basePower +
-      (tier - 1) * (strong ? 2 : 1) +
-      Math.floor(renown * 0.35);
-
-    const time =
-      baseTime +
-      (tier - 1) * (strong ? 28 : 18) +
-      Math.floor(renown * 3);
-
-    return { power, time };
-  }
-
-  _campSafeRadius(campId) {
-    const tier = this._campTier(campId);
-    return tier >= 4 ? 205 : tier >= 3 ? 178 : tier >= 2 ? 150 : 118;
-  }
-
-  _campRespawnDelay(campId) {
-    const tier = this._campTier(campId);
-    if (tier >= 4) return 40;
-    if (tier >= 3) return 32;
-    if (tier >= 2) return 24;
-    return 18;
-  }
-
-  _campIsActivelyShopping(campId) {
-    return this.menu.open === "shop" && this.shop?.campId === campId;
-  }
-
-  _campShouldStayCalm(camp) {
-    const safeRadius = this._campSafeRadius(camp.id);
-    const calmRadius = safeRadius + 110;
-    const heroNear = dist2(this.hero.x, this.hero.y, camp.x, camp.y) < calmRadius * calmRadius;
-    return heroNear || this._campIsActivelyShopping(camp.id);
-  }
-
-  _setCampRespawnLock(campId, extra = 0) {
-    const base = this._campRespawnDelay(campId) + Math.max(0, extra);
-    const until = this.time + base;
-    this._campRespawnState[campId] = Math.max(this._campRespawnState[campId] || 0, until);
-  }
-
-  _campRespawnUnlocked(campId) {
-    return (this._campRespawnState[campId] || 0) <= this.time;
-  }
-
-  _grantCampBlessing(campId, strong = false) {
-    const bless = this._campBlessingStats(campId, strong);
-    this.hero.state.campBuffT = Math.max(this.hero.state.campBuffT || 0, bless.time);
-    this.hero.state.campBuffPower = Math.max(this.hero.state.campBuffPower || 0, bless.power);
-    this._msg(`${this._campTierName(campId)} blessing • +${bless.power} power`, 1.2);
-  }
-
-  _grantDungeonMomentum() {
-    const floor = this.dungeon.floor || 1;
-    const power = 4 + Math.min(8, floor);
-    const time = 140;
-
-    this.hero.state.dungeonMomentumT = Math.max(this.hero.state.dungeonMomentumT || 0, time);
-    this.hero.state.dungeonMomentumPower = Math.max(this.hero.state.dungeonMomentumPower || 0, power);
-
-    this._msg(`Dungeon momentum • +${power} power`, 1.3);
-  }
-
-  _grantRoomClearRecovery() {
-    const hpGain = Math.max(6, Math.round(this.hero.maxHp * 0.08));
-    const manaGain = Math.max(8, Math.round(this.hero.maxMana * 0.12));
-
-    this.hero.hp = Math.min(this.hero.maxHp, this.hero.hp + hpGain);
-    this.hero.mana = Math.min(this.hero.maxMana, this.hero.mana + manaGain);
-    this._msg(`Room cleared • +${hpGain} HP +${manaGain} MP`, 0.9);
   }
 
   _tickCamera(dt) {
@@ -613,1727 +542,219 @@ export default class Game {
       const alpha = clamp(f.t / f.maxT, 0, 1);
       ctx.save();
       ctx.globalAlpha = alpha;
-      ctx.font = f.crit ? "bold 18px Arial" : "bold 14px Arial";
+      ctx.fillStyle = f.color || "#ffffff";
+      ctx.font = "bold 14px Arial";
       ctx.textAlign = "center";
-      ctx.strokeStyle = "rgba(0,0,0,0.55)";
-      ctx.lineWidth = f.crit ? 4 : 3;
-      ctx.fillStyle = f.color;
-      ctx.strokeText(f.text, f.x, f.y);
       ctx.fillText(f.text, f.x, f.y);
       ctx.restore();
     }
   }
 
-  _drawBossTelegraphWorld(ctx, vb) {
-    const boss = this.dungeon?.boss;
-    if (!this.dungeon.active || !boss || !boss.enemy?.alive) return;
+  _enemyVariantLabel(e) {
+    if (e.dragonBoss) return "Dragon";
+    if (e.cornerDragon) return "Corner Dragon";
+    if (e.boss) return "Boss";
 
-    const x = boss.enemy.x;
-    const y = boss.enemy.y;
-    if (!this._inView(x, y, vb)) return;
-
-    if (boss.burstTelegraphT > 0) {
-      const p = clamp(1 - boss.burstTelegraphT / boss.burstTelegraphMax, 0, 1);
-      const r = 38 + p * 86;
-      ctx.save();
-      ctx.strokeStyle = `rgba(255,120,120,${0.35 + p * 0.35})`;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    if (boss.slamTelegraphT > 0) {
-      const p = clamp(1 - boss.slamTelegraphT / boss.slamTelegraphMax, 0, 1);
-      const r = 26 + p * 54;
-      ctx.save();
-      ctx.fillStyle = `rgba(255,170,80,${0.08 + p * 0.12})`;
-      ctx.strokeStyle = `rgba(255,200,120,${0.35 + p * 0.3})`;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      ctx.restore();
+    switch (e.variant) {
+      case "berserker": return "Berserker";
+      case "tank": return "Tank";
+      case "skirmisher": return "Skirmisher";
+      case "sniper": return "Sniper";
+      case "volatile": return "Volatile";
+      case "frost": return "Frost";
+      case "venom": return "Venom";
+      case "firelord": return "Firelord";
+      default:
+        if (e.elite) return "Elite";
+        return "";
     }
   }
 
-  _spawnHitSparks(x, y, color = "rgba(255,255,255,0.9)", count = 5, speed = 120) {
-    for (let i = 0; i < count; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const s = speed * (0.55 + Math.random() * 0.85);
-      this.hitSparks.push({
-        x,
-        y,
-        vx: Math.cos(a) * s,
-        vy: Math.sin(a) * s,
-        color,
-        t: 0.18 + Math.random() * 0.12,
-        maxT: 0.30,
-      });
+  _enemyLabelColor(e) {
+    if (e.dragonBoss) return "#ffb45e";
+    if (e.boss) return "#ff9b8a";
+
+    switch (e.variant) {
+      case "berserker": return "#ff9e9e";
+      case "tank": return "#d7d7d7";
+      case "skirmisher": return "#9ef5c7";
+      case "sniper": return "#bfe8ff";
+      case "volatile": return "#ff98c1";
+      case "frost": return "#bfe7ff";
+      case "venom": return "#b6f08a";
+      default:
+        if (e.elite) return "#ffe08a";
+        return "#ffffff";
     }
   }
 
-  _spawnFloatingText(x, y, text, color = "rgba(255,255,255,0.95)", crit = false) {
-    this.floatingTexts.push({
-      x,
-      y,
-      text: String(text),
-      color,
-      crit,
-      t: crit ? 0.78 : 0.62,
-      maxT: crit ? 0.78 : 0.62,
-      speed: crit ? 26 : 20,
-    });
-  }
+  _drawEnemyOverlays(ctx, vb) {
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.font = "bold 11px Arial";
 
-  _getHeroOffense() {
-    const st = this.hero.getStats?.() || { dmg: 8, crit: 0.05, critMult: 1.7 };
-    return {
-      dmg: (st.dmg || 8) + this._currentDamageBonus(),
-      crit: Math.max(0, st.crit || 0),
-      critMult: Math.max(1.2, st.critMult || 1.7),
-    };
-  }
+    for (const e of this.enemies) {
+      if (!e?.alive) continue;
+      if (!this._inView(e.x, e.y, vb)) continue;
 
-  _rollOutgoingDamage(baseDamage, meta = {}) {
-    const critChance = Math.max(0, meta?.critChance || 0);
-    const critMult = Math.max(1.2, meta?.critMult || 1.7);
-    const crit = Math.random() < critChance;
-    const dmg = crit ? Math.round(baseDamage * critMult) : Math.round(baseDamage);
-    return { dmg: Math.max(1, dmg), crit };
-  }
+      const hp = e.hp ?? 0;
+      const maxHp = Math.max(1, e.maxHp ?? hp ?? 1);
+      const hpP = clamp(hp / maxHp, 0, 1);
 
-  _drawDungeonWorld(ctx) {
-    const room = this._getRoom();
-    if (!room) return;
+      const label = this._enemyVariantLabel(e);
+      const barW = e.dragonBoss ? 60 : e.boss ? 46 : (e.elite || e.variant ? 34 : 0);
 
-    const x0 = room.x - room.w * 0.5;
-    const y0 = room.y - room.h * 0.5;
+      const baseY = e.y - (e.radius || 12) - 18;
 
-    ctx.fillStyle = room.boss ? "rgba(34,26,30,1)" : "rgba(28,28,38,1)";
-    ctx.fillRect(x0, y0, room.w, room.h);
+      if (barW > 0) {
+        ctx.fillStyle = "rgba(0,0,0,0.45)";
+        ctx.fillRect(e.x - barW / 2, baseY, barW, 5);
 
-    const cell = 24;
-    for (let y = 0; y < room.h; y += cell) {
-      for (let x = 0; x < room.w; x += cell) {
-        const wx = x0 + x;
-        const wy = y0 + y;
-        const n = hash2((wx / cell) | 0, (wy / cell) | 0, this.dungeon.floor | 0) >>> 0;
-        ctx.fillStyle = room.boss
-          ? (n % 2 === 0 ? "rgba(56,34,40,1)" : "rgba(48,28,34,1)")
-          : (n % 2 === 0 ? "rgba(46,46,58,1)" : "rgba(40,40,50,1)");
-        ctx.fillRect(wx, wy, cell + 1, cell + 1);
+        let hpColor = "rgba(125,220,120,0.95)";
+        if (e.dragonBoss) hpColor = "rgba(255,146,76,0.96)";
+        else if (e.boss) hpColor = "rgba(255,118,118,0.96)";
+        else if (e.variant === "tank") hpColor = "rgba(210,210,210,0.95)";
+        else if (e.variant === "frost") hpColor = "rgba(162,220,255,0.96)";
+        else if (e.variant === "venom") hpColor = "rgba(170,235,100,0.96)";
+        else if (e.variant === "volatile") hpColor = "rgba(255,132,180,0.96)";
+
+        ctx.fillStyle = hpColor;
+        ctx.fillRect(e.x - barW / 2, baseY, barW * hpP, 5);
+
+        ctx.strokeStyle = "rgba(255,255,255,0.18)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(e.x - barW / 2, baseY, barW, 5);
+      }
+
+      if (label) {
+        ctx.fillStyle = this._enemyLabelColor(e);
+        ctx.strokeStyle = "rgba(0,0,0,0.55)";
+        ctx.lineWidth = 3;
+        ctx.strokeText(label, e.x, baseY - 4);
+        ctx.fillText(label, e.x, baseY - 4);
+      }
+
+      if (e.dragonBoss) {
+        ctx.font = "bold 10px Arial";
+        ctx.fillStyle = "rgba(255,220,190,0.95)";
+        ctx.strokeStyle = "rgba(0,0,0,0.55)";
+        ctx.lineWidth = 3;
+        const corner = e.cornerTag ? ` ${e.cornerTag}` : "";
+        ctx.strokeText(`Lv ${e.level}${corner}`, e.x, baseY - 16);
+        ctx.fillText(`Lv ${e.level}${corner}`, e.x, baseY - 16);
+        ctx.font = "bold 11px Arial";
       }
     }
 
-    ctx.fillStyle = room.boss ? "rgba(86,58,44,1)" : "rgba(64,54,40,1)";
-    ctx.fillRect(x0 - 18, y0 - 18, room.w + 36, 18);
-    ctx.fillRect(x0 - 18, y0 + room.h, room.w + 36, 18);
-    ctx.fillRect(x0 - 18, y0, 18, room.h);
-    ctx.fillRect(x0 + room.w, y0, 18, room.h);
-
-    if (room.boss) {
-      ctx.strokeStyle = "rgba(255,130,110,0.30)";
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.arc(room.x, room.y, 78, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-  }
-
-  _drawDungeonOverlayWorld(ctx) {
-    const room = this._getRoom();
-    if (!room) return;
-
-    ctx.save();
-    ctx.fillStyle = room.boss ? "rgba(20,0,0,0.12)" : "rgba(0,0,0,0.25)";
-    ctx.fillRect(room.x - room.w * 0.5, room.y - room.h * 0.5, room.w, room.h);
     ctx.restore();
   }
 
-  _handleMenus() {
-    if (this.input.wasPressed("i")) this.menu.open = this.menu.open === "inventory" ? null : "inventory";
-    if (this.input.wasPressed("k")) this.menu.open = this.menu.open === "skills" ? null : "skills";
-    if (this.input.wasPressed("g")) this.menu.open = this.menu.open === "god" ? null : "god";
-
-    if (this.input.wasPressed("m")) {
-      this.menu.open = this.menu.open === "map" ? null : "map";
-    }
-
-    if (this.input.wasPressed("j")) this.menu.open = this.menu.open === "quests" ? null : "quests";
-    if (this.input.wasPressed("Escape")) this.menu.open = null;
-
-    if (this.menu.open) this.ui.open?.(this.menu.open);
-    else this.ui.closeAll?.();
-  }
-
-  _handleMovement(dt) {
-    const left = this.input.isDown("ArrowLeft");
-    const right = this.input.isDown("ArrowRight");
-    const up = this.input.isDown("ArrowUp");
-    const down = this.input.isDown("ArrowDown");
-
-    let ax = 0;
-    let ay = 0;
-    if (left) ax -= 1;
-    if (right) ax += 1;
-    if (up) ay -= 1;
-    if (down) ay += 1;
-
-    if (ax || ay) {
-      const n = norm(ax, ay);
-      this.hero.lastMove = { x: n.x, y: n.y };
-
-      let speed = this.hero.getMoveSpeed?.(this) || 140;
-      if (this.menu.open) speed *= 0.65;
-      if (this.hero.state?.dashT > 0) speed *= 1.1;
-
-      this.hero.vx += (n.x * speed - this.hero.vx) * 0.18;
-      this.hero.vy += (n.y * speed - this.hero.vy) * 0.18;
-
-      const nx = this.hero.x + this.hero.vx * dt;
-      const ny = this.hero.y + this.hero.vy * dt;
-
-      if (this.dungeon.active) {
-        this._moveHeroDungeon(nx, ny);
-      } else if (this.hero.state?.sailing) {
-        this.hero.x = nx;
-        this.hero.y = ny;
-      } else {
-        if (this.world.canWalk(nx, this.hero.y)) this.hero.x = nx;
-        else this.hero.vx = 0;
-
-        if (this.world.canWalk(this.hero.x, ny)) this.hero.y = ny;
-        else this.hero.vy = 0;
-      }
-    } else {
-      this.hero.vx *= 0.82;
-      this.hero.vy *= 0.82;
-      if (Math.abs(this.hero.vx) < 1) this.hero.vx = 0;
-      if (Math.abs(this.hero.vy) < 1) this.hero.vy = 0;
-    }
-
-    if (this.input.wasPressed("1")) {
-      if (this.hero.usePotion?.("hp")) {
-        this._msg("Used HP potion");
-        this._saveSoon();
-      }
-    }
-
-    if (this.input.wasPressed("2")) {
-      if (this.hero.usePotion?.("mana")) {
-        this._msg("Used Mana potion");
-        this._saveSoon();
-      }
-    }
-  }
-
-  _handleInventoryInput() {
-    const digitPressed =
-      this.input.wasPressed("1") ? 1 :
-      this.input.wasPressed("2") ? 2 :
-      this.input.wasPressed("3") ? 3 :
-      this.input.wasPressed("4") ? 4 :
-      this.input.wasPressed("5") ? 5 :
-      this.input.wasPressed("6") ? 6 :
-      this.input.wasPressed("7") ? 7 :
-      this.input.wasPressed("8") ? 8 :
-      this.input.wasPressed("9") ? 9 :
-      0;
-
-    if (digitPressed > 0) {
-      this._equipInventoryIndex(digitPressed - 1);
-    }
-  }
-
-  _handleSpells() {
-    const aim = this._getAim();
-
-    if (this.input.wasPressed("q")) this._castSpark(aim.x, aim.y);
-    if (this.input.wasPressed("w")) this._castNova();
-    if (this.input.wasPressed("e")) this._castDash(aim.x, aim.y);
-    if (this.input.wasPressed("r")) this._castOrb(aim.x, aim.y);
-  }
-
-  _handleShopInput() {
-    if (!this.shop.campId) return;
-
-    if (this.input.wasPressed("1")) { this._buyPotion("hp"); return; }
-    if (this.input.wasPressed("2")) { this._buyPotion("mana"); return; }
-    if (this.input.wasPressed("3")) { this._buyStockItem(0); return; }
-    if (this.input.wasPressed("4")) { this._buyStockItem(1); return; }
-    if (this.input.wasPressed("5")) { this._sellInventoryIndex(0); return; }
-    if (this.input.wasPressed("6")) { this._sellInventoryIndex(1); return; }
-    if (this.input.wasPressed("7")) { this._sellInventoryIndex(2); return; }
-    if (this.input.wasPressed("8")) { this._sellInventoryIndex(3); return; }
-    if (this.input.wasPressed("9")) { this._sellInventoryIndex(4); return; }
-  }
-
-  _toggleShop() {
-    const camp = this._cachedNearbyCamp;
-    if (!camp) {
-      if (this.menu.open === "shop") this.menu.open = null;
-      else this._msg("No camp nearby");
-      return;
-    }
-
-    if (this.menu.open === "shop") {
-      this.menu.open = null;
-      return;
-    }
-
-    this._openShopForCamp(camp);
-  }
-
-  _openShopForCamp(camp) {
-    this._refreshShopForCamp(camp);
-    this.menu.open = "shop";
-    this.ui.open?.("shop");
-    this._setCampRespawnLock(camp.id, 8);
-    this._msg(`${camp.name || `Camp ${camp.id}`} • ${this._campTierName(camp.id)} shop`, 1.1);
-  }
-
-  _refreshShopForCamp(camp) {
-    const renown = this._campRenown(camp.id);
-    const tier = this._campTier(camp.id);
-
-    const needsRefresh =
-      this.shop.campId !== camp.id ||
-      this.shop.lastRefreshLevel !== this.hero.level;
-
-    if (!needsRefresh) return;
-
-    this.shop.campId = camp.id;
-    this.shop.stockSeed = hash2(camp.id | 0, this.hero.level | 0, this.seed | 0, renown | 0);
-    this.shop.refreshTier = Math.max(1, this.hero.level);
-    this.shop.lastRefreshLevel = this.hero.level;
-
-    const rng = new RNG(this.shop.stockSeed);
-    const rarityBoost =
-      tier >= 4 ? 0.16 :
-      tier >= 3 ? 0.10 :
-      tier >= 2 ? 0.05 :
-      0;
-
-    const weaponRarityRoll = rng.float();
-    const armorRarityRoll = rng.float();
-
-    const weaponRarity =
-      weaponRarityRoll < 0.46 - rarityBoost ? "common" :
-      weaponRarityRoll < 0.76 - rarityBoost ? "uncommon" :
-      weaponRarityRoll < 0.92 ? "rare" :
-      "epic";
-
-    const armorRarity =
-      armorRarityRoll < 0.50 - rarityBoost ? "common" :
-      armorRarityRoll < 0.80 - rarityBoost ? "uncommon" :
-      armorRarityRoll < 0.94 ? "rare" :
-      "epic";
-
-    const levelBoost = Math.floor(renown * 0.45) + Math.max(0, tier - 1);
-    const weapon = makeGear("weapon", this.hero.level + levelBoost, weaponRarity, hash2(this.shop.stockSeed, 11));
-    const armor = makeGear("armor", this.hero.level + levelBoost, armorRarity, hash2(this.shop.stockSeed, 23));
-
-    const priceMult = 1.15 * this._campPriceMultiplier(camp.id);
-    weapon.price = Math.max(18, Math.round(weapon.price * priceMult));
-    armor.price = Math.max(16, Math.round(armor.price * (1.12 * this._campPriceMultiplier(camp.id))));
-
-    this.shop.stock = [weapon, armor];
-  }
-
-  _buyPotion(kind) {
-    const mult = this._campPriceMultiplier(this.shop.campId);
-    const cost = Math.max(8, Math.round((kind === "mana" ? 16 : 14) * mult));
-
-    if ((this.hero.gold || 0) < cost) {
-      this._msg("Not enough gold");
-      return;
-    }
-
-    this.hero.gold -= cost;
-    if (kind === "mana") this.hero.potions.mana = (this.hero.potions.mana || 0) + 1;
-    else this.hero.potions.hp = (this.hero.potions.hp || 0) + 1;
-
-    this._msg(kind === "mana" ? "Bought Mana Potion" : "Bought HP Potion");
-    this._saveSoon();
-  }
-
-  _buyStockItem(index) {
-    const item = this.shop.stock[index];
-    if (!item) return;
-
-    if ((this.hero.gold || 0) < (item.price || 0)) {
-      this._msg("Not enough gold");
-      return;
-    }
-
-    this.hero.gold -= item.price || 0;
-
-    const boughtItem = { ...item };
-    const diff = this._compareItemVsEquipped(boughtItem);
-
-    if (diff >= 1.2) {
-      this._equipItemDirect(boughtItem, true);
-      this._msg(`Bought and equipped ${boughtItem.name}`, 1.2);
-    } else {
-      this.hero.inventory.push(boughtItem);
-      this._msg(`Bought ${boughtItem.name}`, 1.2);
-    }
-
-    const replacementSlot = item.slot || (index === 0 ? "weapon" : "armor");
-    const campId = this.shop.campId;
-    const levelBoost = Math.floor(this._campRenown(campId) * 0.4) + Math.max(0, this._campTier(campId) - 1);
-    const replacement = makeGear(
-      replacementSlot,
-      this.hero.level + levelBoost,
-      null,
-      hash2(this.shop.stockSeed, this.time * 1000 | 0, index | 0)
-    );
-    replacement.price = Math.max(14, Math.round(replacement.price * (1.10 * this._campPriceMultiplier(campId))));
-    this.shop.stock[index] = replacement;
-
-    this._setCampRespawnLock(campId, 8);
-    this._saveSoon();
-  }
-
-  _sellInventoryIndex(index) {
-    const inv = this.hero.inventory || [];
-    if (index < 0 || index >= inv.length) return;
-
-    const item = inv[index];
-    if (!item) return;
-
-    const tier = this._campTier(this.shop.campId);
-    const sellRate = tier >= 4 ? 0.58 : tier >= 3 ? 0.52 : tier >= 2 ? 0.48 : 0.45;
-    const sellPrice = Math.max(4, Math.round((item.price || 10) * sellRate));
-
-    this.hero.gold += sellPrice;
-    inv.splice(index, 1);
-    this._setCampRespawnLock(this.shop.campId, 8);
-    this._msg(`Sold ${item.name} for ${sellPrice}G`, 1.1);
-    this._saveSoon();
-  }
-
-  _gearScore(item) {
-    if (!item?.stats) return -9999;
-    const s = item.stats;
-    return (
-      (s.dmg || 0) * 2.0 +
-      (s.armor || 0) * 1.7 +
-      (s.crit || 0) * 100 +
-      (s.critMult || 0) * 65 +
-      (item.level || 1) * 0.15
-    );
-  }
-
-  _compareItemVsEquipped(item) {
-    if (!item?.slot) return -9999;
-    const current = this.hero.equip?.[item.slot];
-    if (!current?.stats) return 9999;
-    return this._gearScore(item) - this._gearScore(current);
-  }
-
-  _equipItemDirect(item, allowSwap = true) {
-    if (!item?.slot) return false;
-
-    const current = this.hero.equip?.[item.slot];
-    this.hero.equip[item.slot] = { ...item };
-
-    if (allowSwap && current?.slot) {
-      this.hero.inventory.push(current);
-    }
-
-    return true;
-  }
-
-  _equipInventoryIndex(index) {
-    const inv = this.hero.inventory || [];
-    if (index < 0 || index >= inv.length) return false;
-
-    const item = inv[index];
-    if (!item?.slot) return false;
-
-    const current = this.hero.equip?.[item.slot];
-    inv.splice(index, 1);
-    this.hero.equip[item.slot] = item;
-
-    if (current?.slot) {
-      inv.push(current);
-      const diff = this._gearScore(item) - this._gearScore(current);
-      if (diff > 0.5) this._msg(`Equipped ${item.name} • upgrade`, 1.1);
-      else if (diff < -0.5) this._msg(`Equipped ${item.name} • weaker`, 1.1);
-      else this._msg(`Equipped ${item.name}`, 1.1);
-    } else {
-      this._msg(`Equipped ${item.name}`, 1.1);
-    }
-
-    this._saveSoon();
-    return true;
-  }
-
-  _maybeAutoEquipLoot(gear) {
-    if (!gear?.slot) return;
-
-    const diff = this._compareItemVsEquipped(gear);
-
-    if (diff >= 1.2) {
-      const old = this.hero.equip?.[gear.slot];
-      this.hero.equip[gear.slot] = { ...gear };
-      if (old?.slot) this.hero.inventory.push(old);
-      this._msg(`Auto-equipped ${gear.name}`, 1.0);
-    } else if (!this.hero.equip?.[gear.slot]) {
-      this.hero.equip[gear.slot] = { ...gear };
-      this._msg(`Equipped ${gear.name}`, 1.0);
-    } else {
-      this.hero.inventory.push(gear);
-      this._msg(`Looted ${gear.name}`, 1.0);
-    }
-  }
-
-  _getAim() {
-    if (this.mouse?.moved) {
-      const dx = this.mouse.worldX - this.hero.x;
-      const dy = this.mouse.worldY - this.hero.y;
-      const n = norm(dx, dy);
-      return { x: n.x || 1, y: n.y || 0 };
-    }
-
-    const last = this.hero.lastMove || { x: 1, y: 0 };
-    const n = norm(last.x, last.y);
-    return { x: n.x || 1, y: n.y || 0 };
-  }
-
-  _castSpark(dx, dy) {
-    if (this.cooldowns.q > 0) return;
-
-    const def = this.skillDefs.q;
-    if (!this.hero.spendMana?.(def.mana)) {
-      this._spellMsg("No mana");
-      return;
-    }
-
-    const off = this._getHeroOffense();
-
-    this.projectiles.push(
-      new Projectile(
-        this.hero.x + dx * 16,
-        this.hero.y + dy * 16,
-        dx * 340,
-        dy * 340,
-        off.dmg,
-        1.0,
-        this.hero.level,
-        {
-          friendly: true,
-          color: "#8be9ff",
-          type: "spark",
-          radius: 5,
-          hitRadius: 18,
-          critChance: off.crit,
-          critMult: off.critMult,
-          hitColor: "rgba(139,233,255,0.95)",
-        }
-      )
-    );
-
-    this.cooldowns.q = def.cd;
-    this._spellMsg("Spark");
-  }
-
-  _castNova() {
-    if (this.cooldowns.w > 0) return;
-
-    const def = this.skillDefs.w;
-    if (!this.hero.spendMana?.(def.mana)) {
-      this._spellMsg("No mana");
-      return;
-    }
-
-    const off = this._getHeroOffense();
-
-    this.projectiles.push(
-      new Projectile(
-        this.hero.x,
-        this.hero.y,
-        0,
-        0,
-        off.dmg,
-        0.18,
-        this.hero.level,
-        {
-          friendly: true,
-          nova: true,
-          radius: 12,
-          hitRadius: 76,
-          color: "#d6f5ff",
-          critChance: off.crit * 0.8,
-          critMult: off.critMult,
-          hitColor: "rgba(214,245,255,0.95)",
-        }
-      )
-    );
-
-    this.cooldowns.w = def.cd;
-    this._spellMsg("Nova");
-    this._shake(0.05, 2.0);
-  }
-
-  _castDash(dx, dy) {
-    if (this.cooldowns.e > 0) return;
-
-    const def = this.skillDefs.e;
-    if (!this.hero.spendMana?.(def.mana)) {
-      this._spellMsg("No mana");
-      return;
-    }
-
-    const dist = 86;
-    const nx = this.hero.x + dx * dist;
-    const ny = this.hero.y + dy * dist;
-
-    if (this.dungeon.active) {
-      this._moveHeroDungeon(nx, ny);
-    } else {
-      if (this.world.canWalk(nx, this.hero.y)) this.hero.x = nx;
-      if (this.world.canWalk(this.hero.x, ny)) this.hero.y = ny;
-    }
-
-    this.spawnDashBurst(this.hero.x, this.hero.y, dx, dy);
-
-    this.hero.state.dashT = 0.12;
-    this.cooldowns.e = def.cd;
-    this._shake(0.09, 3.2);
-    this._spellMsg("Dash");
-  }
-
-  spawnDashBurst(x, y, dx, dy) {
-    for (let i = 0; i < 8; i++) {
-      const spread = (Math.random() - 0.5) * 1.2;
-      const a = Math.atan2(dy, dx) + Math.PI + spread;
-      const s = 80 + Math.random() * 90;
-      this.hitSparks.push({
-        x,
-        y,
-        vx: Math.cos(a) * s,
-        vy: Math.sin(a) * s,
-        color: "rgba(255,211,110,0.92)",
-        t: 0.20 + Math.random() * 0.14,
-        maxT: 0.34,
-      });
-    }
-  }
-
-  _castOrb(dx, dy) {
-    if (this.cooldowns.r > 0) return;
-
-    const def = this.skillDefs.r;
-    if (!this.hero.spendMana?.(def.mana)) {
-      this._spellMsg("No mana");
-      return;
-    }
-
-    const off = this._getHeroOffense();
-
-    this.projectiles.push(
-      new Projectile(
-        this.hero.x + dx * 18,
-        this.hero.y + dy * 18,
-        dx * 190,
-        dy * 190,
-        off.dmg * 1.4,
-        1.8,
-        this.hero.level,
-        {
-          friendly: true,
-          color: "#c08cff",
-          type: "orb",
-          radius: 8,
-          hitRadius: 24,
-          critChance: off.crit + 0.03,
-          critMult: off.critMult + 0.15,
-          hitColor: "rgba(192,140,255,0.96)",
-        }
-      )
-    );
-
-    this.cooldowns.r = def.cd;
-    this._spellMsg("Orb");
-    this._shake(0.04, 1.8);
-  }
-
-  _updateProjectiles(dt) {
-    const nearR2 = this.perf.projectileUpdateRadius * this.perf.projectileUpdateRadius;
-
-    for (const p of this.projectiles) {
-      if (!p.alive) continue;
-
-      const pdx = p.x - this.hero.x;
-      const pdy = p.y - this.hero.y;
-      if (pdx * pdx + pdy * pdy > nearR2) {
-        p.life -= dt * 2;
-        if (p.life <= 0) p.alive = false;
-        continue;
-      }
-
-      p.update?.(dt, this.dungeon.active ? null : this.world);
-
-      if (p.meta?.onHitHero) {
-        if (dist2(p.x, p.y, this.hero.x, this.hero.y) < (p.hitRadius || 16) ** 2) {
-          const raw = (p.dmg || 4) * this._currentIncomingDamageMult();
-          const dealt = this.hero.takeDamage?.(raw) ?? Math.round(raw);
-          p.alive = false;
-          this._spawnHitSparks(this.hero.x, this.hero.y, "rgba(255,120,120,0.92)", 6, 130);
-          this._spawnFloatingText(this.hero.x, this.hero.y - 14, `${Math.round(dealt)}`, "rgba(255,160,160,0.96)", false);
-          this._shake(0.05, 1.8);
-          this.hitStopT = Math.max(this.hitStopT, 0.012);
-          continue;
-        }
-      }
-
-      if (p.friendly) {
-        for (const e of this.enemies) {
-          if (!e.alive) continue;
-          if (dist2(p.x, p.y, e.x, e.y) < (p.hitRadius || 18) ** 2) {
-            const roll = this._rollOutgoingDamage(p.dmg || 4, p.meta || {});
-            e.takeDamage?.(roll.dmg);
-
-            const hitColor = p.meta?.hitColor || p.meta?.color || "rgba(255,255,255,0.9)";
-            this._spawnHitSparks(e.x, e.y, hitColor, roll.crit ? 10 : 6, roll.crit ? 180 : 130);
-            this._spawnFloatingText(
-              e.x,
-              e.y - 12,
-              roll.crit ? `CRIT ${roll.dmg}` : `${roll.dmg}`,
-              roll.crit ? "rgba(255,232,140,0.98)" : "rgba(245,248,255,0.96)",
-              roll.crit
-            );
-
-            if (roll.crit) {
-              this._shake(0.05, 2.8);
-              this.hitStopT = Math.max(this.hitStopT, 0.028);
-            } else {
-              this._shake(0.025, 1.2);
-              this.hitStopT = Math.max(this.hitStopT, 0.010);
-            }
-
-            if (!p.meta?.pierce) p.alive = false;
-
-            if (!e.alive) {
-              this._spawnHitSparks(e.x, e.y, "rgba(255,235,170,0.95)", e.elite ? 14 : 8, e.elite ? 230 : 160);
-              this._onEnemyDefeated(e);
-              this._killFlashT = 0.7;
-              this._combatTextT = 0.65;
-              this._shake(0.05, e.elite ? 2.8 : 1.9);
-            }
-            break;
-          }
-        }
-      }
-    }
-
-    this.projectiles = this.projectiles.filter((p) => p.alive !== false);
-  }
-
-  _onEnemyDefeated(enemy) {
-    const st = this.hero.state || {};
-    let goldBonus = enemy.elite ? 6 + enemy.tier * 2 : 0;
-
-    if (enemy.campId != null) {
-      this._setCampRespawnLock(enemy.campId, enemy.elite ? 10 : 0);
-    }
-
-    if (enemy.boss) {
-      goldBonus += 40 + (enemy.tier || 1) * 6;
-      this._msg(`Boss defeated • +${goldBonus} Gold`, 1.5);
-      this._spawnHitSparks(enemy.x, enemy.y, "rgba(255,170,120,0.98)", 24, 260);
-      this.hitStopT = Math.max(this.hitStopT, 0.06);
-    } else if (enemy.elite) {
-      st.eliteChainCount = (st.eliteChainT > 0 ? (st.eliteChainCount || 0) : 0) + 1;
-      st.eliteChainT = 18;
-
-      const chainGold = Math.max(0, st.eliteChainCount - 1) * 4;
-      goldBonus += chainGold;
-
-      if (chainGold > 0) {
-        this._msg(`Elite chain x${st.eliteChainCount} • +${goldBonus} Gold`, 1.2);
-      } else {
-        this._msg(`Elite defeated • +${goldBonus} Gold`, 1.2);
-      }
-
-      this.progress.eliteKills = (this.progress.eliteKills || 0) + 1;
-    }
-
-    if (goldBonus > 0) this.hero.gold += goldBonus;
-
-    const lootBonus = enemy.boss ? 4 : enemy.elite ? (enemy.lootBonus?.() || 2) : 0;
-    this._dropLoot(enemy.x, enemy.y, enemy.tier || 1, lootBonus);
-
-    const xpBase = enemy.xpValue?.() || 4;
-    const xp = enemy.boss ? Math.round(xpBase * 2.5) : xpBase + Math.max(0, (st.eliteChainCount || 0) - 1);
-    this.hero.giveXP?.(xp);
-
-    this._onEnemyKilled(enemy);
-  }
-
-  _updateLoot(dt) {
-    const nearR2 = this.perf.lootUpdateRadius * this.perf.lootUpdateRadius;
-
-    for (const l of this.loot) {
-      if (!l.alive) continue;
-
-      const dx = l.x - this.hero.x;
-      const dy = l.y - this.hero.y;
-      if (dx * dx + dy * dy > nearR2) continue;
-
-      l.update?.(dt, this.hero);
-
-      if (!l.alive) {
-        if (l.kind === "gold") {
-          const amt = l.data?.amount || 5;
-          this.hero.gold += amt;
-          if (this._pickupMsgCooldown <= 0) {
-            this._pickupMsgCooldown = 0.22;
-            this._msg(`+${amt} Gold`, 0.6);
-          }
-        } else if (l.kind === "potion") {
-          const t = l.data?.potionType || "hp";
-          if (t === "mana") this.hero.potions.mana = (this.hero.potions.mana || 0) + 1;
-          else this.hero.potions.hp = (this.hero.potions.hp || 0) + 1;
-
-          if (this._pickupMsgCooldown <= 0) {
-            this._pickupMsgCooldown = 0.3;
-            this._msg(t === "mana" ? "Mana Potion" : "HP Potion", 0.8);
-          }
-        } else if (l.kind === "gear") {
-          const gear = l.data;
-          if (gear?.slot) {
-            this._maybeAutoEquipLoot(gear);
-          }
-        }
-      }
-    }
-
-    this.loot = this.loot.filter((l) => l.alive !== false);
-  }
-
-  _dropLoot(x, y, lvl, bonus = 0) {
-    if (this.loot.length >= this.perf.maxLoot) return;
-
-    const goldChance = Math.min(0.95, 0.72 + bonus * 0.08);
-    const gearChance = Math.min(0.92, 0.18 + bonus * 0.18);
-    const potionChance = Math.min(0.55, 0.09 + bonus * 0.08);
-
-    if (Math.random() < goldChance) {
-      this.loot.push(
-        new Loot(x, y, "gold", {
-          amount: 4 + Math.floor(Math.random() * 6) + (lvl | 0) + bonus * 3
-        })
-      );
-    }
-
-    if (Math.random() < gearChance && this.loot.length < this.perf.maxLoot) {
-      let rarity = null;
-      let slot = Math.random() < 0.62 ? "weapon" : "armor";
-
-      if (bonus >= 2) {
-        const r = Math.random();
-        rarity = r < 0.18 ? "epic" : r < 0.60 ? "rare" : "uncommon";
-        if (Math.random() < 0.25) {
-          slot = Math.random() < 0.5 ? "ring" : "boots";
-        }
-      }
-
-      this.loot.push(
-        new Loot(x, y, "gear", makeGear(slot, lvl + bonus, rarity, hash2(x | 0, y | 0, lvl | 0, bonus | 0)))
-      );
-    }
-
-    if (Math.random() < potionChance && this.loot.length < this.perf.maxLoot) {
-      this.loot.push(new Loot(x, y, "potion", { potionType: Math.random() < 0.5 ? "hp" : "mana" }));
-    }
-  }
-
-  _spawnWorldEnemies(dt) {
-    if (this.enemies.length >= this.perf.maxEnemies) return;
-    if (this.hero.state?.sailing) return;
-    if (this.menu.open) return;
-    if (this._spawnSuppressionT > 0) return;
-
-    this._spawnTimer += dt;
-    if (this._spawnTimer < 4.0) return;
-    this._spawnTimer = 0;
-
-    if (Math.random() > 0.22) return;
-
-    const r = this.perf.spawnRadius;
-    const a = Math.random() * Math.PI * 2;
-    const x = this.hero.x + Math.cos(a) * r;
-    const y = this.hero.y + Math.sin(a) * r;
-
-    if (!this.world.canWalk(x, y)) return;
-    if (this.world._isNearWater?.(x, y, 64)) return;
-    if (dist2(x, y, this.hero.x, this.hero.y) < 700 * 700) return;
-
-    let nearby = 0;
+  _drawBossTelegraphWorld(ctx, vb) {
     for (const e of this.enemies) {
-      if (dist2(x, y, e.x, e.y) < 320 * 320) nearby++;
-      if (nearby >= 2) return;
-    }
+      if (!e?.alive) continue;
+      if (!this._inView(e.x, e.y, vb)) continue;
 
-    const roll = Math.random();
-    const kind =
-      roll < 0.15 ? "brute" :
-      roll < 0.35 ? "stalker" :
-      roll < 0.47 ? "caster" :
-      "blob";
+      if (e.dragonBoss) {
+        if ((e.fireSprayCd || 0) < 0.6) {
+          ctx.save();
+          ctx.strokeStyle = "rgba(255,140,70,0.28)";
+          ctx.lineWidth = 4;
 
-    const elite = Math.random() < 0.08 + Math.min(0.08, this.hero.level * 0.003);
+          const dir = norm(this.hero.x - e.x, this.hero.y - e.y);
+          const baseA = Math.atan2(dir.y, dir.x);
+          const spread = 0.7;
+          const len = 170;
 
-    const e = new Enemy(x, y, this.hero.level, kind, hash2(x | 0, y | 0, this.time | 0), elite);
-    e.home = { x, y };
-    e.campId = null;
-    this.enemies.push(e);
-  }
+          for (let i = -2; i <= 2; i++) {
+            const a = baseA + (i / 2) * (spread / 2);
+            ctx.beginPath();
+            ctx.moveTo(e.x, e.y);
+            ctx.lineTo(e.x + Math.cos(a) * len, e.y + Math.sin(a) * len);
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
 
-  _respawnCampEnemies(dt) {
-    this._campRespawnT += dt;
-    if (this._campRespawnT < this.perf.campRespawnCheckEvery) return;
-    this._campRespawnT = 0;
-
-    const camps = this.world?.camps || [];
-    if (!camps.length) return;
-    if (this.enemies.length >= this.perf.maxEnemies) return;
-    if (this.hero.state?.sailing) return;
-    if (this.dungeon.active) return;
-
-    for (const camp of camps) {
-      const tier = this._campTier(camp.id);
-      const safeRadius = this._campSafeRadius(camp.id);
-
-      if (!this._campRespawnUnlocked(camp.id)) continue;
-      if (this._campShouldStayCalm(camp)) continue;
-
-      let campCount = 0;
-      let campEliteCount = 0;
-      for (const e of this.enemies) {
-        if (!e.alive) continue;
-        if (e.campId === camp.id) {
-          campCount++;
-          if (e.elite) campEliteCount++;
+        if ((e.fireNovaCd || 0) < 0.55) {
+          ctx.save();
+          ctx.strokeStyle = "rgba(255,180,90,0.24)";
+          ctx.lineWidth = 5;
+          ctx.beginPath();
+          ctx.arc(e.x, e.y, 96, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
         }
       }
 
-      const desired =
-        tier >= 4 ? 0 :
-        tier >= 3 ? 0 :
-        tier >= 2 ? 1 :
-        2;
-
-      if (campCount >= desired) continue;
-
-      const missing = desired - campCount;
-      for (let i = 0; i < missing; i++) {
-        if (this.enemies.length >= this.perf.maxEnemies) break;
-
-        const minR = safeRadius + 70;
-        const ang = Math.random() * Math.PI * 2;
-        const rr = minR + 40 + Math.random() * 80;
-        const ex = camp.x + Math.cos(ang) * rr;
-        const ey = camp.y + Math.sin(ang) * rr;
-
-        if (!this.world.canWalk(ex, ey)) continue;
-        if (this.world._isNearWater?.(ex, ey, 40)) continue;
-        if (dist2(ex, ey, this.hero.x, this.hero.y) < 280 * 280) continue;
-
-        const roll = Math.random();
-        const kind =
-          roll < 0.14 ? "brute" :
-          roll < 0.34 ? "stalker" :
-          roll < 0.46 ? "caster" :
-          "blob";
-
-        const eliteChance =
-          tier >= 4 ? 0 :
-          tier >= 3 ? 0.01 :
-          tier >= 2 ? 0.02 :
-          campEliteCount > 0 ? 0.01 : 0.08;
-
-        const elite = Math.random() < eliteChance;
-
-        const e = new Enemy(ex, ey, Math.max(1, this.hero.level), kind, hash2(ex | 0, ey | 0, camp.id | 0), elite);
-        e.home = { x: camp.x, y: camp.y };
-        e.campId = camp.id;
-        this.enemies.push(e);
-        if (elite) campEliteCount++;
-      }
-
-      if (missing > 0) {
-        this._setCampRespawnLock(camp.id, tier >= 2 ? 8 : 4);
+      if (e.variant === "volatile" && (e.variantBurstCd || 99) < 0.5) {
+        ctx.save();
+        ctx.strokeStyle = "rgba(255,110,140,0.22)";
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, 52, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
       }
     }
   }
 
-  _applyCampSafeZones(dt) {
-    void dt;
-    if (this.dungeon.active) return;
-
-    for (const camp of this.world?.camps || []) {
-      const safeRadius = this._campSafeRadius(camp.id);
-      const safeR2 = safeRadius * safeRadius;
-
-      for (const e of this.enemies) {
-        if (!e?.alive) continue;
-        const d2 = dist2(e.x, e.y, camp.x, camp.y);
-        if (d2 <= safeR2) {
-          const dx = e.x - camp.x;
-          const dy = e.y - camp.y;
-          const n = norm(dx, dy);
-          e.x += n.x * 10;
-          e.y += n.y * 10;
-
-          if (this._campTier(camp.id) >= 3 && d2 < (safeRadius - 28) * (safeRadius - 28)) {
-            e.alive = false;
-            e.dead = true;
-          }
-        }
-      }
-    }
-
-    this.enemies = this.enemies.filter((e) => e.alive !== false);
-  }
-
-  _applyEnemyTouchDamage(e) {
-    if (!e?.alive) return;
-    if (e.kind === "caster") return;
-
-    const close = dist2(e.x, e.y, this.hero.x, this.hero.y) < (e.radius + 16) ** 2;
-    if (!close) return;
-
-    if (this._touchShakeCd <= 0) {
-      this._touchShakeCd = 0.10;
-      this._shake(0.03, 1.1);
-    }
-
-    if (this._touchDamageCd > 0) return;
-    this._touchDamageCd = this.perf.touchDamageTick;
-
-    let raw = (e.touchDps || 3) * this.perf.touchDamageTick;
-    if (e.boss) raw *= 1.15;
-    const dealt = this.hero.takeDamage?.(raw * this._currentIncomingDamageMult()) ?? Math.round(raw);
-    this._spawnHitSparks(this.hero.x, this.hero.y, "rgba(255,110,110,0.88)", 5, 110);
-    this._spawnFloatingText(this.hero.x, this.hero.y - 12, `${Math.round(dealt)}`, "rgba(255,160,160,0.95)", false);
-    this.hitStopT = Math.max(this.hitStopT, 0.010);
-  }
-
-  _updateOverworldEnemies(dt) {
-    const nearR2 = this.perf.enemyUpdateRadius * this.perf.enemyUpdateRadius;
-
+  _drawDragonTerritoryRings(ctx, vb) {
     for (const e of this.enemies) {
-      if (!e.alive) continue;
+      if (!e?.alive || !e.dragonBoss || !e.home) continue;
+      if (!this._inView(e.home.x, e.home.y, vb)) continue;
 
-      const dx = e.x - this.hero.x;
-      const dy = e.y - this.hero.y;
-      if (dx * dx + dy * dy > nearR2) continue;
+      ctx.save();
+      ctx.strokeStyle = "rgba(255,120,60,0.12)";
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.arc(e.home.x, e.home.y, e.leashRadius || 720, 0, Math.PI * 2);
+      ctx.stroke();
 
-      e.update?.(dt, this.hero, this.world, this);
-      this._applyEnemyTouchDamage(e);
-    }
-
-    this.enemies = this.enemies.filter((e) => e.alive !== false);
-  }
-
-  _updateDungeon(dt) {
-    const room = this._getRoom();
-    if (!room) return;
-
-    const nearR2 = this.perf.enemyUpdateRadius * this.perf.enemyUpdateRadius;
-
-    for (const e of this.enemies) {
-      if (!e.alive) continue;
-
-      const dx = e.x - this.hero.x;
-      const dy = e.y - this.hero.y;
-      if (dx * dx + dy * dy > nearR2) continue;
-
-      e.update?.(dt, this.hero, null, this);
-      this._applyEnemyTouchDamage(e);
-    }
-
-    if (room.boss) {
-      this._updateBossEncounter(dt, room);
-    }
-
-    this.enemies = this.enemies.filter((e) => e.alive !== false);
-
-    if (this.enemies.length === 0) {
-      if (room.exits.next) {
-        this._grantRoomClearRecovery();
-        this._advanceDungeon();
-      } else {
-        this._completeDungeon();
-      }
+      ctx.strokeStyle = "rgba(255,180,100,0.09)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(e.home.x, e.home.y, Math.max(120, (e.leashRadius || 720) - 110), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
     }
   }
 
-  _enterDungeon(dg) {
-    if (this.dungeon.active) return;
-
-    this.hero.state.sailing = false;
-    this.dungeon.active = true;
-    this.dungeon.floor = 1;
-    this.dungeon.seed = hash2(dg.x | 0, dg.y | 0, this.seed | 0);
-    this.dungeon.rooms = this._buildDungeon();
-    this.dungeon.currentRoomIndex = 0;
-    this.dungeon.visited = new Set([0]);
-    this.dungeon.boss = null;
-    this.dungeon.rewardTier = 0;
-
-    const room = this._getRoom();
-    this.hero.x = room.x;
-    this.hero.y = room.y;
-    this.hero.vx = 0;
-    this.hero.vy = 0;
-
-    this.enemies = [];
-    this.projectiles = [];
-    this.loot = [];
-
-    this._spawnDungeonEnemies(room);
-    this._msg("Entered Dungeon");
-    this._shake(0.14, 4);
-    this._spawnSuppressionT = 1.5;
-    if (this.menu.open === "shop") this.menu.open = null;
+  _drawDungeonWorld(ctx) {
+    ctx.save();
+    ctx.fillStyle = "#16141b";
+    ctx.fillRect(this.camera.x - 700, this.camera.y - 500, 1400, 1000);
+    ctx.restore();
   }
 
-  _buildDungeon() {
-    const rooms = [];
-    const roomCount = 6;
-
-    for (let i = 0; i < roomCount; i++) {
-      const isBoss = i === roomCount - 1;
-      const prev = i === 0 ? null : rooms[i - 1];
-
-      const dir = i === 0 ? { x: 0, y: 0 } : (i % 2 === 0 ? { x: 1, y: 0 } : { x: 0, y: 1 });
-
-      const x = i === 0 ? 0 : prev.x + dir.x * 520;
-      const y = i === 0 ? 0 : prev.y + dir.y * 360;
-
-      rooms.push({
-        id: i,
-        x,
-        y,
-        w: isBoss ? 560 : 420,
-        h: isBoss ? 360 : 260,
-        boss: isBoss,
-        exits: { next: i < roomCount - 1, prev: i > 0 }
-      });
-    }
-
-    return rooms;
-  }
-
-  _getRoom() {
-    return this.dungeon.rooms[this.dungeon.currentRoomIndex];
-  }
-
-  _spawnDungeonEnemies(room) {
-    this.enemies = [];
-    this.dungeon.boss = null;
-
-    if (room.boss) {
-      const boss = new Enemy(
-        room.x,
-        room.y - 12,
-        this.hero.level + 3,
-        "brute",
-        hash2(room.id | 0, this.seed | 0, 991),
-        true
-      );
-      boss.boss = true;
-      boss.maxHp = Math.round(boss.maxHp * 1.7);
-      boss.hp = boss.maxHp;
-      boss.touchDps *= 1.2;
-      boss.r += 5;
-      boss.radius = boss.r;
-      boss.home = { x: room.x, y: room.y };
-      boss.campId = null;
-      this.enemies.push(boss);
-
-      this.dungeon.boss = {
-        enemy: boss,
-        phase: 1,
-        phase2Triggered: false,
-        burstCd: 2.4,
-        burstTelegraphT: 0,
-        burstTelegraphMax: 0.9,
-        slamCd: 4.8,
-        slamTelegraphT: 0,
-        slamTelegraphMax: 0.75,
-        summonCd: 6.0,
-        summonCount: 0,
-      };
-
-      this._msg("Boss Chamber");
-      return;
-    }
-
-    const count = 3 + Math.min(4, this.dungeon.floor);
-
-    for (let i = 0; i < count; i++) {
-      const ex = room.x + (Math.random() * (room.w - 120) - (room.w - 120) * 0.5);
-      const ey = room.y + (Math.random() * (room.h - 120) - (room.h - 120) * 0.5);
-
-      const roll = Math.random();
-      const kind =
-        roll < 0.18 ? "brute" :
-        roll < 0.36 ? "stalker" :
-        roll < 0.48 ? "caster" :
-        "blob";
-
-      const elite = Math.random() < 0.16 + Math.min(0.10, this.dungeon.floor * 0.02);
-      const e = new Enemy(ex, ey, this.hero.level, kind, hash2(ex | 0, ey | 0, room.id | 0), elite);
-      e.home = { x: ex, y: ey };
-      e.campId = null;
-      this.enemies.push(e);
-    }
-  }
-
-  _updateBossEncounter(dt, room) {
-    const bossState = this.dungeon.boss;
-    const boss = bossState?.enemy;
-    if (!boss || !boss.alive) return;
-
-    const hpPct = boss.hp / Math.max(1, boss.maxHp);
-
-    if (!bossState.phase2Triggered && hpPct <= 0.55) {
-      bossState.phase2Triggered = true;
-      bossState.phase = 2;
-      boss.touchDps *= 1.18;
-      boss.speed *= 1.08;
-      this._summonBossAdds(3, room);
-      this._spawnHitSparks(boss.x, boss.y, "rgba(255,170,120,0.96)", 18, 220);
-      this._msg("Boss enraged!");
-      this._shake(0.14, 4.6);
-    }
-
-    bossState.burstCd -= dt;
-    bossState.slamCd -= dt;
-    bossState.summonCd -= dt;
-
-    if (bossState.burstTelegraphT > 0) {
-      bossState.burstTelegraphT -= dt;
-      if (bossState.burstTelegraphT <= 0) {
-        this._bossRadialBurst(boss);
-        bossState.burstCd = bossState.phase >= 2 ? 2.4 : 3.4;
-      }
-    } else if (bossState.burstCd <= 0) {
-      bossState.burstTelegraphT = bossState.burstTelegraphMax;
-      this._msg("Boss burst!");
-    }
-
-    if (bossState.slamTelegraphT > 0) {
-      bossState.slamTelegraphT -= dt;
-      if (bossState.slamTelegraphT <= 0) {
-        this._bossSlam(boss);
-        bossState.slamCd = bossState.phase >= 2 ? 4.4 : 5.8;
-      }
-    } else if (bossState.slamCd <= 0) {
-      bossState.slamTelegraphT = bossState.slamTelegraphMax;
-      this._msg("Boss slam!");
-    }
-
-    if (bossState.summonCd <= 0 && bossState.summonCount < (bossState.phase >= 2 ? 3 : 1)) {
-      const addCount = bossState.phase >= 2 ? 2 : 1;
-      this._summonBossAdds(addCount, room);
-      bossState.summonCd = bossState.phase >= 2 ? 7.5 : 9.5;
-      bossState.summonCount++;
-    }
-  }
-
-  _bossRadialBurst(boss) {
-    const bolts = 12;
-    for (let i = 0; i < bolts; i++) {
-      const a = (i / bolts) * Math.PI * 2;
-      const dx = Math.cos(a);
-      const dy = Math.sin(a);
-      this.projectiles.push(
-        new Projectile(
-          boss.x + dx * 16,
-          boss.y + dy * 16,
-          dx * 210,
-          dy * 210,
-          8 + boss.tier * 2,
-          1.5,
-          boss.tier,
-          {
-            color: "rgba(255,140,120,0.95)",
-            radius: 5,
-            type: "enemy_bolt",
-            hitRadius: 18,
-            onHitHero: true,
-            friendly: false,
-          }
-        )
-      );
-    }
-
-    this._spawnHitSparks(boss.x, boss.y, "rgba(255,150,120,0.96)", 16, 220);
-    this._shake(0.08, 3.4);
-  }
-
-  _bossSlam(boss) {
-    const dx = this.hero.x - boss.x;
-    const dy = this.hero.y - boss.y;
-    const n = norm(dx, dy);
-
-    const leap = 52;
-    boss.x += n.x * leap;
-    boss.y += n.y * leap;
-
-    const slamR2 = 80 * 80;
-    if (dist2(boss.x, boss.y, this.hero.x, this.hero.y) < slamR2) {
-      const raw = (14 + boss.tier * 2.5) * this._currentIncomingDamageMult();
-      const dealt = this.hero.takeDamage?.(raw) ?? Math.round(raw);
-      this._spawnFloatingText(this.hero.x, this.hero.y - 14, `${Math.round(dealt)}`, "rgba(255,170,150,0.98)", false);
-      this._spawnHitSparks(this.hero.x, this.hero.y, "rgba(255,150,120,0.92)", 8, 160);
-      this.hitStopT = Math.max(this.hitStopT, 0.018);
-    }
-
-    this._spawnHitSparks(boss.x, boss.y, "rgba(255,190,120,0.96)", 18, 240);
-    this._shake(0.10, 4.0);
-  }
-
-  _summonBossAdds(count, room) {
-    for (let i = 0; i < count; i++) {
-      if (this.enemies.length >= this.perf.maxEnemies + 4) break;
-
-      const a = Math.random() * Math.PI * 2;
-      const r = 80 + Math.random() * 56;
-      const ex = room.x + Math.cos(a) * r;
-      const ey = room.y + Math.sin(a) * r;
-
-      const kindRoll = Math.random();
-      const kind = kindRoll < 0.34 ? "stalker" : kindRoll < 0.68 ? "caster" : "blob";
-      const elite = this.dungeon.boss?.phase >= 2 && Math.random() < 0.22;
-
-      const e = new Enemy(ex, ey, this.hero.level + 1, kind, hash2(ex | 0, ey | 0, room.id | 0, this.time | 0), elite);
-      e.home = { x: room.x, y: room.y };
-      e.campId = null;
-      this.enemies.push(e);
-    }
-
-    this._msg("Boss summons reinforcements");
-    this._shake(0.06, 2.8);
-  }
-
-  _advanceDungeon() {
-    this.dungeon.currentRoomIndex++;
-    this.dungeon.floor = Math.max(this.dungeon.floor, this.dungeon.currentRoomIndex + 1);
-
-    const room = this._getRoom();
-    if (!room) return;
-
-    this.hero.x = room.x;
-    this.hero.y = room.y;
-    this.hero.vx = 0;
-    this.hero.vy = 0;
-
-    this._spawnDungeonEnemies(room);
-    this._msg(room.boss ? "Final Chamber" : "Deeper...");
-    this._shake(0.08, 3);
-  }
-
-  _grantDungeonChestReward() {
-    const floor = this.dungeon.floor || 1;
-    const rarityRoll = Math.random();
-
-    const rarity =
-      floor >= 6 && rarityRoll > 0.80 ? "epic" :
-      floor >= 4 && rarityRoll > 0.50 ? "rare" :
-      rarityRoll > 0.35 ? "uncommon" :
-      "common";
-
-    const slotRoll = Math.random();
-    const slot =
-      slotRoll < 0.40 ? "weapon" :
-      slotRoll < 0.68 ? "armor" :
-      slotRoll < 0.84 ? "ring" :
-      "boots";
-
-    const gear = makeGear(
-      slot,
-      this.hero.level + Math.max(1, Math.floor(floor * 0.75)),
-      rarity,
-      hash2(this.seed | 0, this.hero.level | 0, floor | 0, this.time | 0)
-    );
-
-    const bonusGold = 20 + floor * 8 + (this.dungeon.boss?.phase2Triggered ? 14 : 0);
-    this.hero.gold += bonusGold;
-
-    this.hero.potions.hp = (this.hero.potions.hp || 0) + 1;
-    if (Math.random() < 0.8) this.hero.potions.mana = (this.hero.potions.mana || 0) + 1;
-
-    this._maybeAutoEquipLoot(gear);
-    this._msg(`Boss chest: ${gear.name} • +${bonusGold} Gold`, 1.6);
-  }
-
-  _completeDungeon() {
-    this._msg("Dungeon Cleared!");
-    this.hero.gold += 40 + this.dungeon.floor * 10;
-    this.hero.giveXP?.(25 + this.dungeon.floor * 10);
-
-    this.progress.dungeonBest = Math.max(this.progress.dungeonBest || 0, this.dungeon.floor);
-
-    this._grantDungeonChestReward();
-    this._grantDungeonMomentum();
-
-    this.dungeon.active = false;
-    this.dungeon.boss = null;
-
-    const dg = this.world?.dungeons?.[0];
-    if (dg) {
-      this.hero.x = dg.x;
-      this.hero.y = dg.y + 60;
-      this.hero.vx = 0;
-      this.hero.vy = 0;
-    }
-
-    this.enemies = [];
-    this.projectiles = [];
-    this.loot = [];
-
-    this._shake(0.14, 4);
-    this._saveSoon();
-    this._spawnSuppressionT = 2.0;
-  }
-
-  _moveHeroDungeon(nx, ny) {
-    const room = this._getRoom();
-    if (!room) return;
-
-    const halfW = room.w * 0.5 - 12;
-    const halfH = room.h * 0.5 - 12;
-
-    this.hero.x = clamp(nx, room.x - halfW, room.x + halfW);
-    this.hero.y = clamp(ny, room.y - halfH, room.y + halfH);
-  }
-
-  _autoCloseShopIfNeeded() {
-    if (this.menu.open !== "shop") return;
-    if (this.dungeon.active) {
-      this.menu.open = null;
-      return;
-    }
-    if (!this._cachedNearbyCamp) {
-      this.menu.open = null;
-    }
-  }
-
-  _updateNearbyPOIs(dt) {
-    this._nearbyPoiTimer -= dt;
-    if (this._nearbyPoiTimer > 0) return;
-    this._nearbyPoiTimer = 0.18;
-
-    const hx = this.hero.x;
-    const hy = this.hero.y;
-
-    this._cachedNearbyCamp = null;
-    this._cachedNearbyDock = null;
-    this._cachedNearbyWaystone = null;
-    this._cachedNearbyDungeon = null;
-
-    let bestCampD2 = 110 * 110;
-    for (const c of this.world?.camps || []) {
-      const d2 = dist2(hx, hy, c.x, c.y);
-      if (d2 < bestCampD2) {
-        bestCampD2 = d2;
-        this._cachedNearbyCamp = c;
-      }
-    }
-
-    let bestDockD2 = 110 * 110;
-    for (const d of this.world?.docks || []) {
-      const d2 = dist2(hx, hy, d.x, d.y);
-      if (d2 < bestDockD2) {
-        bestDockD2 = d2;
-        this._cachedNearbyDock = d;
-      }
-    }
-
-    let bestWayD2 = 100 * 100;
-    for (const w of this.world?.waystones || []) {
-      const d2 = dist2(hx, hy, w.x, w.y);
-      if (d2 < bestWayD2) {
-        bestWayD2 = d2;
-        this._cachedNearbyWaystone = w;
-      }
-    }
-
-    let bestDungeonD2 = 100 * 100;
-    for (const dg of this.world?.dungeons || []) {
-      const d2 = dist2(hx, hy, dg.x, dg.y);
-      if (d2 < bestDungeonD2) {
-        bestDungeonD2 = d2;
-        this._cachedNearbyDungeon = dg;
-      }
-    }
-  }
-
-  _activeCampQuests(campId) {
-    return (this.quests || []).filter((q) => q.campId === campId && !q.turnedIn);
-  }
-
-  _campQuestCapacity(campId) {
-    const tier = this._campTier(campId);
-    return tier >= 4 ? 4 : tier >= 3 ? 3 : tier >= 2 ? 3 : 2;
-  }
-
-  _campRestBonus(campId) {
-    const tier = this._campTier(campId);
-    return this.progress?.campRestBonusClaimed?.[campId] === true || tier < 2;
-  }
-
-  _grantCampRestSupplies(campId) {
-    const tier = this._campTier(campId);
-    if (tier < 2) return;
-    if (this.progress?.campRestBonusClaimed?.[campId]) return;
-
-    if (!this.progress.campRestBonusClaimed) this.progress.campRestBonusClaimed = {};
-    this.progress.campRestBonusClaimed[campId] = true;
-
-    this.hero.potions.hp = (this.hero.potions.hp || 0) + 1;
-    if (tier >= 3) this.hero.potions.mana = (this.hero.potions.mana || 0) + 1;
-
-    if (tier >= 4 && Math.random() < 0.45) {
-      const slot = Math.random() < 0.5 ? "ring" : "boots";
-      const gear = makeGear(slot, this.hero.level + 1, "uncommon", hash2(campId | 0, this.time | 0, this.seed | 0));
-      this.hero.inventory.push(gear);
-      this._msg(`${this._campTierName(campId)} stores • received ${gear.name}`, 1.5);
-      return;
-    }
-
-    this._msg(`${this._campTierName(campId)} stores replenished`, 1.2);
-  }
-
-  _interact() {
-    if (this.hero.state?.sailing) {
-      const dock = this._cachedNearbyDock || this._nearestDock(100);
-      if (dock) {
-        this.progress.discoveredDocks?.add?.(dock.id);
-        this._msg("Dock discovered", 1.2);
-        this._saveSoon();
-      }
-      return;
-    }
-
-    const camp = this._cachedNearbyCamp || this._nearestCamp(110);
-    if (camp) {
-      this._interactCamp(camp);
-      return;
-    }
-
-    const waystone = this._cachedNearbyWaystone;
-    if (waystone) {
-      this.progress.discoveredWaystones?.add?.(waystone.id);
-      this.hero.hp = this.hero.maxHp;
-      this.hero.mana = this.hero.maxMana;
-      this._msg(`Waystone ${waystone.id} awakened • Restored`);
-      this._saveSoon();
-      return;
-    }
-
-    const dock = this._cachedNearbyDock;
-    if (dock) {
-      this.progress.discoveredDocks?.add?.(dock.id);
-      this._msg("Dock discovered", 1.2);
-      this._saveSoon();
-      return;
-    }
-
-    const dungeon = this._cachedNearbyDungeon;
-    if (dungeon) {
-      this._enterDungeon(dungeon);
-    }
-  }
-
-  _interactCamp(camp) {
-    this.progress.visitedCamps?.add?.(camp.id);
-    this._setCampRespawnLock(camp.id, 10);
-
-    const renown = this._campRenown(camp.id);
-    const tier = this._campTier(camp.id);
-    const tierName = this._campTierName(camp.id);
-    const active = this._activeCampQuests(camp.id);
-    const completed = active.find((q) => q.done);
-
-    const healPct = tier >= 4 ? 1.0 : tier >= 3 ? 0.85 : tier >= 2 ? 0.65 : 0.35;
-    const manaPct = tier >= 4 ? 1.0 : tier >= 3 ? 0.90 : tier >= 2 ? 0.70 : 0.35;
-
-    this.hero.hp = Math.min(this.hero.maxHp, this.hero.hp + Math.round(this.hero.maxHp * healPct));
-    this.hero.mana = Math.min(this.hero.maxMana, this.hero.mana + Math.round(this.hero.maxMana * manaPct));
-
-    if (completed) {
-      completed.turnedIn = true;
-
-      const rewardMult = this._campQuestRewardMultiplier(camp.id);
-      const rewardGold = Math.round((completed.rewardGold || 0) * rewardMult);
-      const rewardXp = Math.round((completed.rewardXp || 0) * rewardMult);
-
-      this.hero.gold += rewardGold;
-      this.hero.giveXP?.(rewardXp);
-
-      const renownGain = completed.eliteOnly ? 2 : 1;
-      this.progress.campRenown[camp.id] = renown + renownGain;
-      if (this.progress.campRestBonusClaimed) this.progress.campRestBonusClaimed[camp.id] = false;
-      this.questTurnIn = { id: completed.id, name: completed.name };
-
-      this.hero.hp = this.hero.maxHp;
-      this.hero.mana = this.hero.maxMana;
-
-      this._grantCampBlessing(camp.id, true);
-      this._grantCampRestSupplies(camp.id);
-      this._setCampRespawnLock(camp.id, 16);
-
-      if (tier >= 3 && Math.random() < 0.30) {
-        const bonusGold = 10 + tier * 4;
-        this.hero.gold += bonusGold;
-        this._msg(`${tierName} reward cache • +${bonusGold} Gold`, 1.3);
-      } else {
-        this._msg(`Quest complete: +${rewardGold} Gold +${rewardXp} XP`, 1.8);
-      }
-
-      this._refreshShopForCamp(camp);
-      this._saveSoon();
-      return;
-    }
-
-    const currentActive = this._activeCampQuests(camp.id);
-    const capacity = this._campQuestCapacity(camp.id);
-
-    if (currentActive.length < capacity) {
-      const quest = this._createCampQuest(camp);
-      this.quests.push(quest);
-      this._msg(`New quest: ${quest.name}`, 1.6);
-      this._saveSoon();
-      return;
-    }
-
-    this._grantCampBlessing(camp.id, false);
-    this._grantCampRestSupplies(camp.id);
-
-    const first = currentActive[0];
-    if (first) {
-      this._msg(`${camp.name || `Camp ${camp.id}`} • ${tierName} • ${first.have}/${first.need} ${first.target}`, 1.5);
-    } else {
-      this._msg(`${camp.name || `Camp ${camp.id}`} • ${tierName}`, 1.2);
-    }
-  }
-
-  _handleFastTravelInput() {
-    if (this.menu.open !== "map") return;
-    if (this.dungeon.active) return;
-    if (this.hero.state?.sailing) return;
-
-    if (this.input.wasPressed("z")) {
-      this.world?.toggleMapScale?.();
-      this._msg(`Map zoom: ${this.world?.mapMode || "small"}`, 1.0);
-    }
-
-    const ways = [...(this.world?.waystones || [])].filter((w) =>
-      this.progress?.discoveredWaystones?.has?.(w.id)
-    );
-
-    const digitPressed =
-      this.input.wasPressed("1") ? 1 :
-      this.input.wasPressed("2") ? 2 :
-      this.input.wasPressed("3") ? 3 :
-      this.input.wasPressed("4") ? 4 :
-      this.input.wasPressed("5") ? 5 :
-      this.input.wasPressed("6") ? 6 :
-      this.input.wasPressed("7") ? 7 :
-      this.input.wasPressed("8") ? 8 :
-      this.input.wasPressed("9") ? 9 :
-      0;
-
-    if (digitPressed > 0) {
-      const w = ways[digitPressed - 1];
-      if (!w) return;
-
-      const safe =
-        this.world?._findSafeLandPatchNear?.(w.x, w.y, 90) ||
-        this.world?._findNearbyLand?.(w.x, w.y, 120, false, true) ||
-        { x: w.x, y: w.y + 42 };
-
-      this.hero.x = safe.x;
-      this.hero.y = safe.y;
-      this.hero.vx = 0;
-      this.hero.vy = 0;
-      this.hero.hp = this.hero.maxHp;
-      this.hero.mana = this.hero.maxMana;
-      this._msg(`Waystone ${w.id} • Restored`, 1.2);
-      this._shake(0.06, 2.2);
-      this._saveSoon();
-    }
-  }
-
-  _updateZoneMessages(dt) {
-    if (this.dungeon.active) {
-      this.zoneMsg = this.dungeon.boss?.enemy?.alive ? `Boss Floor ${this.dungeon.floor}` : `Dungeon Floor ${this.dungeon.floor}`;
-      this.zoneMsgT = 1.5;
-      return;
-    }
-
-    if (this._cachedNearbyDungeon) {
-      this.zoneMsg = "Dungeon Entrance";
-      this.zoneMsgT = 1.0;
-      return;
-    }
-
-    if (this._cachedNearbyDock) {
-      this.zoneMsg = "Dock";
-      this.zoneMsgT = 1.0;
-      return;
-    }
-
-    if (this._cachedNearbyCamp) {
-      this.zoneMsg = `${this._cachedNearbyCamp.name || "Camp"} • ${this._campTierName(this._cachedNearbyCamp.id)}`;
-      this.zoneMsgT = 1.0;
-      return;
-    }
-
-    this._zoneSampleT -= dt;
-    if (this._zoneSampleT <= 0) {
-      this._zoneSampleT = 0.55;
-      const z = this.world?.getZoneName?.(this.hero.x, this.hero.y) || "";
-      if (z && z !== this._lastZoneName) {
-        this._lastZoneName = z;
-        this.zoneMsg = z;
-        this.zoneMsgT = 1.0;
-      }
-    }
-  }
-
-  _updateMouseWorld() {
-    const rect = this.canvas.getBoundingClientRect();
-    this.mouse.worldX = (this.mouse.x - rect.left - this.w * 0.5) / this.camera.zoom + this.camera.x;
-    this.mouse.worldY = (this.mouse.y - rect.top - this.h * 0.5) / this.camera.zoom + this.camera.y;
+  _drawDungeonOverlayWorld(ctx) {
+    void ctx;
   }
 
   _bindMouse() {
-    if (!this.canvas) return;
+    const rectPoint = (e) => {
+      const r = this.canvas.getBoundingClientRect();
+      return {
+        x: (e.clientX - r.left) * (this.canvas.width / Math.max(1, r.width)),
+        y: (e.clientY - r.top) * (this.canvas.height / Math.max(1, r.height)),
+      };
+    };
 
     this.canvas.addEventListener("mousemove", (e) => {
-      this.mouse.x = e.clientX;
-      this.mouse.y = e.clientY;
+      const p = rectPoint(e);
+      this.mouse.x = p.x;
+      this.mouse.y = p.y;
       this.mouse.moved = true;
     });
 
-    this.canvas.addEventListener("mousedown", () => {
+    this.canvas.addEventListener("mousedown", (e) => {
+      const p = rectPoint(e);
+      this.mouse.x = p.x;
+      this.mouse.y = p.y;
       this.mouse.down = true;
+      this.mouse.moved = true;
     });
 
-    this.canvas.addEventListener("mouseup", () => {
+    window.addEventListener("mouseup", () => {
       this.mouse.down = false;
     });
 
@@ -2342,363 +763,1332 @@ export default class Game {
     });
   }
 
-  _nudgeToLand() {
-    const safe =
-      this.world?._findSafeLandPatchNear?.(this.hero.x, this.hero.y, 300) ||
-      this.world?._findNearbyLand?.(this.hero.x, this.hero.y, 300, false, true);
+  _updateMouseWorld() {
+    const z = this.camera.zoom || 1;
+    const sx = (this.mouse.x - this.w * 0.5) / z;
+    const sy = (this.mouse.y - this.h * 0.5) / z;
+    this.mouse.worldX = this.camera.x + sx;
+    this.mouse.worldY = this.camera.y + sy;
+  }
 
-    if (safe) {
-      this.hero.x = safe.x;
-      this.hero.y = safe.y;
+  _updateHeroAimFromMouse() {
+    const dx = this.mouse.worldX - this.hero.x;
+    const dy = this.mouse.worldY - this.hero.y;
+    const n = norm(dx, dy);
+    this.hero.aimDir.x = n.x;
+    this.hero.aimDir.y = n.y;
+  }
+
+  _handleMenus() {
+    if (this.input.wasPressed("m")) {
+      this.menu.open = this.menu.open === "map" ? null : "map";
+    }
+    if (this.input.wasPressed("i")) {
+      this.menu.open = this.menu.open === "inventory" ? null : "inventory";
+    }
+    if (this.input.wasPressed("Escape")) {
+      this.menu.open = null;
+    }
+  }
+
+  _handleFastTravelInput() {
+    if (this.input.wasPressed("z")) {
+      this.world.toggleMapScale?.();
+    }
+  }
+
+  _handleShopInput() {}
+  _handleInventoryInput() {}
+
+  _handleMovement(dt) {
+    let mx = 0;
+    let my = 0;
+
+    if (this.input.isDown("w") || this.input.isDown("ArrowUp")) my -= 1;
+    if (this.input.isDown("s") || this.input.isDown("ArrowDown")) my += 1;
+    if (this.input.isDown("a") || this.input.isDown("ArrowLeft")) mx -= 1;
+    if (this.input.isDown("d") || this.input.isDown("ArrowRight")) mx += 1;
+
+    const move = norm(mx, my);
+    const slowMult = (this.hero.state?.slowT || 0) > 0 ? 0.72 : 1;
+    const speed = (this.hero.getMoveSpeed?.(this) ?? 140) * slowMult;
+
+    this.hero.vx = move.x * speed;
+    this.hero.vy = move.y * speed;
+
+    const nx = this.hero.x + this.hero.vx * dt;
+    const ny = this.hero.y + this.hero.vy * dt;
+
+    if (this.world.canWalk?.(nx, this.hero.y) || this.hero.state?.sailing) {
+      this.hero.x = nx;
+    } else {
       this.hero.vx = 0;
+    }
+
+    if (this.world.canWalk?.(this.hero.x, ny) || this.hero.state?.sailing) {
+      this.hero.y = ny;
+    } else {
       this.hero.vy = 0;
     }
   }
 
-  _ensureHeroSafe() {
-    if (this.dungeon.active) return;
-    if (this.hero.state?.sailing) return;
-    if (this.world?.canWalk?.(this.hero.x, this.hero.y)) return;
-    this._nudgeToLand();
+  _handleSpells() {
+    if (this.input.wasPressed("q")) this._castSpark();
+    if (this.input.wasPressed("w")) this._castNova();
+    if (this.input.wasPressed("e")) this._castDash();
+    if (this.input.wasPressed("r")) this._castOrb();
+
+    if (this.mouse.down) {
+      this._castSpark();
+    }
   }
 
-  _cleanupFarEntities() {
-    const farEnemyR2 = (this.perf.enemyUpdateRadius * 1.75) ** 2;
-    const farProjR2 = (this.perf.projectileUpdateRadius * 1.4) ** 2;
-    const farLootR2 = (this.perf.lootUpdateRadius * 1.6) ** 2;
+  _castSpark() {
+    if (this.cooldowns.q > 0) return;
+    if (!this.hero.spendMana?.(this.skillDefs.q.mana)) return;
 
-    this.enemies = this.enemies.filter((e) => {
-      if (!e.alive) return false;
-      const dx = e.x - this.hero.x;
-      const dy = e.y - this.hero.y;
-      return dx * dx + dy * dy < farEnemyR2;
-    });
+    this.cooldowns.q = this.skillDefs.q.cd;
 
-    this.projectiles = this.projectiles.filter((p) => {
-      if (!p.alive) return false;
-      const dx = p.x - this.hero.x;
-      const dy = p.y - this.hero.y;
-      return dx * dx + dy * dy < farProjR2;
-    });
+    const dir = norm(this.hero.aimDir?.x || 1, this.hero.aimDir?.y || 0);
+    const spd = 270;
+    const dmg = Math.round(this.hero.getStats().dmg * 0.95);
 
-    this.loot = this.loot.filter((l) => {
-      if (!l.alive) return false;
-      const dx = l.x - this.hero.x;
-      const dy = l.y - this.hero.y;
-      return dx * dx + dy * dy < farLootR2;
-    });
-
-    this.hitSparks = this.hitSparks.filter((s) => {
-      const dx = s.x - this.hero.x;
-      const dy = s.y - this.hero.y;
-      return dx * dx + dy * dy < farProjR2;
-    });
-
-    this.floatingTexts = this.floatingTexts.filter((f) => {
-      const dx = f.x - this.hero.x;
-      const dy = f.y - this.hero.y;
-      return dx * dx + dy * dy < farProjR2;
-    });
+    this.projectiles.push(
+      new Projectile(
+        this.hero.x + dir.x * 18,
+        this.hero.y + dir.y * 18,
+        dir.x * spd,
+        dir.y * spd,
+        dmg,
+        1.25,
+        this.hero.level,
+        {
+          friendly: true,
+          color: "rgba(148,225,255,0.95)",
+          radius: 4,
+          hitRadius: 15,
+        }
+      )
+    );
   }
 
-  _shake(t, mag) {
-    this.camera.shakeT = t;
-    this.camera.shakeMag = mag;
+  _castNova() {
+    if (this.cooldowns.w > 0) return;
+    if (!this.hero.spendMana?.(this.skillDefs.w.mana)) return;
+
+    this.cooldowns.w = this.skillDefs.w.cd;
+
+    const dmg = Math.round(this.hero.getStats().dmg * 1.10);
+
+    this.projectiles.push(
+      new Projectile(
+        this.hero.x,
+        this.hero.y,
+        0,
+        0,
+        dmg,
+        0.45,
+        this.hero.level,
+        {
+          friendly: true,
+          nova: true,
+          color: "rgba(214,245,255,0.92)",
+          radius: 14,
+          hitRadius: 86,
+          ignoreWalls: true,
+        }
+      )
+    );
   }
 
-  _msg(text, t = 1.4) {
-    this.msg = text;
-    this.msgT = t;
-    this.ui?.setMsg?.(text, t);
+  _castDash() {
+    if (this.cooldowns.e > 0) return;
+    if (!this.hero.spendMana?.(this.skillDefs.e.mana)) return;
+
+    this.cooldowns.e = this.skillDefs.e.cd;
+
+    const dir = norm(
+      this.hero.aimDir?.x || this.hero.lastMove?.x || 1,
+      this.hero.aimDir?.y || this.hero.lastMove?.y || 0
+    );
+    this.hero.x += dir.x * 54;
+    this.hero.y += dir.y * 54;
+    this.hero.state.dashT = 0.20;
   }
 
-  _spellMsg(text, t = 1.0) {
-    if (this._spellMsgCooldown > 0) return;
-    this._spellMsgCooldown = 0.3;
-    this._msg(text, t);
+  _castOrb() {
+    if (this.cooldowns.r > 0) return;
+    if (!this.hero.spendMana?.(this.skillDefs.r.mana)) return;
+
+    this.cooldowns.r = this.skillDefs.r.cd;
+
+    const dir = norm(this.hero.aimDir?.x || 1, this.hero.aimDir?.y || 0);
+    const spd = 190;
+    const dmg = Math.round(this.hero.getStats().dmg * 1.8);
+
+    this.projectiles.push(
+      new Projectile(
+        this.hero.x + dir.x * 18,
+        this.hero.y + dir.y * 18,
+        dir.x * spd,
+        dir.y * spd,
+        dmg,
+        2.4,
+        this.hero.level,
+        {
+          friendly: true,
+          color: "rgba(192,140,255,0.96)",
+          radius: 7,
+          hitRadius: 20,
+        }
+      )
+    );
   }
 
-  _saveSoon() {
-    this._autosaveT = Math.min(this._autosaveT, 1.0);
+  _toggleDockingOrSailing() {
+    const nearDock = this._cachedNearbyDock;
+    if (!nearDock) return;
+    this.hero.state.sailing = !this.hero.state.sailing;
+    this._msg(this.hero.state.sailing ? "Set sail" : "Docked", 0.9);
+  }
+
+  _interact() {
+    if (this._cachedNearbyCamp) {
+      const camp = this._cachedNearbyCamp;
+      this.progress.visitedCamps.add?.(camp.id);
+      this.hero.hp = this.hero.maxHp;
+      this.hero.mana = this.hero.maxMana;
+      this._msg(`${camp.name} rested`, 1.0);
+      return;
+    }
+
+    if (this._cachedNearbyDungeon) {
+      this._enterDungeon(this._cachedNearbyDungeon);
+      return;
+    }
+
+    if (this._cachedNearbyWaystone) {
+      this.progress.discoveredWaystones.add?.(this._cachedNearbyWaystone.id);
+      this._msg(`Waystone discovered`, 0.9);
+      return;
+    }
+  }
+
+  _toggleShop() {
+    if (!this._cachedNearbyCamp) return;
+    if (this.menu.open === "shop") {
+      this.menu.open = null;
+      return;
+    }
+    this.shop.campId = this._cachedNearbyCamp.id;
+    this.menu.open = "shop";
+  }
+
+  _updateNearbyPOIs(dt) {
+    this._nearbyPoiTimer -= dt;
+    if (this._nearbyPoiTimer > 0) return;
+    this._nearbyPoiTimer = 0.12;
+
+    this._cachedNearbyCamp = this._nearestWithin(this.world.camps || [], 110);
+    this._cachedNearbyDock = this._nearestWithin(this.world.docks || [], 90);
+    this._cachedNearbyWaystone = this._nearestWithin(this.world.waystones || [], 100);
+    this._cachedNearbyDungeon = this._nearestWithin(this.world.dungeons || [], 110);
+  }
+
+  _nearestWithin(arr, r) {
+    let best = null;
+    let bestD = r * r;
+    for (const p of arr) {
+      const d = dist2(this.hero.x, this.hero.y, p.x, p.y);
+      if (d <= bestD) {
+        bestD = d;
+        best = p;
+      }
+    }
+    return best;
+  }
+
+  _autoCloseShopIfNeeded() {
+    if (this.menu.open !== "shop") return;
+    const camp = this._cachedNearbyCamp;
+    if (!camp || camp.id !== this.shop.campId) {
+      this.menu.open = null;
+    }
+  }
+
+  _countEnemiesNear(x, y, radius, filterFn = null) {
+    const r2 = radius * radius;
+    let count = 0;
+    for (const e of this.enemies) {
+      if (!e?.alive) continue;
+      if (filterFn && !filterFn(e)) continue;
+      if (dist2(x, y, e.x, e.y) <= r2) count++;
+    }
+    return count;
+  }
+
+  _spawnEnemyAt(x, y, level, kind, elite = false, boss = false) {
+    const e = new Enemy(
+      x,
+      y,
+      level,
+      kind,
+      hash2(x | 0, y | 0, this.seed + ((this.time * 1000) | 0)),
+      elite,
+      boss
+    );
+    this._applyEnemyTuning(e);
+    this.enemies.push(e);
+    return e;
+  }
+
+  _rollVariant(zone, kind, isUnknown) {
+    if (kind === "dragon") return "firelord";
+
+    const r = Math.random();
+
+    if (isUnknown) {
+      if (r < 0.17) return "berserker";
+      if (r < 0.34) return "tank";
+      if (r < 0.49) return "sniper";
+      if (r < 0.64) return "volatile";
+      if (r < 0.79) return "venom";
+      return "frost";
+    }
+
+    if (zone === "Pine Verge") {
+      if (r < 0.22) return "skirmisher";
+      if (r < 0.42) return "venom";
+      if (r < 0.58) return "berserker";
+      return "";
+    }
+
+    if (zone === "High Meadow") {
+      if (r < 0.22) return "skirmisher";
+      if (r < 0.38) return "frost";
+      return "";
+    }
+
+    if (zone === "Whisper Grass") {
+      if (r < 0.24) return "sniper";
+      if (r < 0.40) return "frost";
+      return "";
+    }
+
+    if (zone === "Ash Fields") {
+      if (r < 0.22) return "volatile";
+      if (r < 0.42) return "berserker";
+      return "";
+    }
+
+    if (zone === "Stone Flats") {
+      if (r < 0.28) return "tank";
+      if (r < 0.42) return "volatile";
+      return "";
+    }
+
+    if (zone === "Old Road") {
+      if (r < 0.20) return "skirmisher";
+      if (r < 0.32) return "sniper";
+      return "";
+    }
+
+    if (zone === "Riverbank" || zone === "Shoreline") {
+      if (r < 0.20) return "frost";
+      if (r < 0.34) return "venom";
+      return "";
+    }
+
+    if (r < 0.12) return "berserker";
+    if (r < 0.22) return "skirmisher";
+    return "";
+  }
+
+  _applyEnemyTuning(e) {
+    if (!e) return;
+
+    if (e.kind === "unknown") {
+      e.hp = Math.round(e.hp * 1.75);
+      e.maxHp = e.hp;
+      e.touchDps = Math.round((e.touchDps || 4) * 1.5);
+      e.lootScalar = 1.6;
+    }
+
+    if (!e.variant) {
+      const zone = this.world.getZoneName?.(e.x, e.y) || "Green Reach";
+      e.variant = this._rollVariant(zone, e.kind, zone === "Unknown");
+    }
+
+    if (e.variant === "berserker") {
+      e.hp = Math.round((e.hp || 50) * 1.10);
+      e.maxHp = e.hp;
+      e.moveSpeed = Math.round((e.moveSpeed || 60) * 1.22);
+      e.touchDps = Math.round((e.touchDps || 4) * 1.28);
+    } else if (e.variant === "tank") {
+      e.hp = Math.round((e.hp || 50) * 1.55);
+      e.maxHp = e.hp;
+      e.moveSpeed = Math.round((e.moveSpeed || 60) * 0.85);
+      e.touchDps = Math.round((e.touchDps || 4) * 1.16);
+    } else if (e.variant === "skirmisher") {
+      e.hp = Math.round((e.hp || 50) * 0.92);
+      e.maxHp = e.hp;
+      e.moveSpeed = Math.round((e.moveSpeed || 60) * 1.30);
+    } else if (e.variant === "sniper") {
+      e.hp = Math.round((e.hp || 50) * 0.94);
+      e.maxHp = e.hp;
+      e.rangedCd = 1.8 + Math.random() * 1.0;
+    } else if (e.variant === "volatile") {
+      e.variantBurstCd = 4.0 + Math.random() * 2.0;
+    } else if (e.variant === "frost") {
+      e.slowTouch = true;
+    } else if (e.variant === "venom") {
+      e.poisonTouch = true;
+    }
+
+    if (e.kind === "dragon") {
+      e.dragonBoss = true;
+      e.borderThreat = true;
+      e.boss = true;
+      e.elite = true;
+      e.radius = Math.max(26, e.radius || 26);
+      e.hp = Math.max(520, Math.round((e.hp || 100) * 6.2));
+      e.maxHp = e.hp;
+      e.touchDps = Math.max(24, Math.round((e.touchDps || 6) * 3.5));
+      e.moveSpeed = Math.max(56, Math.round((e.moveSpeed || 60) * 0.95));
+      e.fireSprayCd = 2.4 + Math.random() * 1.2;
+      e.fireNovaCd = 5.4 + Math.random() * 1.5;
+      e.lootScalar = 5.0;
+      e.variant = "firelord";
+    }
+
+    if (e.borderThreat && !e.dragonBoss) {
+      e.hp = Math.round((e.hp || 50) * 1.45);
+      e.maxHp = e.hp;
+      e.touchDps = Math.round((e.touchDps || 4) * 1.55);
+      e.lootScalar = Math.max(1.5, e.lootScalar || 1.5);
+    }
+  }
+
+  _spawnPack(cx, cy, zone, packSize, opts = {}) {
+    let spawned = 0;
+    const isUnknown = zone === "Unknown";
+    const baseLevel = Math.max(1, this.hero.level + (isUnknown ? 3 : 0));
+
+    for (let i = 0; i < packSize; i++) {
+      if ((this.enemies?.length || 0) >= this.perf.maxEnemies) break;
+
+      const ang = Math.random() * Math.PI * 2;
+      const rad = 24 + Math.random() * 90;
+      const ex = cx + Math.cos(ang) * rad;
+      const ey = cy + Math.sin(ang) * rad;
+
+      if (!this.world.canWalk?.(ex, ey)) continue;
+
+      let kind = "blob";
+      let elite = false;
+
+      if (isUnknown) {
+        const roll = Math.random();
+        if (roll < 0.16) kind = "unknown";
+        else if (roll < 0.34) kind = "brute";
+        else if (roll < 0.52) kind = "caster";
+        else if (roll < 0.70) kind = "stalker";
+        else if (roll < 0.86) kind = "wolf";
+        else kind = "scout";
+        elite = Math.random() < 0.34;
+      } else if (zone === "Pine Verge") {
+        const roll = Math.random();
+        kind = roll < 0.42 ? "wolf" : roll < 0.74 ? "stalker" : "scout";
+        elite = Math.random() < 0.05;
+      } else if (zone === "High Meadow") {
+        const roll = Math.random();
+        kind = roll < 0.44 ? "scout" : roll < 0.74 ? "blob" : "wolf";
+        elite = Math.random() < 0.04;
+      } else if (zone === "Whisper Grass") {
+        const roll = Math.random();
+        kind = roll < 0.38 ? "scout" : roll < 0.66 ? "stalker" : "caster";
+        elite = Math.random() < 0.05;
+      } else if (zone === "Ash Fields") {
+        const roll = Math.random();
+        kind = roll < 0.42 ? "ashling" : roll < 0.76 ? "brute" : "caster";
+        elite = Math.random() < 0.06;
+      } else if (zone === "Stone Flats") {
+        const roll = Math.random();
+        kind = roll < 0.48 ? "brute" : roll < 0.76 ? "ashling" : "blob";
+        elite = Math.random() < 0.05;
+      } else if (zone === "Old Road") {
+        const roll = Math.random();
+        kind = roll < 0.44 ? "scout" : roll < 0.76 ? "wolf" : "stalker";
+        elite = Math.random() < 0.04;
+      } else if (zone === "Riverbank" || zone === "Shoreline") {
+        const roll = Math.random();
+        kind = roll < 0.42 ? "blob" : roll < 0.74 ? "scout" : "caster";
+        elite = Math.random() < 0.04;
+      } else {
+        const roll = Math.random();
+        kind = roll < 0.22 ? "blob" : roll < 0.44 ? "stalker" : roll < 0.64 ? "wolf" : roll < 0.82 ? "scout" : "caster";
+        elite = Math.random() < 0.04;
+      }
+
+      const e = this._spawnEnemyAt(
+        ex,
+        ey,
+        Math.max(1, baseLevel + Math.floor(Math.random() * 3) - 1),
+        kind,
+        elite,
+        false
+      );
+
+      if (isUnknown) e.borderThreat = true;
+      this._applyEnemyTuning(e);
+
+      spawned++;
+    }
+
+    if (opts.addLoneStrong && isUnknown && Math.random() < 0.58 && (this.enemies?.length || 0) < this.perf.maxEnemies) {
+      const ang = Math.random() * Math.PI * 2;
+      const ex = cx + Math.cos(ang) * (110 + Math.random() * 70);
+      const ey = cy + Math.sin(ang) * (110 + Math.random() * 70);
+      if (this.world.canWalk?.(ex, ey)) {
+        const eliteKinds = ["unknown", "brute", "caster", "stalker"];
+        const k = eliteKinds[(Math.random() * eliteKinds.length) | 0];
+        const e = this._spawnEnemyAt(ex, ey, this.hero.level + 5 + ((Math.random() * 3) | 0), k, true, false);
+        e.borderThreat = true;
+        this._applyEnemyTuning(e);
+        spawned++;
+      }
+    }
+
+    return spawned;
+  }
+
+  _spawnWorldEnemies(dt) {
+    this._spawnTimer -= dt;
+    if (this._spawnTimer > 0) return;
+    this._spawnTimer = 0.78;
+
+    if ((this.enemies?.length || 0) >= this.perf.maxEnemies) return;
+    if (this._spawnSuppressionT > 0) return;
+
+    const heroZone = this.world.getZoneName?.(this.hero.x, this.hero.y) || "Green Reach";
+    const heroInUnknown = heroZone === "Unknown";
+
+    const localCap = heroInUnknown ? this.perf.unknownLocalCap : this.perf.discoverableLocalCap;
+    const wideCap = heroInUnknown ? this.perf.unknownWideCap : this.perf.discoverableWideCap;
+
+    const localCount = this._countEnemiesNear(this.hero.x, this.hero.y, 720, (e) => !e.campId && !e.dragonBoss);
+    if (localCount >= localCap) return;
+
+    const wideCount = this._countEnemiesNear(this.hero.x, this.hero.y, 1280, (e) => !e.campId && !e.dragonBoss);
+    if (wideCount >= wideCap) return;
+
+    const attempts = 4;
+    for (let i = 0; i < attempts; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const rad = this.perf.spawnMinDistance + Math.random() * (this.perf.spawnMaxDistance - this.perf.spawnMinDistance);
+      const cx = this.hero.x + Math.cos(ang) * rad;
+      const cy = this.hero.y + Math.sin(ang) * rad;
+
+      if (!this.world.canWalk?.(cx, cy)) continue;
+      if (this._nearPointOfInterest(cx, cy, 180)) continue;
+
+      const zone = this.world.getZoneName?.(cx, cy) || "Green Reach";
+      const isUnknown = zone === "Unknown";
+
+      const spotCount = this._countEnemiesNear(cx, cy, 260, (e) => !e.campId && !e.dragonBoss);
+      if (spotCount >= (isUnknown ? 4 : 2)) continue;
+
+      const lone = Math.random() < (isUnknown ? 0.18 : 0.34);
+      const packSize = lone
+        ? 1
+        : isUnknown
+          ? 3 + ((Math.random() * 2) | 0)
+          : 2 + ((Math.random() * 2) | 0);
+
+      this._spawnPack(cx, cy, zone, packSize, { addLoneStrong: true });
+      break;
+    }
+  }
+
+  _spawnUnknownBorderBosses(dt) {
+    this._unknownBossSpawnT -= dt;
+    if (this._unknownBossSpawnT > 0) return;
+    this._unknownBossSpawnT = 8.4;
+
+    const zone = this.world.getZoneName?.(this.hero.x, this.hero.y) || "";
+    if (zone !== "Unknown") return;
+
+    const existingBoss = this.enemies.some((e) => e?.alive && e.boss && !e.dragonBoss);
+    if (existingBoss) return;
+
+    if ((this.enemies?.length || 0) >= this.perf.maxEnemies - 2) return;
+
+    const edge = this.world.mapHalfSize || 6200;
+    const heroNearBorder =
+      Math.abs(this.hero.x) > edge + 280 ||
+      Math.abs(this.hero.y) > edge + 280;
+
+    if (!heroNearBorder) return;
+
+    const ang = Math.random() * Math.PI * 2;
+    const rad = 620 + Math.random() * 260;
+    const ex = this.hero.x + Math.cos(ang) * rad;
+    const ey = this.hero.y + Math.sin(ang) * rad;
+
+    if (!this.world.canWalk?.(ex, ey)) return;
+
+    const kindRoll = Math.random();
+    const kind =
+      kindRoll < 0.34 ? "unknown" :
+      kindRoll < 0.62 ? "brute" :
+      kindRoll < 0.84 ? "caster" :
+      "stalker";
+
+    const bossLevel = Math.max(this.hero.level + 8, 12);
+    const boss = this._spawnEnemyAt(ex, ey, bossLevel, kind, true, true);
+    boss.borderThreat = true;
+    boss.touchDps = Math.max(12, boss.touchDps || 0);
+    this._applyEnemyTuning(boss);
+
+    this._msg("A border champion emerges from the Unknown", 1.4);
+  }
+
+  _dragonCornerPositions() {
+    const main = this.world.mapHalfSize || 6200;
+    const bounds = this.world.boundsHalfSize || 8200;
+    const edgeBandMid = main + Math.max(550, Math.floor((bounds - main) * 0.45));
+
+    return [
+      { x: -edgeBandMid, y: -edgeBandMid, corner: "NW" },
+      { x:  edgeBandMid, y: -edgeBandMid, corner: "NE" },
+      { x: -edgeBandMid, y:  edgeBandMid, corner: "SW" },
+      { x:  edgeBandMid, y:  edgeBandMid, corner: "SE" },
+    ];
+  }
+
+  _spawnCornerDragon(pos) {
+    const p = this.world._findSafeLandPatchNear?.(pos.x, pos.y, 420) || pos;
+    const e = this._spawnEnemyAt(p.x, p.y, Math.max(this.hero.level + 12, 18), "dragon", true, true);
+    e.cornerDragon = true;
+    e.cornerTag = pos.corner;
+    e.home = { x: p.x, y: p.y };
+    e.leashRadius = 820;
+    e.territoryRadius = 560;
+    e.lastFireMsgT = 0;
+    this._applyEnemyTuning(e);
+    return e;
+  }
+
+  _ensureCornerDragons() {
+    const positions = this._dragonCornerPositions();
+    for (const pos of positions) {
+      const exists = this.enemies.some((e) => e?.alive && e.cornerDragon && e.cornerTag === pos.corner);
+      if (!exists) this._spawnCornerDragon(pos);
+    }
+  }
+
+  _ensureCornerDragonsPeriodic(dt) {
+    this._dragonCheckT -= dt;
+    if (this._dragonCheckT > 0) return;
+    this._dragonCheckT = 5.5;
+    this._ensureCornerDragons();
+  }
+
+  _dragonMinionCount(dragon) {
+    if (!dragon?.home) return 0;
+    const rr = (dragon.territoryRadius || 560) ** 2;
+    let n = 0;
+    for (const e of this.enemies) {
+      if (!e?.alive || e === dragon || e.dragonBoss) continue;
+      const d = dist2(e.x, e.y, dragon.home.x, dragon.home.y);
+      if (d <= rr) n++;
+    }
+    return n;
+  }
+
+  _spawnDragonMinionPack(dragon) {
+    if (!dragon?.home) return;
+    if ((this.enemies?.length || 0) >= this.perf.maxEnemies - 2) return;
+
+    const desired = dragon.territoryRadius || 560;
+    const current = this._dragonMinionCount(dragon);
+    if (current >= 3) return;
+
+    const packSize = 2;
+    for (let i = 0; i < packSize; i++) {
+      if ((this.enemies?.length || 0) >= this.perf.maxEnemies) break;
+
+      const a = Math.random() * Math.PI * 2;
+      const r = 120 + Math.random() * (desired - 180);
+      const ex = dragon.home.x + Math.cos(a) * r;
+      const ey = dragon.home.y + Math.sin(a) * r;
+
+      if (!this.world.canWalk?.(ex, ey)) continue;
+
+      const roll = Math.random();
+      const kind =
+        roll < 0.30 ? "unknown" :
+        roll < 0.55 ? "brute" :
+        roll < 0.78 ? "caster" :
+        "stalker";
+
+      const e = this._spawnEnemyAt(ex, ey, Math.max(this.hero.level + 5, dragon.level - 6), kind, true, false);
+      e.borderThreat = true;
+      e.dragonMinion = true;
+      e.dragonCornerTag = dragon.cornerTag;
+      e.home = { x: ex, y: ey };
+      e.leashRadius = 180;
+      this._applyEnemyTuning(e);
+    }
+  }
+
+  _updateDragons(dt) {
+    for (const e of this.enemies) {
+      if (!e?.alive || !e.dragonBoss) continue;
+
+      e.lastFireMsgT = Math.max(0, (e.lastFireMsgT || 0) - dt);
+
+      if (e.home && e.leashRadius) {
+        const heroDist = Math.hypot(this.hero.x - e.x, this.hero.y - e.y);
+        const homeDist = Math.hypot(e.x - e.home.x, e.y - e.home.y);
+
+        if (heroDist > 700 && homeDist > e.leashRadius) {
+          const back = norm(e.home.x - e.x, e.home.y - e.y);
+          e.x += back.x * 66 * dt;
+          e.y += back.y * 66 * dt;
+        }
+      }
+
+      e.fireSprayCd = Math.max(0, (e.fireSprayCd || 0) - dt);
+      e.fireNovaCd = Math.max(0, (e.fireNovaCd || 0) - dt);
+
+      const dx = this.hero.x - e.x;
+      const dy = this.hero.y - e.y;
+      const d = Math.hypot(dx, dy);
+
+      if (d < 380 && e.fireSprayCd <= 0) {
+        this._dragonFireSpray(e);
+        e.fireSprayCd = 2.6 + Math.random() * 1.0;
+      }
+
+      if (d < 200 && e.fireNovaCd <= 0) {
+        this._dragonFireNova(e);
+        e.fireNovaCd = 5.2 + Math.random() * 1.4;
+      }
+    }
+  }
+
+  _dragonFireSpray(e) {
+    const dir = norm(this.hero.x - e.x, this.hero.y - e.y);
+    const baseA = Math.atan2(dir.y, dir.x);
+    const spread = 0.78;
+    const speed = 185;
+    const dmg = Math.max(22, Math.round((e.level || 10) * 1.8));
+
+    for (let i = -2; i <= 2; i++) {
+      const a = baseA + (i / 2) * (spread / 2);
+      const vx = Math.cos(a) * speed;
+      const vy = Math.sin(a) * speed;
+
+      this.projectiles.push(
+        new Projectile(
+          e.x + Math.cos(a) * 30,
+          e.y + Math.sin(a) * 30,
+          vx,
+          vy,
+          dmg,
+          1.55,
+          e.level || 10,
+          {
+            friendly: false,
+            color: "rgba(255,112,54,0.96)",
+            radius: 9,
+            hitRadius: 20,
+            ignoreWalls: false,
+          }
+        )
+      );
+    }
+
+    if ((e.lastFireMsgT || 0) <= 0) {
+      this._spawnFloatingText(e.x, e.y - 34, "FIRE SPRAY", "#ff9a52");
+      e.lastFireMsgT = 0.8;
+    }
+    this._cameraShake(0.10, 2.4);
+  }
+
+  _dragonFireNova(e) {
+    const count = 12;
+    const speed = 160;
+    const dmg = Math.max(24, Math.round((e.level || 10) * 1.55));
+
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2;
+      this.projectiles.push(
+        new Projectile(
+          e.x + Math.cos(a) * 20,
+          e.y + Math.sin(a) * 20,
+          Math.cos(a) * speed,
+          Math.sin(a) * speed,
+          dmg,
+          1.65,
+          e.level || 10,
+          {
+            friendly: false,
+            color: "rgba(255,166,72,0.95)",
+            radius: 8,
+            hitRadius: 18,
+            ignoreWalls: false,
+          }
+        )
+      );
+    }
+
+    this._spawnFloatingText(e.x, e.y - 28, "FIRE BURST", "#ffb866");
+    this._cameraShake(0.16, 3.8);
+  }
+
+  _updateDragonTerritories(dt) {
+    this._dragonTerritoryT -= dt;
+    if (this._dragonTerritoryT > 0) return;
+    this._dragonTerritoryT = 4.5;
+
+    for (const e of this.enemies) {
+      if (!e?.alive || !e.dragonBoss || !e.home) continue;
+      this._spawnDragonMinionPack(e);
+    }
+  }
+
+  _checkDragonWarnings() {
+    for (const e of this.enemies) {
+      if (!e?.alive || !e.dragonBoss || !e.home) continue;
+
+      const d = Math.hypot(this.hero.x - e.home.x, this.hero.y - e.home.y);
+      const warnRadius = (e.territoryRadius || 560) + 90;
+
+      if (d <= warnRadius && !this._dragonWarned[e.cornerTag]) {
+        this._dragonWarned[e.cornerTag] = true;
+        this.zoneMsg = `Dragon Territory ${e.cornerTag}`;
+        this.zoneMsgT = 1.8;
+        this._msg("A great dragon watches this corner", 1.6);
+      }
+
+      if (d > warnRadius + 180) {
+        this._dragonWarned[e.cornerTag] = false;
+      }
+    }
+  }
+
+  _updateVariantAbilities(dt) {
+    for (const e of this.enemies) {
+      if (!e?.alive || e.dragonBoss) continue;
+
+      const d = Math.hypot(this.hero.x - e.x, this.hero.y - e.y);
+
+      if (e.variant === "sniper") {
+        e.rangedCd = Math.max(0, (e.rangedCd || 0) - dt);
+        if (d < 340 && e.rangedCd <= 0) {
+          const dir = norm(this.hero.x - e.x, this.hero.y - e.y);
+          const speed = 200;
+          const dmg = Math.max(7, Math.round((e.level || 1) * 0.85));
+          this.projectiles.push(
+            new Projectile(
+              e.x + dir.x * 14,
+              e.y + dir.y * 14,
+              dir.x * speed,
+              dir.y * speed,
+              dmg,
+              1.7,
+              e.level || 1,
+              {
+                friendly: false,
+                color: "rgba(210,240,255,0.94)",
+                radius: 5,
+                hitRadius: 12,
+                ignoreWalls: false,
+              }
+            )
+          );
+          e.rangedCd = 2.4 + Math.random() * 1.0;
+        }
+      }
+
+      if (e.variant === "volatile") {
+        e.variantBurstCd = Math.max(0, (e.variantBurstCd || 0) - dt);
+        if (d < 86 && e.variantBurstCd <= 0) {
+          const count = 6;
+          const speed = 130;
+          const dmg = Math.max(6, Math.round((e.level || 1) * 0.70));
+          for (let i = 0; i < count; i++) {
+            const a = (i / count) * Math.PI * 2;
+            this.projectiles.push(
+              new Projectile(
+                e.x + Math.cos(a) * 10,
+                e.y + Math.sin(a) * 10,
+                Math.cos(a) * speed,
+                Math.sin(a) * speed,
+                dmg,
+                1.0,
+                e.level || 1,
+                {
+                  friendly: false,
+                  color: "rgba(255,106,142,0.92)",
+                  radius: 5,
+                  hitRadius: 12,
+                  ignoreWalls: false,
+                }
+              )
+            );
+          }
+          e.variantBurstCd = 5.0 + Math.random() * 2.0;
+          this._cameraShake(0.06, 1.8);
+        }
+      }
+
+      if (e.variant === "frost" && d < 28 && this._touchDamageCd <= 0) {
+        this.hero.state.slowT = Math.max(this.hero.state.slowT || 0, 0.8);
+      }
+
+      if (e.variant === "venom" && d < 28 && this._touchDamageCd <= 0) {
+        this.hero.state.poisonT = Math.max(this.hero.state.poisonT || 0, 1.8);
+      }
+    }
+
+    if ((this.hero.state.slowT || 0) > 0) this.hero.state.slowT = Math.max(0, this.hero.state.slowT - dt);
+    if ((this.hero.state.poisonT || 0) > 0) {
+      this.hero.state.poisonT = Math.max(0, this.hero.state.poisonT - dt);
+      this.hero.hp = Math.max(1, this.hero.hp - dt * 1.8);
+    }
+  }
+
+  _respawnCampEnemies(dt) {
+    this._campRespawnT -= dt;
+    if (this._campRespawnT > 0) return;
+
+    this._campRespawnT = 22 + Math.random() * 10;
+
+    const camps = this.world.camps || [];
+
+    for (const camp of camps) {
+      const d = Math.hypot(this.hero.x - camp.x, this.hero.y - camp.y);
+      if (d < 520) continue;
+
+      let count = 0;
+      for (const e of this.enemies) {
+        if (!e?.alive) continue;
+        if (e.campId !== camp.id) continue;
+        count++;
+      }
+
+      if (count >= 1) continue;
+      if (Math.random() < 0.6) continue;
+
+      const ang = Math.random() * Math.PI * 2;
+      const rad = 140 + Math.random() * 120;
+      const ex = camp.x + Math.cos(ang) * rad;
+      const ey = camp.y + Math.sin(ang) * rad;
+
+      if (!this.world.canWalk?.(ex, ey)) continue;
+
+      const zone = this.world.getZoneName?.(camp.x, camp.y) || "Camp Grounds";
+
+      let kind = "blob";
+      if (zone === "Pine Verge") kind = Math.random() < 0.5 ? "wolf" : "stalker";
+      else if (zone === "Ash Fields") kind = Math.random() < 0.5 ? "ashling" : "brute";
+      else if (zone === "Stone Flats") kind = "brute";
+      else if (zone === "Whisper Grass") kind = Math.random() < 0.5 ? "scout" : "stalker";
+      else kind = Math.random() < 0.5 ? "blob" : "scout";
+
+      const e = this._spawnEnemyAt(
+        ex,
+        ey,
+        Math.max(1, this.hero.level),
+        kind,
+        false,
+        false
+      );
+
+      e.campId = camp.id;
+      e.home = { x: ex, y: ey };
+    }
+  }
+
+  _updateOverworldEnemies(dt) {
+    for (const e of this.enemies) {
+      if (!e?.alive) continue;
+      const d2 = dist2(e.x, e.y, this.hero.x, this.hero.y);
+      if (d2 > this.perf.enemyUpdateRadius * this.perf.enemyUpdateRadius) continue;
+
+      e.update?.(dt, this.hero, this.world, this);
+
+      const rr = (e.radius || 12) + (this.hero.radius || 12);
+      if (dist2(e.x, e.y, this.hero.x, this.hero.y) <= rr * rr) {
+        if (this._touchDamageCd <= 0) {
+          this._touchDamageCd = this.perf.touchDamageTick;
+          let base = e.touchDps || 4;
+          if (e.variant === "berserker") base *= 1.12;
+          const dealt = this.hero.takeDamage?.(base * this._currentIncomingDamageMult());
+          this._spawnFloatingText(this.hero.x, this.hero.y - 20, `-${dealt}`, "#ffb3b3");
+          this._cameraShake(0.08, e.boss ? 4.6 : 3.0);
+        }
+      }
+    }
+
+    this.enemies = this.enemies.filter((e) => !e.dead);
+  }
+
+  _applyCampSafeZones(dt) {
+    void dt;
+  }
+
+  _updateProjectiles(dt) {
+    for (const p of this.projectiles) {
+      if (!p?.alive) continue;
+      p.update?.(dt, this.world);
+
+      if (!p.alive) continue;
+
+      if (p.friendly) {
+        for (const e of this.enemies) {
+          if (!e?.alive) continue;
+          const rr = (p.hitRadius || p.radius || 4) + (e.radius || 12);
+          if (dist2(p.x, p.y, e.x, e.y) <= rr * rr) {
+            let dmg = p.dmg || 1;
+            dmg += this._currentDamageBonus();
+
+            const critChance = (this.hero.getStats?.().crit || 0) + this._currentCritBonus();
+            const isCrit = Math.random() < critChance;
+            if (isCrit) dmg = Math.round(dmg * (this.hero.getStats?.().critMult || 1.6));
+
+            e.takeDamage?.(dmg);
+            this._spawnHitSpark(e.x, e.y, p.color || "#9dd7ff");
+            this._spawnFloatingText(e.x, e.y - 14, `${dmg}${isCrit ? "!" : ""}`, isCrit ? "#ffe48c" : "#ffffff");
+            p.alive = false;
+
+            if (!e.alive) {
+              this.hero.giveXP?.(e.xpValue?.() || 4);
+              this._dropEnemyLoot(e);
+              this._combatTextT = 0.55;
+              this._killFlashT = e.boss ? 0.45 : 0.25;
+            }
+            break;
+          }
+        }
+      } else {
+        const rr = (p.hitRadius || p.radius || 4) + (this.hero.radius || 12);
+        if (dist2(p.x, p.y, this.hero.x, this.hero.y) <= rr * rr) {
+          const dealt = this.hero.takeDamage?.((p.dmg || 1) * this._currentIncomingDamageMult());
+          this._spawnFloatingText(this.hero.x, this.hero.y - 20, `-${dealt}`, "#ffb3b3");
+          this._cameraShake(0.08, p.radius >= 7 ? 3.4 : 2.8);
+          p.alive = false;
+        }
+      }
+    }
+
+    this.projectiles = this.projectiles.filter((p) => p.alive);
+  }
+
+  _updateLoot(dt) {
+    for (const l of this.loot) {
+      if (!l?.alive) continue;
+
+      const wasAlive = l.alive;
+      l.update?.(dt, this.hero);
+
+      if (wasAlive && !l.alive) {
+        this._pickupLoot(l);
+      }
+    }
+
+    this.loot = this.loot.filter((l) => l.alive);
+  }
+
+  _pickupLoot(l) {
+    if (l.kind === "gold") {
+      this.hero.gold += l.data?.amount || 1;
+      return;
+    }
+
+    if (l.kind === "potion") {
+      const pt = l.data?.potionType === "mana" ? "mana" : "hp";
+      this.hero.potions[pt] = (this.hero.potions[pt] || 0) + 1;
+      return;
+    }
+
+    if (l.kind === "gear" && l.data) {
+      this.hero.inventory.push(l.data);
+    }
+  }
+
+  _dropEnemyLoot(e) {
+    const lootScalar = e.lootScalar || 1;
+    const goldAmt = Math.round(
+      (3 + Math.max(0, Math.round((e.level || 1) * 0.8)) + (e.lootBonus?.() || 0) + (e.boss ? 18 : 0)) * lootScalar
+    );
+    this.loot.push(new Loot(e.x, e.y, "gold", { amount: goldAmt }));
+
+    const potionRoll = Math.random();
+    const potionChance = e.dragonBoss ? 0.95 : e.boss ? 0.55 : e.elite ? 0.22 : 0.10;
+    if (potionRoll < potionChance) {
+      this.loot.push(new Loot(e.x + 8, e.y, "potion", { potionType: Math.random() < 0.35 ? "mana" : "hp" }));
+    }
+
+    const gearChance =
+      e.dragonBoss ? 1.0 :
+      e.boss ? 1.0 :
+      e.elite ? 0.42 :
+      e.kind === "unknown" ? 0.30 :
+      0.12;
+
+    if (Math.random() < gearChance) {
+      const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+      const slot = slots[(Math.random() * slots.length) | 0];
+      const rarity =
+        e.dragonBoss ? "epic" :
+        e.boss ? "epic" :
+        e.elite ? (Math.random() < 0.55 ? "rare" : "epic") :
+        e.kind === "unknown" ? (Math.random() < 0.4 ? "rare" : "uncommon") :
+        (Math.random() < 0.18 ? "rare" : "uncommon");
+
+      const item = makeGear(slot, Math.max(1, e.level), rarity, hash2(e.x | 0, e.y | 0, this.time | 0));
+      this.loot.push(new Loot(e.x - 8, e.y, "gear", item));
+    }
+  }
+
+  _updateQuestState() {}
+
+  _updateZoneMessages(dt) {
+    this._zoneSampleT -= dt;
+    if (this._zoneSampleT > 0) return;
+    this._zoneSampleT = 0.18;
+
+    const zone = this.world.getZoneName?.(this.hero.x, this.hero.y) || "";
+    if (zone && zone !== this._lastZoneName) {
+      this._lastZoneName = zone;
+      this.zoneMsg = zone;
+      this.zoneMsgT = 1.0;
+    }
   }
 
   _checkLevelUpMessage() {
     if ((this.hero.level || 1) > this._levelSeen) {
       this._levelSeen = this.hero.level;
-      this._msg(`Level Up! ${this.hero.level}`, 1.6);
-      if (this.shop.campId) {
-        const fakeCamp = { id: this.shop.campId };
-        this._refreshShopForCamp(fakeCamp);
-      }
+      this._msg(`Level ${this.hero.level}`, 1.1);
     }
   }
 
-  _ensureCampQuests() {
-    const camps = this.world?.camps || [];
-    for (const camp of camps) {
-      const existing = this._activeCampQuests(camp.id);
-      const cap = this._campQuestCapacity(camp.id);
-      while (existing.length < 1 && this.progress?.visitedCamps?.has?.(camp.id) && existing.length < cap) {
-        const q = this._createCampQuest(camp);
-        this.quests.push(q);
-        existing.push(q);
-      }
+  _currentDamageBonus() {
+    const st = this.hero.state || {};
+    const campType = st.campBuffT > 0 ? st.campBuffType || "" : "";
+    const campPower = st.campBuffT > 0 ? st.campBuffPower || 0 : 0;
+
+    const camp =
+      campType === "dust" ? campPower + 2 :
+      campType === "stone" ? Math.floor(campPower * 0.35) :
+      0;
+
+    const dungeon = st.dungeonMomentumT > 0 ? st.dungeonMomentumPower || 0 : 0;
+    const chain = Math.max(0, Math.min(6, st.eliteChainCount || 0));
+    return camp + dungeon + chain;
+  }
+
+  _currentCritBonus() {
+    const st = this.hero.state || {};
+    if (st.campBuffT <= 0) return 0;
+
+    if (st.campBuffType === "pine") {
+      return 0.02 + (st.campBuffPower || 0) * 0.006;
     }
+
+    return 0;
   }
 
-  _createCampQuest(camp) {
-    const types = ["blob", "stalker", "caster"];
-    const target = types[Math.floor(Math.random() * types.length)];
-    const tier = this._campTier(camp.id);
-    const eliteQuest = this.hero.level >= 4 && Math.random() < (tier >= 3 ? 0.38 : 0.28);
-    const need = eliteQuest
-      ? 1 + Math.floor(Math.random() * (tier >= 3 ? 3 : 2))
-      : 3 + Math.floor(Math.random() * (tier >= 4 ? 4 : 3));
+  _currentIncomingDamageMult() {
+    const st = this.hero.state || {};
+    let mult = 1;
 
-    const mult = this._campQuestRewardMultiplier(camp.id);
-    const rewardGold = Math.round(((eliteQuest ? 34 : 18) + need * (eliteQuest ? 12 : 6) + this.hero.level * 2) * mult);
-    const rewardXp = Math.round(((eliteQuest ? 28 : 14) + need * (eliteQuest ? 10 : 5) + this.hero.level * 2) * mult);
-
-    return {
-      id: this._questIdCounter++,
-      type: "kill",
-      campId: camp.id,
-      eliteOnly: eliteQuest,
-      name: eliteQuest
-        ? `${camp.name || `Camp ${camp.id}`}: Elite ${target} bounty`
-        : `${camp.name || `Camp ${camp.id}`}: Hunt ${target}s`,
-      desc: eliteQuest
-        ? `Defeat ${need} elite ${target}${need > 1 ? "s" : ""} near ${camp.name || `Camp ${camp.id}`}.`
-        : `Defeat ${need} ${target}${need > 1 ? "s" : ""} near ${camp.name || `Camp ${camp.id}`}.`,
-      target,
-      need,
-      have: 0,
-      done: false,
-      turnedIn: false,
-      rewardGold,
-      rewardXp,
-    };
-  }
-
-  _onEnemyKilled(enemy) {
-    for (const q of this.quests) {
-      if (q.turnedIn || q.done) continue;
-      if (q.type !== "kill") continue;
-      if (q.target !== enemy.kind) continue;
-      if (q.eliteOnly && !enemy.elite) continue;
-
-      q.have = Math.min(q.need, (q.have || 0) + 1);
-      if (q.have >= q.need) {
-        q.done = true;
-        this._msg(`Quest ready: ${q.name}`, 1.4);
-      }
-    }
-  }
-
-  _updateQuestState() {
-    for (const q of this.quests) {
-      if (!q.turnedIn && !q.done && q.have >= q.need) {
-        q.done = true;
+    if (st.campBuffT > 0) {
+      if (st.campBuffType === "stone") {
+        mult -= Math.min(0.28, 0.10 + (st.campBuffPower || 0) * 0.012);
+      } else if (st.campBuffType === "oak") {
+        mult -= Math.min(0.10, (st.campBuffPower || 0) * 0.006);
+      } else if (st.campBuffType === "river") {
+        mult -= Math.min(0.06, (st.campBuffPower || 0) * 0.004);
       }
     }
 
-    this.quests = this.quests.slice(-16);
+    if (st.dungeonMomentumT > 0) {
+      mult -= Math.min(0.10, (st.dungeonMomentumPower || 0) * 0.012);
+    }
+
+    return Math.max(0.62, mult);
   }
 
-  _saveGame() {
-    this.save.save?.({
-      seed: this.seed,
-      hero: this.hero,
-      progress: {
-        ...this.progress,
-        discoveredWaystones: [...(this.progress?.discoveredWaystones || [])],
-        discoveredDocks: [...(this.progress?.discoveredDocks || [])],
-        visitedCamps: [...(this.progress?.visitedCamps || [])],
-      },
-      dungeon: {
-        active: this.dungeon.active,
-        floor: this.dungeon.floor,
-        seed: this.dungeon.seed,
-        currentRoomIndex: this.dungeon.currentRoomIndex,
-        visited: [...(this.dungeon.visited || [])],
-      },
-      cooldowns: this.cooldowns,
-      skillLoadout: this.skillLoadout,
-      selectedSkillSlot: this.selectedSkillSlot,
-      quests: this.quests,
-      questTurnIn: this.questTurnIn,
-      menu: this.menu,
-      time: this.time,
-      msg: this.msg,
-      msgT: this.msgT,
-      zoneMsg: this.zoneMsg,
-      zoneMsgT: this.zoneMsgT,
-      campRespawnState: this._campRespawnState,
-      worldMapMode: this.world?.mapMode || "small",
+  _cameraShake(t, mag) {
+    this.camera.shakeT = Math.max(this.camera.shakeT, t || 0.08);
+    this.camera.shakeMag = Math.max(this.camera.shakeMag || 0, mag || 2);
+  }
+
+  _spawnHitSpark(x, y, color) {
+    for (let i = 0; i < 5; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const spd = 24 + Math.random() * 60;
+      this.hitSparks.push({
+        x,
+        y,
+        vx: Math.cos(ang) * spd,
+        vy: Math.sin(ang) * spd,
+        t: 0.24 + Math.random() * 0.18,
+        maxT: 0.40,
+        color: color || "#ffffff",
+      });
+    }
+  }
+
+  _spawnFloatingText(x, y, text, color = "#ffffff") {
+    this.floatingTexts.push({
+      x,
+      y,
+      text,
+      color,
+      t: 0.7,
+      maxT: 0.7,
+      speed: 18,
     });
   }
 
-  _loadGame() {
-    const data = this.save.load?.();
-    if (!data) return;
+  _nearPointOfInterest(x, y, r) {
+    const r2 = r * r;
+    const check = (arr) => {
+      for (const p of arr || []) {
+        if (dist2(x, y, p.x, p.y) <= r2) return true;
+      }
+      return false;
+    };
+    return check(this.world.camps) || check(this.world.docks) || check(this.world.waystones) || check(this.world.dungeons);
+  }
 
-    if (typeof data.seed === "number" && Number.isFinite(data.seed)) {
-      this.seed = data.seed | 0;
-    }
+  _cleanupFarEntities() {
+    const maxEnemyD2 = (this.perf.enemyUpdateRadius + 560) ** 2;
+    const maxLootD2 = (this.perf.lootUpdateRadius + 420) ** 2;
+    const maxProjD2 = (this.perf.projectileUpdateRadius + 260) ** 2;
 
-    if (data.hero) Object.assign(this.hero, data.hero);
+    this.enemies = this.enemies.filter((e) => {
+      if (!e?.alive) return false;
+      if (e.cornerDragon) return true;
+      return dist2(e.x, e.y, this.hero.x, this.hero.y) < maxEnemyD2;
+    });
 
-    if (data.progress) {
-      this.progress = {
-        ...this.progress,
-        ...data.progress,
-        discoveredWaystones: new Set(data.progress.discoveredWaystones || []),
-        discoveredDocks: new Set(data.progress.discoveredDocks || []),
-        visitedCamps: new Set(data.progress.visitedCamps || []),
-        campRenown: data.progress.campRenown || {},
-        campRestBonusClaimed: data.progress.campRestBonusClaimed || {},
-      };
-    }
-
-    if (data.cooldowns) this.cooldowns = { ...this.cooldowns, ...data.cooldowns };
-    if (Array.isArray(data.skillLoadout) && data.skillLoadout.length) {
-      this.skillLoadout = data.skillLoadout.slice(0, 4);
-    }
-    if (typeof data.selectedSkillSlot === "number") {
-      this.selectedSkillSlot = clamp(data.selectedSkillSlot | 0, 0, 3);
-    }
-
-    if (Array.isArray(data.quests)) {
-      this.quests = data.quests.map((q) => ({ ...q }));
-      this._questIdCounter = this.quests.reduce((m, q) => Math.max(m, q.id || 0), 0) + 1;
-    }
-
-    if (data.questTurnIn) {
-      this.questTurnIn = { ...data.questTurnIn };
-    }
-
-    if (data.campRespawnState && typeof data.campRespawnState === "object") {
-      this._campRespawnState = { ...data.campRespawnState };
-    }
-
-    if (typeof data.worldMapMode === "string") {
-      this.world.mapMode = data.worldMapMode === "large" ? "large" : "small";
-    } else {
-      this.world.mapMode = "small";
-    }
-
-    this.hero.vx = 0;
-    this.hero.vy = 0;
-    this.hero.state.sailing = false;
+    this.loot = this.loot.filter((l) => l?.alive && dist2(l.x, l.y, this.hero.x, this.hero.y) < maxLootD2);
+    this.projectiles = this.projectiles.filter((p) => p?.alive && dist2(p.x, p.y, this.hero.x, this.hero.y) < maxProjD2);
   }
 
   _ensureWorldPopulation() {
-    if (this.enemies.length > 0) return;
+    if ((this.world.camps || []).length === 0) this.world._generatePOIs?.();
+  }
 
-    const camps = this.world?.camps || [];
-    for (const camp of camps) {
-      const tier = this._campTier(camp.id);
-      const starterCount = tier >= 3 ? 0 : tier >= 2 ? 1 : 2;
+  _ensureCampQuests() {}
 
-      for (let i = 0; i < starterCount; i++) {
-        const a = (i / Math.max(1, starterCount)) * Math.PI * 2 + (camp.id || 0) * 0.33;
-        const safe = this._campSafeRadius(camp.id);
-        const ring = safe + 86;
-        const ex = camp.x + Math.cos(a) * ring;
-        const ey = camp.y + Math.sin(a) * ring;
-
-        if (!this.world?.canWalk?.(ex, ey)) continue;
-        if (this.world?._isNearWater?.(ex, ey, 48)) continue;
-
-        const kind = i === 0 ? "blob" : "stalker";
-        const elite = false;
-        const e = new Enemy(
-          ex,
-          ey,
-          Math.max(1, this.hero.level),
-          kind,
-          hash2(ex | 0, ey | 0, camp.id | 0),
-          elite
-        );
-        e.home = { x: camp.x, y: camp.y };
-        e.campId = camp.id;
-        this.enemies.push(e);
-        if (this.enemies.length >= 10) return;
-      }
-
-      this._setCampRespawnLock(camp.id, 12);
+  _ensureHeroSafe() {
+    if (this.world.canWalk?.(this.hero.x, this.hero.y)) return;
+    const p = this.world._findSafeLandPatchNear?.(this.hero.x, this.hero.y, 180);
+    if (p) {
+      this.hero.x = p.x;
+      this.hero.y = p.y;
     }
   }
 
-  _nearestDock(radius = 100) {
-    const docks = this.world?.docks || [];
-    let best = null;
-    let bestD2 = radius * radius;
-
-    for (const d of docks) {
-      const dd = dist2(this.hero.x, this.hero.y, d.x, d.y);
-      if (dd < bestD2) {
-        bestD2 = dd;
-        best = d;
-      }
-    }
-
-    return best;
+  _enterDungeon(dungeonPoi) {
+    void dungeonPoi;
+    this.dungeon.active = true;
+    this.dungeon.floor = Math.max(1, (this.dungeon.floor || 0) + 1);
+    this.menu.open = null;
+    this._msg("Dungeon entered", 1.0);
   }
 
-  _nearestCamp(radius = 120) {
-    const camps = this.world?.camps || [];
-    let best = null;
-    let bestD2 = radius * radius;
-
-    for (const c of camps) {
-      const dd = dist2(this.hero.x, this.hero.y, c.x, c.y);
-      if (dd < bestD2) {
-        bestD2 = dd;
-        best = c;
-      }
-    }
-
-    return best;
+  _updateDungeon(dt) {
+    void dt;
   }
 
-  _toggleDockingOrSailing() {
-    if (this.dungeon.active) {
-      this._msg("Cannot sail in dungeon");
-      return;
+  _msg(text, t = 1.0) {
+    this.msg = text;
+    this.msgT = t;
+  }
+
+  _saveGame() {
+    try {
+      this.save.write?.({
+        seed: this.seed,
+        hero: {
+          x: this.hero.x,
+          y: this.hero.y,
+          level: this.hero.level,
+          xp: this.hero.xp,
+          nextXp: this.hero.nextXp,
+          hp: this.hero.hp,
+          maxHp: this.hero.maxHp,
+          mana: this.hero.mana,
+          maxMana: this.hero.maxMana,
+          gold: this.hero.gold,
+          inventory: this.hero.inventory,
+          equip: this.hero.equip,
+          potions: this.hero.potions,
+          state: this.hero.state,
+          lastMove: this.hero.lastMove,
+        },
+        progress: {
+          discoveredWaystones: Array.from(this.progress.discoveredWaystones || []),
+          discoveredDocks: Array.from(this.progress.discoveredDocks || []),
+          dungeonBest: this.progress.dungeonBest || 0,
+          visitedCamps: Array.from(this.progress.visitedCamps || []),
+          eliteKills: this.progress.eliteKills || 0,
+          campRenown: this.progress.campRenown || {},
+          campRestBonusClaimed: this.progress.campRestBonusClaimed || {},
+        },
+      });
+    } catch (err) {
+      console.warn("Save failed", err);
     }
+  }
 
-    const dock = this._cachedNearbyDock || this._nearestDock(104);
-    if (!dock) {
-      this._msg("No dock nearby");
-      return;
-    }
+  _loadGame() {
+    try {
+      const data = this.save.read?.();
+      if (!data) return;
 
-    if (!this.hero.state.sailing) {
-      const nearWater =
-        this.world.isWater(dock.x + 24, dock.y) ||
-        this.world.isWater(dock.x - 24, dock.y) ||
-        this.world.isWater(dock.x, dock.y + 24) ||
-        this.world.isWater(dock.x, dock.y - 24);
-
-      if (!nearWater) {
-        this._msg("Dock is blocked");
-        return;
+      if (data.hero) {
+        const h = data.hero;
+        this.hero.x = +h.x || this.hero.x;
+        this.hero.y = +h.y || this.hero.y;
+        this.hero.level = Math.max(1, h.level || this.hero.level);
+        this.hero.xp = h.xp || 0;
+        this.hero.nextXp = h.nextXp || this.hero.nextXp;
+        this.hero.maxHp = h.maxHp || this.hero.maxHp;
+        this.hero.hp = h.hp || this.hero.hp;
+        this.hero.maxMana = h.maxMana || this.hero.maxMana;
+        this.hero.mana = h.mana || this.hero.mana;
+        this.hero.gold = h.gold || 0;
+        this.hero.inventory = Array.isArray(h.inventory) ? h.inventory : [];
+        this.hero.equip = h.equip || this.hero.equip;
+        this.hero.potions = h.potions || this.hero.potions;
+        this.hero.state = h.state || this.hero.state;
+        this.hero.lastMove = h.lastMove || this.hero.lastMove;
       }
 
-      this.hero.state.sailing = true;
-      this.hero.x = dock.x;
-      this.hero.y = dock.y;
-      this.hero.vx = 0;
-      this.hero.vy = 0;
-      this._msg("Sailing");
-      return;
-    }
+      if (data.progress) {
+        this.progress.discoveredWaystones = new Set(data.progress.discoveredWaystones || []);
+        this.progress.discoveredDocks = new Set(data.progress.discoveredDocks || []);
+        this.progress.dungeonBest = data.progress.dungeonBest || 0;
+        this.progress.visitedCamps = new Set(data.progress.visitedCamps || []);
+        this.progress.eliteKills = data.progress.eliteKills || 0;
+        this.progress.campRenown = data.progress.campRenown || {};
+        this.progress.campRestBonusClaimed = data.progress.campRestBonusClaimed || {};
+      }
 
-    this.hero.state.sailing = false;
-    this.hero.vx = 0;
-    this.hero.vy = 0;
-    this._nudgeToLand();
-    this._msg("Docked");
+      this.camera.x = this.hero.x;
+      this.camera.y = this.hero.y;
+    } catch (err) {
+      console.warn("Load failed", err);
+    }
   }
 }
