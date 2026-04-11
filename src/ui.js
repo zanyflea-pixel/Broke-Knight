@@ -1,5 +1,5 @@
 // src/ui.js
-// v95.9 DIRECT MAP RENDER + BIG MAP ZOOM ONLY (FULL FILE)
+// v96.1 BIG MAP CENTERED ON WHOLE WORLD + MINIMAP HERO-CENTERED (FULL FILE)
 
 function clamp(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v));
@@ -51,12 +51,12 @@ export default class UI {
     this.w = canvas?.width || 960;
     this.h = canvas?.height || 540;
 
-    // Minimap never zooms
+    // Minimap is always hero-centered and never zooms
     this.minimapWorldSpan = 1800;
 
-    // Big map zoom levels controlled by world.mapMode
-    this.bigMapSpanSmall = 12000;
-    this.bigMapSpanLarge = 3600;
+    // Big map zoom levels. Centered on world, not hero.
+    this.bigMapSpanFar = 14000;
+    this.bigMapSpanClose = 7600;
   }
 
   setViewSize(w, h) {
@@ -175,7 +175,6 @@ export default class UI {
     ctx.fillText(`ARM ${Math.round(st.armor || 0)}`, bx + 86, y + 138);
     ctx.fillText(`CRIT ${Math.round((st.crit || 0) * 100)}%`, bx + 162, y + 138);
     ctx.fillText(`Pots H:${hero.potions?.hp || 0} M:${hero.potions?.mana || 0}`, bx, y + 158);
-
     ctx.restore();
   }
 
@@ -191,7 +190,6 @@ export default class UI {
     roundRectPath(ctx, x, y, size, size, 12);
     ctx.clip();
 
-    // Direct minimap draw from world data, centered on hero always
     this._drawWorldMapDirect(
       ctx,
       game.world,
@@ -203,10 +201,10 @@ export default class UI {
       size,
       size,
       {
-        centerOnHero: true,
+        heroCentered: true,
         drawHeroMarker: false,
-        showUndiscovered: true,
         sampleStepPx: 4,
+        darkenUndiscovered: true,
       }
     );
 
@@ -230,7 +228,6 @@ export default class UI {
     ctx.lineTo(px + 0.5, y + size);
     ctx.stroke();
 
-    // Hero always centered on minimap
     ctx.fillStyle = "rgba(20,20,20,0.92)";
     ctx.fillRect((px - 3) | 0, (py - 3) | 0, 6, 6);
     ctx.fillStyle = "rgba(255,255,255,1)";
@@ -243,7 +240,6 @@ export default class UI {
     ctx.fillStyle = "rgba(214,222,238,0.78)";
     ctx.font = "11px Arial";
     ctx.fillText("M map", x + 8, y + size + 15);
-
     ctx.restore();
   }
 
@@ -360,7 +356,6 @@ export default class UI {
     ctx.fillStyle = "rgba(214,222,238,0.72)";
     ctx.font = "12px Arial";
     ctx.fillText("ESC or I to close", x + 18, y + panelH - 18);
-
     ctx.restore();
   }
 
@@ -379,29 +374,31 @@ export default class UI {
     const mapH = panelH - 62;
 
     const bigSpan = (world?.mapMode === "large")
-      ? this.bigMapSpanLarge
-      : this.bigMapSpanSmall;
+      ? this.bigMapSpanClose
+      : this.bigMapSpanFar;
 
     ctx.save();
     roundRectPath(ctx, mapX, mapY, mapW, mapH, 14);
     ctx.clip();
 
-    // Big map only changes zoom level; it stays centered on hero for intuitive use
+    // Important: big map is centered on the whole world, not the hero
     this._drawWorldMapDirect(
       ctx,
       world,
-      game.hero.x,
-      game.hero.y,
+      0,
+      0,
       bigSpan,
       mapX,
       mapY,
       mapW,
       mapH,
       {
-        centerOnHero: true,
+        heroCentered: false,
         drawHeroMarker: true,
-        showUndiscovered: true,
+        heroX: game.hero.x,
+        heroY: game.hero.y,
         sampleStepPx: 5,
+        darkenUndiscovered: true,
       }
     );
 
@@ -428,6 +425,8 @@ export default class UI {
     ctx.fillText("Z = change map zoom", sideX, ty);
     ty += 20;
     ctx.fillText("M / ESC = close", sideX, ty);
+    ty += 20;
+    ctx.fillText("Big map is world-centered", sideX, ty);
     ty += 28;
 
     ctx.fillStyle = "rgba(232,238,252,0.94)";
@@ -470,10 +469,10 @@ export default class UI {
   _drawWorldMapDirect(ctx, world, centerX, centerY, worldSpan, dx, dy, dw, dh, opts = {}) {
     if (!world) return;
 
-    const showUndiscovered = opts.showUndiscovered !== false;
     const stepPx = Math.max(2, opts.sampleStepPx || 4);
-
     const half = worldSpan * 0.5;
+    const mapHalf = world.mapHalfSize || 5200;
+    const boundsHalf = world.boundsHalfSize || world.boundsRadius || 7600;
 
     for (let sy = 0; sy < dh; sy += stepPx) {
       for (let sx = 0; sx < dw; sx += stepPx) {
@@ -482,14 +481,21 @@ export default class UI {
 
         let fill = "#06080c";
 
-        if (world.isExplored?.(wx, wy)) {
-          if (world.isWater?.(wx, wy)) {
-            fill = "#3f86b8";
-          } else {
-            const zone = world.getZoneName?.(wx, wy) || "Green Reach";
-            fill = this._miniGroundColor(zone);
+        // Main map square
+        const inMainSquare = Math.abs(wx) <= mapHalf && Math.abs(wy) <= mapHalf;
+        const inBounds = Math.abs(wx) <= boundsHalf && Math.abs(wy) <= boundsHalf;
+
+        if (inMainSquare) {
+          if (world.isExplored?.(wx, wy)) {
+            if (world.isWater?.(wx, wy)) fill = "#3f86b8";
+            else fill = this._miniGroundColor(world.getZoneName?.(wx, wy) || "Green Reach");
+          } else if (opts.darkenUndiscovered) {
+            fill = "#06080c";
           }
-        } else if (showUndiscovered) {
+        } else if (inBounds) {
+          // Unknown area outside the main square
+          fill = this._miniGroundColor("Unknown");
+        } else {
           fill = "#06080c";
         }
 
@@ -498,29 +504,38 @@ export default class UI {
       }
     }
 
-    // Draw POIs only if explored
     this._drawPOIsOnMap(ctx, world, centerX, centerY, worldSpan, dx, dy, dw, dh);
 
     if (opts.drawHeroMarker) {
-      const px = dx + dw * 0.5;
-      const py = dy + dh * 0.5;
+      const hx = opts.heroCentered ? centerX : (opts.heroX ?? centerX);
+      const hy = opts.heroCentered ? centerY : (opts.heroY ?? centerY);
 
-      ctx.fillStyle = "rgba(20,20,20,0.92)";
-      ctx.beginPath();
-      ctx.arc(px, py, 5, 0, Math.PI * 2);
-      ctx.fill();
+      const nx = (hx - (centerX - half)) / worldSpan;
+      const ny = (hy - (centerY - half)) / worldSpan;
 
-      ctx.fillStyle = "rgba(255,255,255,0.98)";
-      ctx.beginPath();
-      ctx.arc(px, py, 2.2, 0, Math.PI * 2);
-      ctx.fill();
+      if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) {
+        const px = dx + nx * dw;
+        const py = dy + ny * dh;
+
+        ctx.fillStyle = "rgba(20,20,20,0.92)";
+        ctx.beginPath();
+        ctx.arc(px, py, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "rgba(255,255,255,0.98)";
+        ctx.beginPath();
+        ctx.arc(px, py, 2.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
   }
 
   _drawPOIsOnMap(ctx, world, centerX, centerY, worldSpan, dx, dy, dw, dh) {
     const half = worldSpan * 0.5;
+    const mapHalf = world.mapHalfSize || 5200;
 
     const drawPoi = (x, y, color, r) => {
+      if (Math.abs(x) > mapHalf || Math.abs(y) > mapHalf) return;
       if (!world.isExplored?.(x, y)) return;
 
       const nx = (x - (centerX - half)) / worldSpan;
