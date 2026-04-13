@@ -1,5 +1,9 @@
 // src/entities.js
-// v97.2 ENEMY LEASH / STAY NEAR SPAWN PASS (FULL FILE)
+// v97.6 STABLE ENTITIES FILE
+// - Hero / Enemy / Projectile / Loot / makeGear exports
+// - enemy patrol + leash around spawn
+// - hero sword points toward aim direction
+// - compatible with current game.js
 
 import { clamp, norm } from "./util.js";
 
@@ -102,6 +106,7 @@ export class Hero {
     this.vx = 0;
     this.vy = 0;
     this.radius = 12;
+    this.r = this.radius;
 
     this.level = 1;
     this.xp = 0;
@@ -125,14 +130,6 @@ export class Hero {
       sailing: false,
       dashT: 0,
       hurtT: 0,
-      campBuffT: 0,
-      campBuffPower: 0,
-      campBuffType: "",
-      campBuffName: "",
-      dungeonMomentumT: 0,
-      dungeonMomentumPower: 0,
-      eliteChainT: 0,
-      eliteChainCount: 0,
       slowT: 0,
       poisonT: 0,
     };
@@ -231,7 +228,6 @@ export class Hero {
     const rarity = sword?.rarity || "common";
     const shape = weaponShapeFromRarity(rarity);
     const bladeColor = sword?.color || "#dce9f5";
-
     const a = Math.atan2(aim.y, aim.x);
 
     ctx.save();
@@ -467,8 +463,7 @@ export class Hero {
       ctx.fill();
     }
     if (this.equip?.trinket) {
-      const c = this.equip.trinket.color || "rgba(210,160,255,0.16)";
-      ctx.fillStyle = c.includes("#") ? "rgba(210,160,255,0.16)" : c;
+      ctx.fillStyle = "rgba(210,160,255,0.16)";
       ctx.beginPath();
       ctx.arc(0, 0, 18, 0, Math.PI * 2);
       ctx.fill();
@@ -507,7 +502,10 @@ export class Enemy {
     this.dead = false;
 
     this.radius = 11;
+    this.r = this.radius;
+
     this.moveSpeed = 52 + this.level * 1.4;
+    this.speed = this.moveSpeed;
     this.touchDps = 4 + this.level * 0.4;
 
     this.hp = 26 + this.level * 10;
@@ -521,6 +519,11 @@ export class Enemy {
     this.aggroRadius = 0;
     this.forgetRadius = 0;
     this.returnSpeedMul = 0.85;
+
+    this.patrolX = x;
+    this.patrolY = y;
+    this.patrolTimer = 0.4 + ((seed % 100) / 100) * 1.2;
+    this.alertT = 0;
 
     this.attackCd = 0;
     this.rangedCd = 0;
@@ -616,6 +619,8 @@ export class Enemy {
     this.maxHp = this.hp;
     this.touchDps = Math.max(1, Math.round(this.touchDps));
     this.moveSpeed = Math.max(18, Math.round(this.moveSpeed));
+    this.speed = this.moveSpeed;
+    this.r = this.radius;
   }
 
   _initLeash() {
@@ -683,7 +688,16 @@ export class Enemy {
       this.hp = 0;
       this.alive = false;
       this.dead = true;
+    } else {
+      this.alertT = Math.max(this.alertT, 1.8);
     }
+  }
+
+  _pickNewPatrolPoint() {
+    const r = Math.max(22, this.leashRadius * 0.45);
+    const a = ((this.seed * 0.013) + performance.now() * 0.00012 + Math.random()) % (Math.PI * 2);
+    this.patrolX = this.spawnX + Math.cos(a) * (Math.random() * r);
+    this.patrolY = this.spawnY + Math.sin(a) * (Math.random() * r);
   }
 
   update(dt, hero, world, game) {
@@ -691,6 +705,8 @@ export class Enemy {
 
     this.attackCd = Math.max(0, this.attackCd - dt);
     this.rangedCd = Math.max(0, this.rangedCd - dt);
+    this.alertT = Math.max(0, this.alertT - dt);
+    this.patrolTimer -= dt;
 
     const dx = hero.x - this.x;
     const dy = hero.y - this.y;
@@ -710,12 +726,12 @@ export class Enemy {
     if (this.variant === "tank") speed *= 0.96;
     if (this.variant === "skirmisher" && d < 85) speed *= 1.26;
 
+    const inAggro = d <= this.aggroRadius;
+    if (inAggro) this.alertT = Math.max(this.alertT, 1.4);
+
     const shouldReturnHome =
       !this.dragonBoss &&
-      (
-        d > this.forgetRadius ||
-        homeDist > this.leashRadius
-      );
+      (d > this.forgetRadius || homeDist > this.leashRadius);
 
     if (shouldReturnHome) {
       this.vx = homeDir.x * speed * this.returnSpeedMul;
@@ -729,19 +745,27 @@ export class Enemy {
       return;
     }
 
-    const shouldChase =
-      this.dragonBoss ||
-      d <= this.aggroRadius ||
-      homeDist < this.leashRadius * 0.82;
+    const shouldChase = this.dragonBoss || inAggro || this.alertT > 0.01;
 
     if (!shouldChase) {
-      if (homeDist > 10) {
-        this.vx = homeDir.x * speed * 0.45;
-        this.vy = homeDir.y * speed * 0.45;
-      } else {
-        const idleA = (this.seed * 0.001 + performance.now() * 0.0002) % (Math.PI * 2);
-        this.vx = Math.cos(idleA) * speed * 0.08;
-        this.vy = Math.sin(idleA) * speed * 0.08;
+      if (this.patrolTimer <= 0 || Math.hypot(this.patrolX - this.x, this.patrolY - this.y) < 12) {
+        this.patrolTimer = 1.5 + Math.random() * 2.8;
+        this._pickNewPatrolPoint();
+      }
+
+      const pdx = this.patrolX - this.x;
+      const pdy = this.patrolY - this.y;
+      const pdir = norm(pdx, pdy);
+
+      const patrolSpeed = speed * (this.kind === "wolf" ? 0.34 : this.kind === "brute" ? 0.22 : 0.28);
+
+      this.vx = pdir.x * patrolSpeed;
+      this.vy = pdir.y * patrolSpeed;
+
+      if (homeDist > this.leashRadius * 0.72) {
+        const pull = clamp((homeDist - this.leashRadius * 0.72) / Math.max(1, this.leashRadius * 0.35), 0, 1);
+        this.vx = lerp(this.vx, homeDir.x * speed * 0.55, pull * 0.55);
+        this.vy = lerp(this.vy, homeDir.y * speed * 0.55, pull * 0.55);
       }
 
       const nx = this.x + this.vx * dt;
@@ -847,15 +871,15 @@ export class Enemy {
     if (this.kind === "dragon") {
       this._drawDragon(ctx, t);
     } else if (this.kind === "wolf") {
-      this._drawWolf(ctx, t);
+      this._drawWolf(ctx);
     } else if (this.kind === "brute") {
-      this._drawBrute(ctx, t);
+      this._drawBrute(ctx);
     } else if (this.kind === "caster") {
       this._drawCaster(ctx, t);
     } else if (this.kind === "scout") {
-      this._drawScout(ctx, t);
+      this._drawScout(ctx);
     } else if (this.kind === "stalker") {
-      this._drawStalker(ctx, t);
+      this._drawStalker(ctx);
     } else if (this.kind === "ashling") {
       this._drawAshling(ctx, t);
     } else if (this.kind === "unknown") {

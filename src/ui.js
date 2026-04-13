@@ -1,49 +1,11 @@
 // src/ui.js
-// v96.1 BIG MAP CENTERED ON WHOLE WORLD + MINIMAP HERO-CENTERED (FULL FILE)
+// v97.8 ROBUST MAP UI
+// - supports both getMapInfo() and older minimap canvas worlds
+// - minimap always centers hero
+// - big map uses revealed data when available
+// - safe fallbacks so map does not break if world implementation shifts
 
-function clamp(v, lo, hi) {
-  return Math.max(lo, Math.min(hi, v));
-}
-
-function roundRectPath(ctx, x, y, w, h, r) {
-  const rr = Math.max(0, Math.min(r, Math.min(w, h) * 0.5));
-  ctx.beginPath();
-  ctx.moveTo(x + rr, y);
-  ctx.lineTo(x + w - rr, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
-  ctx.lineTo(x + w, y + h - rr);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
-  ctx.lineTo(x + rr, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
-  ctx.lineTo(x, y + rr);
-  ctx.quadraticCurveTo(x, y, x + rr, y);
-  ctx.closePath();
-}
-
-function rarityColor(rarity) {
-  if (rarity === "epic") return "rgba(226,190,255,0.96)";
-  if (rarity === "rare") return "rgba(176,224,255,0.96)";
-  if (rarity === "uncommon") return "rgba(176,244,176,0.96)";
-  return "rgba(236,240,248,0.94)";
-}
-
-function fmtNum(v) {
-  if (!Number.isFinite(v)) return "0";
-  return Math.abs(v) >= 10 ? String(Math.round(v)) : v.toFixed(1).replace(/\.0$/, "");
-}
-
-function itemStatText(item) {
-  const s = item?.stats || {};
-  const out = [];
-  if (s.dmg) out.push(`DMG +${s.dmg}`);
-  if (s.armor) out.push(`ARM +${s.armor}`);
-  if (s.hp) out.push(`HP +${s.hp}`);
-  if (s.mana) out.push(`MP +${s.mana}`);
-  if (s.crit) out.push(`CRIT +${Math.round(s.crit * 100)}%`);
-  if (s.critMult) out.push(`CRIT DMG +${Math.round(s.critMult * 100)}%`);
-  if (s.move) out.push(`MOVE +${Math.round(s.move * 100)}%`);
-  return out.join(" • ") || "No stats";
-}
+import { clamp } from "./util.js";
 
 export default class UI {
   constructor(canvas) {
@@ -51,12 +13,12 @@ export default class UI {
     this.w = canvas?.width || 960;
     this.h = canvas?.height || 540;
 
-    // Minimap is always hero-centered and never zooms
-    this.minimapWorldSpan = 1800;
+    this._open = null;
+    this._msg = "";
+    this._msgT = 0;
 
-    // Big map zoom levels. Centered on world, not hero.
-    this.bigMapSpanFar = 14000;
-    this.bigMapSpanClose = 7600;
+    this._mini = null;
+    this._miniT = 0;
   }
 
   setViewSize(w, h) {
@@ -64,76 +26,73 @@ export default class UI {
     this.h = h | 0;
   }
 
+  open(name) {
+    this._open = name || null;
+  }
+
+  closeAll() {
+    this._open = null;
+  }
+
+  setMsg(text, t = 2) {
+    this._msg = String(text || "");
+    this._msgT = Math.max(0, +t || 0);
+  }
+
   update(dt, game) {
-    void dt;
-    void game;
+    if (this._msgT > 0) {
+      this._msgT = Math.max(0, this._msgT - dt);
+      if (this._msgT <= 0) this._msg = "";
+    }
+
+    this._miniT += dt;
+    if (this._miniT >= 0.18) {
+      this._miniT = 0;
+      this._mini = game?.world?.getMinimapCanvas?.() || null;
+    }
   }
 
   draw(ctx, game) {
     if (!ctx || !game) return;
 
+    this._syncViewFromCanvas();
+
     this._drawHUD(ctx, game);
+    this._drawSpellBar(ctx, game);
     this._drawMinimap(ctx, game);
-    this._drawBottomBar(ctx, game);
+    this._drawHelp(ctx);
+    this._drawPrompt(ctx, game);
+    this._drawToast(ctx, game);
 
-    if (game.menu?.open === "inventory") this._drawInventory(ctx, game);
-    if (game.menu?.open === "map") this._drawMap(ctx, game);
-    if (game.menu?.open === "shop") this._drawShop(ctx, game);
+    const open = game?.menu?.open || this._open || null;
+    if (!open) return;
+
+    if (open === "map") this._drawMap(ctx, game);
+    else if (open === "inventory") this._drawSimplePanel(ctx, "Inventory");
+    else if (open === "skills") this._drawSimplePanel(ctx, "Skills");
+    else if (open === "quests") this._drawSimplePanel(ctx, "Quests");
+    else if (open === "shop") this._drawSimplePanel(ctx, "Shop");
+    else if (open === "options") this._drawSimplePanel(ctx, "Options");
+    else if (open === "god") this._drawSimplePanel(ctx, "Menu");
   }
 
-  _panel(ctx, x, y, w, h, r = 14, fill = "rgba(10,14,22,0.74)") {
-    ctx.save();
-    ctx.fillStyle = fill;
-    roundRectPath(ctx, x, y, w, h, r);
-    ctx.fill();
-
-    ctx.strokeStyle = "rgba(255,255,255,0.10)";
-    ctx.lineWidth = 1;
-    roundRectPath(ctx, x + 0.5, y + 0.5, w - 1, h - 1, r);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  _bigPanel(ctx, x, y, w, h, title = "") {
-    this._panel(ctx, x, y, w, h, 18, "rgba(10,14,22,0.92)");
-
-    ctx.save();
-    ctx.fillStyle = "rgba(255,255,255,0.08)";
-    roundRectPath(ctx, x, y, w, 32, 18);
-    ctx.fill();
-
-    ctx.fillStyle = "rgba(244,247,252,0.96)";
-    ctx.font = "bold 16px Arial";
-    ctx.fillText(title, x + 16, y + 21);
-    ctx.restore();
-  }
-
-  _bar(ctx, x, y, w, h, p, fill, radius = 8) {
-    const pct = clamp(p, 0, 1);
-
-    ctx.save();
-    ctx.fillStyle = "rgba(255,255,255,0.08)";
-    roundRectPath(ctx, x, y, w, h, radius);
-    ctx.fill();
-
-    const fw = Math.max(0, Math.floor(w * pct));
-    if (fw > 0) {
-      ctx.fillStyle = fill;
-      roundRectPath(ctx, x, y, fw, h, radius);
-      ctx.fill();
-    }
-
-    ctx.strokeStyle = "rgba(255,255,255,0.10)";
-    ctx.lineWidth = 1;
-    roundRectPath(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
-    ctx.stroke();
-    ctx.restore();
+  _syncViewFromCanvas() {
+    this.w = this.canvas?.width || this.w;
+    this.h = this.canvas?.height || this.h;
   }
 
   _drawHUD(ctx, game) {
     const hero = game.hero;
-    const st = hero.getStats?.() || { maxHp: 100, maxMana: 60, dmg: 8, armor: 0, crit: 0.05 };
-    const eliteKills = game?.progress?.eliteKills || 0;
+    if (!hero) return;
+
+    const st = hero.getStats?.() || {
+      maxHp: hero.maxHp || 100,
+      maxMana: hero.maxMana || 60,
+      dmg: 8,
+      armor: 0,
+      crit: 0.05,
+      critMult: 1.6,
+    };
 
     const hpP = clamp((hero.hp || 0) / Math.max(1, st.maxHp || 1), 0, 1);
     const mpP = clamp((hero.mana || 0) / Math.max(1, st.maxMana || 1), 0, 1);
@@ -141,84 +100,241 @@ export default class UI {
 
     const x = 14;
     const y = 12;
-    const panelW = 356;
-    const barW = 248;
-
-    this._panel(ctx, x, y, panelW, 176, 16, "rgba(8,12,18,0.70)");
+    const panelW = 350;
+    const barW = 228;
+    const barH = 14;
+    const gap = 8;
 
     ctx.save();
-    ctx.fillStyle = "rgba(245,248,252,0.96)";
-    ctx.font = "bold 13px Arial";
-    ctx.fillText("BROKE KNIGHT", x + 14, y + 18);
+
+    ctx.fillStyle = "rgba(10,14,20,0.72)";
+    ctx.fillRect(x, y, panelW, 94);
+
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.strokeRect(x + 0.5, y + 0.5, panelW - 1, 94 - 1);
+
+    ctx.fillStyle = "#eaf0f7";
+    ctx.font = "bold 18px Arial";
+    ctx.fillText(`Lv ${hero.level || 1}`, x + 12, y + 24);
 
     ctx.font = "12px Arial";
-    ctx.fillStyle = "rgba(220,228,240,0.88)";
-    ctx.fillText(`Lv ${hero.level || 1}`, x + 14, y + 38);
-    ctx.fillText(`Gold ${hero.gold || 0}`, x + 86, y + 38);
-    ctx.fillText(`Elite Kills ${eliteKills}`, x + 156, y + 38);
+    ctx.fillStyle = "#cfd7e4";
+    ctx.fillText(`Gold ${hero.gold || 0}`, x + 82, y + 22);
 
-    const bx = x + 14;
-    const by = y + 52;
+    this._drawBar(ctx, x + 12, y + 33, barW, barH, hpP, "#d94c62", "#63222d", `HP ${Math.round(hero.hp || 0)} / ${Math.round(st.maxHp || 0)}`);
+    this._drawBar(ctx, x + 12, y + 33 + barH + gap, barW, barH, mpP, "#4f8cff", "#223766", `MP ${Math.round(hero.mana || 0)} / ${Math.round(st.maxMana || 0)}`);
+    this._drawBar(ctx, x + 12, y + 33 + (barH + gap) * 2, barW, 10, xpP, "#efc24a", "#6a5622", `XP ${Math.round(hero.xp || 0)} / ${Math.round(hero.nextXp || 0)}`, 11);
 
-    this._bar(ctx, bx, by, barW, 14, hpP, "rgba(235,82,108,0.96)");
-    this._bar(ctx, bx, by + 22, barW, 14, mpP, "rgba(92,150,255,0.96)");
-    this._bar(ctx, bx, by + 44, barW, 10, xpP, "rgba(255,210,92,0.96)", 7);
-
-    ctx.fillStyle = "rgba(245,248,252,0.96)";
+    ctx.fillStyle = "#cfd7e4";
     ctx.font = "12px Arial";
-    ctx.fillText(`HP ${Math.round(hero.hp || 0)} / ${Math.round(st.maxHp || hero.maxHp || 100)}`, bx + 8, by + 11);
-    ctx.fillText(`MP ${Math.round(hero.mana || 0)} / ${Math.round(st.maxMana || hero.maxMana || 60)}`, bx + 8, by + 33);
-    ctx.fillText(`XP ${Math.round(hero.xp || 0)} / ${Math.round(hero.nextXp || 1)}`, bx + 8, by + 52);
+    ctx.fillText(`DMG ${Math.round(st.dmg || 0)}`, x + 258, y + 44);
+    ctx.fillText(`ARM ${Math.round(st.armor || 0)}`, x + 258, y + 61);
+    ctx.fillText(`CRIT ${Math.round((st.crit || 0) * 100)}%`, x + 258, y + 78);
 
-    ctx.fillStyle = "rgba(214,222,238,0.82)";
-    ctx.fillText(`DMG ${Math.round(st.dmg || 0)}`, bx, y + 138);
-    ctx.fillText(`ARM ${Math.round(st.armor || 0)}`, bx + 86, y + 138);
-    ctx.fillText(`CRIT ${Math.round((st.crit || 0) * 100)}%`, bx + 162, y + 138);
-    ctx.fillText(`Pots H:${hero.potions?.hp || 0} M:${hero.potions?.mana || 0}`, bx, y + 158);
+    ctx.restore();
+  }
+
+  _drawBar(ctx, x, y, w, h, p, fill, back, label, labelSize = 12) {
+    ctx.save();
+
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.fillRect(x, y, w, h);
+
+    ctx.fillStyle = back;
+    ctx.fillRect(x + 1, y + 1, w - 2, h - 2);
+
+    ctx.fillStyle = fill;
+    ctx.fillRect(x + 1, y + 1, Math.max(0, (w - 2) * p), h - 2);
+
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+
+    if (label) {
+      ctx.fillStyle = "#eef4fb";
+      ctx.font = `${labelSize}px Arial`;
+      ctx.fillText(label, x + 6, y + h - 3);
+    }
+
+    ctx.restore();
+  }
+
+  _drawSpellBar(ctx, game) {
+    const defs = game?.skillDefs || {};
+    const cds = game?.cooldowns || {};
+    const hero = game?.hero;
+    if (!hero) return;
+
+    const order = ["q", "w", "e", "r"];
+    const box = 46;
+    const gap = 10;
+    const total = order.length * box + (order.length - 1) * gap;
+    const x0 = ((this.w - total) / 2) | 0;
+    const y = this.h - 68;
+
+    ctx.save();
+
+    for (let i = 0; i < order.length; i++) {
+      const k = order[i];
+      const d = defs[k];
+      const x = x0 + i * (box + gap);
+      const ready = (cds[k] || 0) <= 0;
+      const manaOK = (hero.mana || 0) >= (d?.mana || 0);
+
+      ctx.fillStyle = ready && manaOK ? "rgba(24,32,44,0.90)" : "rgba(16,18,22,0.88)";
+      ctx.fillRect(x, y, box, box);
+
+      ctx.strokeStyle = ready && manaOK ? (d?.color || "#9fd0ff") : "rgba(255,255,255,0.10)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x + 1, y + 1, box - 2, box - 2);
+
+      ctx.fillStyle = d?.color || "#dfe8f5";
+      ctx.font = "bold 18px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText((k || "?").toUpperCase(), x + box / 2, y + 22);
+
+      ctx.font = "10px Arial";
+      ctx.fillStyle = "#d7dfeb";
+      ctx.fillText(d?.name || "", x + box / 2, y + 35);
+
+      if (!ready) {
+        ctx.fillStyle = "rgba(0,0,0,0.52)";
+        ctx.fillRect(x, y, box, box);
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 13px Arial";
+        ctx.fillText((cds[k] || 0).toFixed(1), x + box / 2, y + 27);
+      }
+
+      if (!manaOK) {
+        ctx.fillStyle = "rgba(35,70,120,0.28)";
+        ctx.fillRect(x, y, box, box);
+      }
+    }
+
     ctx.restore();
   }
 
   _drawMinimap(ctx, game) {
-    const size = 176;
-    const pad = 14;
-    const x = this.w - size - pad;
-    const y = 12;
+    const world = game?.world;
+    const hero = game?.hero;
+    if (!world || !hero) return;
 
-    this._panel(ctx, x - 2, y - 2, size + 4, size + 22, 14, "rgba(8,12,18,0.70)");
+    const size = 188;
+    const x = this.w - size - 16;
+    const y = 16;
 
     ctx.save();
-    roundRectPath(ctx, x, y, size, size, 12);
-    ctx.clip();
+    ctx.fillStyle = "rgba(10,14,20,0.72)";
+    ctx.fillRect(x, y, size, size);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
 
-    this._drawWorldMapDirect(
-      ctx,
-      game.world,
-      game.hero.x,
-      game.hero.y,
-      this.minimapWorldSpan,
-      x,
-      y,
-      size,
-      size,
-      {
-        heroCentered: true,
-        drawHeroMarker: false,
-        sampleStepPx: 4,
-        darkenUndiscovered: true,
-      }
-    );
+    const info = world.getMapInfo?.();
+    if (info && info.revealed) {
+      this._drawMinimapFromMapInfo(ctx, game, x + 8, y + 8, size - 16, size - 16);
+    } else if (this._mini) {
+      this._drawMinimapFromCanvas(ctx, game, this._mini, x + 8, y + 8, size - 16);
+    } else {
+      ctx.fillStyle = "rgba(255,255,255,0.06)";
+      ctx.fillRect(x + 8, y + 8, size - 16, size - 16);
+    }
+
+    ctx.fillStyle = "#d8e1ee";
+    ctx.font = "bold 12px Arial";
+    ctx.fillText("Map", x + 10, y + size - 8);
+    ctx.fillStyle = "#93a4ba";
+    ctx.font = "11px Arial";
+    ctx.fillText("M open • Z zoom", x + 48, y + size - 8);
 
     ctx.restore();
+  }
+
+  _drawMinimapFromCanvas(ctx, game, mini, x, y, size) {
+    const world = game.world;
+    const span = this._fallbackMapSpan(world, world?.mapMode || "small");
+    const half = span * 0.5;
+
+    const heroNormX = clamp((game.hero.x + half) / span, 0, 1);
+    const heroNormY = clamp((game.hero.y + half) / span, 0, 1);
+
+    const srcFrac = 0.22;
+    const srcW = Math.max(28, Math.floor(mini.width * srcFrac));
+    const srcH = Math.max(28, Math.floor(mini.height * srcFrac));
+
+    let srcX = Math.floor(heroNormX * mini.width - srcW * 0.5);
+    let srcY = Math.floor(heroNormY * mini.height - srcH * 0.5);
+
+    srcX = clamp(srcX, 0, Math.max(0, mini.width - srcW));
+    srcY = clamp(srcY, 0, Math.max(0, mini.height - srcH));
 
     ctx.save();
-    ctx.strokeStyle = "rgba(255,255,255,0.16)";
-    ctx.lineWidth = 1;
-    roundRectPath(ctx, x, y, size, size, 12);
-    ctx.stroke();
+    ctx.beginPath();
+    ctx.rect(x, y, size, size);
+    ctx.clip();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(mini, srcX, srcY, srcW, srcH, x, y, size, size);
+    ctx.imageSmoothingEnabled = true;
+    ctx.restore();
 
     const px = x + size * 0.5;
     const py = y + size * 0.5;
+    this._drawHeroCrosshair(ctx, x, y, size, px, py);
+  }
 
+  _drawMinimapFromMapInfo(ctx, game, x, y, w, h) {
+    const info = game.world.getMapInfo();
+    const hero = game.hero;
+
+    const zoom = info.scale || 1;
+    const worldSpan = 1100 / zoom;
+    const half = worldSpan * 0.5;
+    const pxPerWorld = w / worldSpan;
+
+    const tile = info.mapTile;
+    const startGX = Math.floor((hero.x - half + info.mapHalfSize) / tile);
+    const endGX = Math.floor((hero.x + half + info.mapHalfSize) / tile);
+    const startGY = Math.floor((hero.y - half + info.mapHalfSize) / tile);
+    const endGY = Math.floor((hero.y + half + info.mapHalfSize) / tile);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+
+    ctx.fillStyle = "rgba(20,24,30,0.95)";
+    ctx.fillRect(x, y, w, h);
+
+    for (let gy = startGY; gy <= endGY; gy++) {
+      if (gy < 0 || gy >= info.rows) continue;
+      for (let gx = startGX; gx <= endGX; gx++) {
+        if (gx < 0 || gx >= info.cols) continue;
+        if (!info.revealed?.[gy]?.[gx]) continue;
+
+        const wx = gx * tile - info.mapHalfSize;
+        const wy = gy * tile - info.mapHalfSize;
+        const color =
+          game.world.getMapColorAtWorld?.(wx + tile * 0.5, wy + tile * 0.5) ||
+          this._colorFromWorldCell(game.world.getMapCellAtWorld?.(wx + tile * 0.5, wy + tile * 0.5));
+
+        const sx = x + ((wx - (hero.x - half)) * pxPerWorld);
+        const sy = y + ((wy - (hero.y - half)) * pxPerWorld);
+        const sw = Math.ceil(tile * pxPerWorld) + 1;
+        const sh = Math.ceil(tile * pxPerWorld) + 1;
+
+        ctx.fillStyle = color;
+        ctx.fillRect(sx, sy, sw, sh);
+      }
+    }
+
+    this._drawPOIMarkersMini(ctx, game, info, x, y, w, hero.x, hero.y, half, pxPerWorld);
+
+    const px = x + w * 0.5;
+    const py = y + h * 0.5;
+    this._drawHeroCrosshair(ctx, x, y, w, px, py);
+
+    ctx.restore();
+  }
+
+  _drawHeroCrosshair(ctx, x, y, size, px, py) {
     ctx.strokeStyle = "rgba(255,255,255,0.10)";
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -232,344 +348,348 @@ export default class UI {
     ctx.fillRect((px - 3) | 0, (py - 3) | 0, 6, 6);
     ctx.fillStyle = "rgba(255,255,255,1)";
     ctx.fillRect((px - 1) | 0, (py - 1) | 0, 2, 2);
-
-    ctx.fillStyle = "rgba(255,255,255,0.94)";
-    ctx.font = "bold 11px Arial";
-    ctx.fillText("MINIMAP", x + 8, y + 14);
-
-    ctx.fillStyle = "rgba(214,222,238,0.78)";
-    ctx.font = "11px Arial";
-    ctx.fillText("M map", x + 8, y + size + 15);
-    ctx.restore();
   }
 
-  _drawBottomBar(ctx, game) {
-    const defs = game.skillDefs || {};
-    const cds = game.cooldowns || {};
-    const order = ["q", "w", "e", "r"];
+  _drawPOIMarkersMini(ctx, game, info, clipX, clipY, inner, heroX, heroY, half, pxPerWorld) {
+    const drawOne = (x, y, fill, r = 3) => {
+      const sx = clipX + ((x - (heroX - half)) * pxPerWorld);
+      const sy = clipY + ((y - (heroY - half)) * pxPerWorld);
+      if (sx < clipX || sx > clipX + inner || sy < clipY || sy > clipY + inner) return;
 
-    const totalW = 300;
-    const x = ((this.w - totalW) * 0.5) | 0;
-    const y = this.h - 74;
-
-    this._panel(ctx, x, y, totalW, 54, 14, "rgba(8,12,18,0.72)");
-
-    ctx.save();
-    for (let i = 0; i < order.length; i++) {
-      const key = order[i];
-      const d = defs[key];
-      const cd = cds[key] || 0;
-
-      const bx = x + 14 + i * 70;
-      const by = y + 10;
-      const bw = 56;
-      const bh = 34;
-
-      ctx.fillStyle = "rgba(255,255,255,0.08)";
-      roundRectPath(ctx, bx, by, bw, bh, 10);
-      ctx.fill();
-
-      if (cd > 0) {
-        ctx.fillStyle = "rgba(0,0,0,0.42)";
-        roundRectPath(ctx, bx, by, bw, bh, 10);
-        ctx.fill();
-      }
-
-      ctx.fillStyle = d?.color || "rgba(180,200,240,1)";
+      ctx.fillStyle = fill;
       ctx.beginPath();
-      ctx.arc(bx + 15, by + 17, 8, 0, Math.PI * 2);
+      ctx.arc(sx, sy, r, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.fillStyle = "rgba(245,248,252,0.96)";
-      ctx.font = "bold 12px Arial";
-      ctx.fillText(String(key).toUpperCase(), bx + 29, by + 15);
+      ctx.strokeStyle = "rgba(0,0,0,0.55)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    };
 
-      ctx.font = "11px Arial";
-      ctx.fillStyle = "rgba(214,222,238,0.82)";
-      ctx.fillText(d?.name || "Skill", bx + 22, by + 28);
-
-      if (cd > 0) {
-        ctx.fillStyle = "rgba(255,226,160,0.94)";
-        ctx.font = "bold 11px Arial";
-        ctx.fillText(fmtNum(cd), bx + 4, by + 13);
-      }
+    for (const c of info.camps || []) {
+      if (!game.world.isRevealedWorld?.(c.x, c.y) && game.world.isRevealedWorld) continue;
+      drawOne(c.x, c.y, "#ffb25c", 3);
     }
-    ctx.restore();
-  }
-
-  _drawInventory(ctx, game) {
-    const hero = game.hero;
-    const items = Array.isArray(hero.inventory) ? hero.inventory : [];
-    const equip = hero.equip || {};
-    const panelW = Math.min(760, this.w - 56);
-    const panelH = Math.min(520, this.h - 48);
-    const x = ((this.w - panelW) * 0.5) | 0;
-    const y = ((this.h - panelH) * 0.5) | 0;
-
-    this._bigPanel(ctx, x, y, panelW, panelH, "Inventory");
-
-    ctx.save();
-    ctx.font = "13px Arial";
-    ctx.fillStyle = "rgba(244,247,252,0.96)";
-    ctx.fillText("Equipped", x + 18, y + 60);
-
-    const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
-    let yy = y + 88;
-
-    for (const slot of slots) {
-      const item = equip[slot] || null;
-      this._panel(ctx, x + 16, yy - 18, 320, 42, 10, "rgba(14,20,30,0.72)");
-      ctx.fillStyle = "rgba(214,222,238,0.82)";
-      ctx.font = "12px Arial";
-      ctx.fillText(slot.toUpperCase(), x + 28, yy - 1);
-
-      ctx.fillStyle = rarityColor(item?.rarity);
-      ctx.font = "bold 13px Arial";
-      ctx.fillText(item?.name || "-", x + 118, yy - 1);
-      yy += 52;
+    for (const w of info.waystones || []) {
+      if (!game.world.isRevealedWorld?.(w.x, w.y) && game.world.isRevealedWorld) continue;
+      drawOne(w.x, w.y, "#8fd4ff", 3);
     }
-
-    ctx.fillStyle = "rgba(244,247,252,0.96)";
-    ctx.font = "bold 13px Arial";
-    ctx.fillText("Backpack", x + 360, y + 60);
-
-    let iy = y + 88;
-    for (let i = 0; i < items.length && i < 7; i++) {
-      const item = items[i];
-      this._panel(ctx, x + 356, iy - 18, panelW - 372, 54, 10, "rgba(14,20,30,0.72)");
-      ctx.fillStyle = rarityColor(item?.rarity);
-      ctx.font = "bold 13px Arial";
-      ctx.fillText(item?.name || "Gear", x + 368, iy);
-
-      ctx.fillStyle = "rgba(214,222,238,0.76)";
-      ctx.font = "11px Arial";
-      ctx.fillText(itemStatText(item), x + 368, iy + 18);
-      iy += 64;
+    for (const d of info.dungeons || []) {
+      if (!game.world.isRevealedWorld?.(d.x, d.y) && game.world.isRevealedWorld) continue;
+      drawOne(d.x, d.y, "#c995ff", 3);
     }
-
-    if (!items.length) {
-      ctx.fillStyle = "rgba(214,222,238,0.72)";
-      ctx.font = "12px Arial";
-      ctx.fillText("No items yet.", x + 368, y + 92);
+    for (const dock of info.docks || []) {
+      if (!game.world.isRevealedWorld?.(dock.x, dock.y) && game.world.isRevealedWorld) continue;
+      drawOne(dock.x, dock.y, "#d9d4c6", 3);
     }
-
-    ctx.fillStyle = "rgba(214,222,238,0.72)";
-    ctx.font = "12px Arial";
-    ctx.fillText("ESC or I to close", x + 18, y + panelH - 18);
-    ctx.restore();
   }
 
   _drawMap(ctx, game) {
+    const info = game?.world?.getMapInfo?.();
+    if (info && info.revealed) {
+      this._drawMapFromMapInfo(ctx, game, info);
+      return;
+    }
+
+    const mini = game?.world?.getMinimapCanvas?.() || this._mini;
+    if (mini) {
+      this._drawMapFromCanvas(ctx, game, mini);
+      return;
+    }
+
+    this._drawSimplePanel(ctx, "Map");
+  }
+
+  _drawMapFromCanvas(ctx, game, mini) {
+    const w = Math.min(980, this.w - 60);
+    const h = Math.min(720, this.h - 60);
+    const x = ((this.w - w) / 2) | 0;
+    const y = ((this.h - h) / 2) | 0;
+    const pad = 18;
+    const mapX = x + pad;
+    const mapY = y + 56;
+    const mapW = w - pad * 2;
+    const mapH = h - 76;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(8,10,14,0.86)";
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+
+    ctx.fillStyle = "#eef4fb";
+    ctx.font = "bold 22px Arial";
+    ctx.fillText("World Map", x + 18, y + 31);
+
+    ctx.fillStyle = "#95a7bd";
+    ctx.font = "12px Arial";
+    ctx.fillText("M close • Z zoom", x + 18, y + 48);
+
+    ctx.fillStyle = "rgba(20,24,30,0.95)";
+    ctx.fillRect(mapX, mapY, mapW, mapH);
+
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(mini, mapX, mapY, mapW, mapH);
+    ctx.imageSmoothingEnabled = true;
+
     const world = game.world;
-    const panelW = Math.min(920, this.w - 40);
-    const panelH = Math.min(640, this.h - 40);
-    const x = ((this.w - panelW) * 0.5) | 0;
-    const y = ((this.h - panelH) * 0.5) | 0;
+    const span = this._fallbackMapSpan(world, world?.mapMode || "small");
+    const heroNormX = clamp((game.hero.x + span * 0.5) / span, 0, 1);
+    const heroNormY = clamp((game.hero.y + span * 0.5) / span, 0, 1);
+    const hx = mapX + heroNormX * mapW;
+    const hy = mapY + heroNormY * mapH;
 
-    this._bigPanel(ctx, x, y, panelW, panelH, "World Map");
-
-    const mapX = x + 18;
-    const mapY = y + 44;
-    const mapW = Math.min(620, panelW - 250);
-    const mapH = panelH - 62;
-
-    const bigSpan = (world?.mapMode === "large")
-      ? this.bigMapSpanClose
-      : this.bigMapSpanFar;
-
-    ctx.save();
-    roundRectPath(ctx, mapX, mapY, mapW, mapH, 14);
-    ctx.clip();
-
-    // Important: big map is centered on the whole world, not the hero
-    this._drawWorldMapDirect(
-      ctx,
-      world,
-      0,
-      0,
-      bigSpan,
-      mapX,
-      mapY,
-      mapW,
-      mapH,
-      {
-        heroCentered: false,
-        drawHeroMarker: true,
-        heroX: game.hero.x,
-        heroY: game.hero.y,
-        sampleStepPx: 5,
-        darkenUndiscovered: true,
-      }
-    );
-
-    ctx.restore();
-
-    ctx.save();
-    ctx.strokeStyle = "rgba(255,255,255,0.16)";
-    ctx.lineWidth = 1;
-    roundRectPath(ctx, mapX, mapY, mapW, mapH, 14);
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(hx, hy, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.65)";
+    ctx.lineWidth = 2;
     ctx.stroke();
 
-    const sideX = mapX + mapW + 18;
-    let ty = y + 70;
-
-    ctx.fillStyle = "rgba(232,238,252,0.94)";
-    ctx.font = "bold 14px Arial";
-    ctx.fillText("Map Info", sideX, ty);
-    ty += 26;
-
-    ctx.font = "13px Arial";
-    ctx.fillStyle = "rgba(206,216,236,0.84)";
-    ctx.fillText(`Zoom: ${world?.mapMode === "large" ? "close" : "far"}`, sideX, ty);
-    ty += 20;
-    ctx.fillText("Z = change map zoom", sideX, ty);
-    ty += 20;
-    ctx.fillText("M / ESC = close", sideX, ty);
-    ty += 20;
-    ctx.fillText("Big map is world-centered", sideX, ty);
-    ty += 28;
-
-    ctx.fillStyle = "rgba(232,238,252,0.94)";
-    ctx.font = "bold 13px Arial";
-    ctx.fillText("Waystones", sideX, ty);
-    ty += 20;
-
-    const discovered = Array.from(game?.progress?.discoveredWaystones || []);
-    ctx.font = "12px Arial";
-    ctx.fillStyle = "rgba(206,216,236,0.84)";
-    for (let i = 0; i < discovered.length && i < 9; i++) {
-      ctx.fillText(`${i + 1} • Waystone ${discovered[i]}`, sideX, ty);
-      ty += 18;
-    }
-
-    if (!discovered.length) {
-      ctx.fillText("No waystones unlocked yet.", sideX, ty);
-    }
-
     ctx.restore();
   }
 
-  _drawShop(ctx, game) {
-    const panelW = Math.min(720, this.w - 48);
-    const panelH = Math.min(500, this.h - 48);
-    const x = ((this.w - panelW) * 0.5) | 0;
-    const y = ((this.h - panelH) * 0.5) | 0;
+  _drawMapFromMapInfo(ctx, game, info) {
+    const hero = game.hero;
 
-    this._bigPanel(ctx, x, y, panelW, panelH, "Camp Shop");
+    const panelW = Math.min(980, this.w - 60);
+    const panelH = Math.min(720, this.h - 60);
+    const x = ((this.w - panelW) / 2) | 0;
+    const y = ((this.h - panelH) / 2) | 0;
+    const pad = 18;
+    const mapX = x + pad;
+    const mapY = y + 56;
+    const mapW = panelW - pad * 2;
+    const mapH = panelH - 76;
 
     ctx.save();
-    ctx.fillStyle = "rgba(214,222,238,0.82)";
-    ctx.font = "13px Arial";
-    ctx.fillText(`Gold: ${game.hero?.gold || 0}`, x + 18, y + 58);
-    ctx.fillText("Shop UI can be expanded again after the map is stable.", x + 18, y + 86);
-    ctx.fillText("ESC or H to close", x + 18, y + panelH - 18);
+
+    ctx.fillStyle = "rgba(8,10,14,0.86)";
+    ctx.fillRect(x, y, panelW, panelH);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.strokeRect(x + 0.5, y + 0.5, panelW - 1, panelH - 1);
+
+    ctx.fillStyle = "#eef4fb";
+    ctx.font = "bold 22px Arial";
+    ctx.fillText("World Map", x + 18, y + 31);
+
+    ctx.fillStyle = "#95a7bd";
+    ctx.font = "12px Arial";
+    ctx.fillText("M close • Z zoom • unknown beyond the edges", x + 18, y + 48);
+
+    const zoom = info.scale || 1;
+    const visibleWorldHalf = info.mapHalfSize / zoom;
+    const left = -visibleWorldHalf;
+    const top = -visibleWorldHalf;
+    const span = visibleWorldHalf * 2;
+
+    const pxPerWorldX = mapW / span;
+    const pxPerWorldY = mapH / span;
+    const tile = info.mapTile;
+
+    ctx.fillStyle = "rgba(20,24,30,0.95)";
+    ctx.fillRect(mapX, mapY, mapW, mapH);
+
+    for (let gy = 0; gy < info.rows; gy++) {
+      for (let gx = 0; gx < info.cols; gx++) {
+        if (!info.revealed?.[gy]?.[gx]) continue;
+
+        const wx = gx * tile - info.mapHalfSize;
+        const wy = gy * tile - info.mapHalfSize;
+        const color =
+          game.world.getMapColorAtWorld?.(wx + tile * 0.5, wy + tile * 0.5) ||
+          this._colorFromWorldCell(game.world.getMapCellAtWorld?.(wx + tile * 0.5, wy + tile * 0.5));
+
+        const sx = mapX + (wx - left) * pxPerWorldX;
+        const sy = mapY + (wy - top) * pxPerWorldY;
+        const sw = Math.ceil(tile * pxPerWorldX) + 1;
+        const sh = Math.ceil(tile * pxPerWorldY) + 1;
+
+        ctx.fillStyle = color;
+        ctx.fillRect(sx, sy, sw, sh);
+      }
+    }
+
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(mapX + 0.5, mapY + 0.5, mapW - 1, mapH - 1);
+
+    this._drawPOIMarkersBig(ctx, game, info, mapX, mapY, mapW, mapH, left, top, pxPerWorldX, pxPerWorldY);
+
+    if (Math.abs(hero.x) <= info.mapHalfSize && Math.abs(hero.y) <= info.mapHalfSize) {
+      const hx = mapX + (hero.x - left) * pxPerWorldX;
+      const hy = mapY + (hero.y - top) * pxPerWorldY;
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.arc(hx, hy, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.65)";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
+    const lx = x + 18;
+    const ly = y + panelH - 14;
+    this._legendDot(ctx, lx, ly, "#ffb25c", "Camp");
+    this._legendDot(ctx, lx + 92, ly, "#8fd4ff", "Waystone");
+    this._legendDot(ctx, lx + 208, ly, "#c995ff", "Dungeon");
+    this._legendDot(ctx, lx + 318, ly, "#d9d4c6", "Dock");
+    this._legendDot(ctx, lx + 398, ly, "#ffffff", "Hero");
+
     ctx.restore();
   }
 
-  _drawWorldMapDirect(ctx, world, centerX, centerY, worldSpan, dx, dy, dw, dh, opts = {}) {
-    if (!world) return;
+  _drawPOIMarkersBig(ctx, game, info, mapX, mapY, mapW, mapH, left, top, pxPerWorldX, pxPerWorldY) {
+    const drawOne = (x, y, fill, label, r = 4) => {
+      if (game.world.isRevealedWorld && !game.world.isRevealedWorld(x, y)) return;
 
-    const stepPx = Math.max(2, opts.sampleStepPx || 4);
-    const half = worldSpan * 0.5;
-    const mapHalf = world.mapHalfSize || 5200;
-    const boundsHalf = world.boundsHalfSize || world.boundsRadius || 7600;
+      const sx = mapX + (x - left) * pxPerWorldX;
+      const sy = mapY + (y - top) * pxPerWorldY;
+      if (sx < mapX || sx > mapX + mapW || sy < mapY || sy > mapY + mapH) return;
 
-    for (let sy = 0; sy < dh; sy += stepPx) {
-      for (let sx = 0; sx < dw; sx += stepPx) {
-        const wx = centerX - half + (sx / dw) * worldSpan;
-        const wy = centerY - half + (sy / dh) * worldSpan;
-
-        let fill = "#06080c";
-
-        // Main map square
-        const inMainSquare = Math.abs(wx) <= mapHalf && Math.abs(wy) <= mapHalf;
-        const inBounds = Math.abs(wx) <= boundsHalf && Math.abs(wy) <= boundsHalf;
-
-        if (inMainSquare) {
-          if (world.isExplored?.(wx, wy)) {
-            if (world.isWater?.(wx, wy)) fill = "#3f86b8";
-            else fill = this._miniGroundColor(world.getZoneName?.(wx, wy) || "Green Reach");
-          } else if (opts.darkenUndiscovered) {
-            fill = "#06080c";
-          }
-        } else if (inBounds) {
-          // Unknown area outside the main square
-          fill = this._miniGroundColor("Unknown");
-        } else {
-          fill = "#06080c";
-        }
-
-        ctx.fillStyle = fill;
-        ctx.fillRect(dx + sx, dy + sy, stepPx, stepPx);
-      }
-    }
-
-    this._drawPOIsOnMap(ctx, world, centerX, centerY, worldSpan, dx, dy, dw, dh);
-
-    if (opts.drawHeroMarker) {
-      const hx = opts.heroCentered ? centerX : (opts.heroX ?? centerX);
-      const hy = opts.heroCentered ? centerY : (opts.heroY ?? centerY);
-
-      const nx = (hx - (centerX - half)) / worldSpan;
-      const ny = (hy - (centerY - half)) / worldSpan;
-
-      if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) {
-        const px = dx + nx * dw;
-        const py = dy + ny * dh;
-
-        ctx.fillStyle = "rgba(20,20,20,0.92)";
-        ctx.beginPath();
-        ctx.arc(px, py, 5, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.fillStyle = "rgba(255,255,255,0.98)";
-        ctx.beginPath();
-        ctx.arc(px, py, 2.2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-  }
-
-  _drawPOIsOnMap(ctx, world, centerX, centerY, worldSpan, dx, dy, dw, dh) {
-    const half = worldSpan * 0.5;
-    const mapHalf = world.mapHalfSize || 5200;
-
-    const drawPoi = (x, y, color, r) => {
-      if (Math.abs(x) > mapHalf || Math.abs(y) > mapHalf) return;
-      if (!world.isExplored?.(x, y)) return;
-
-      const nx = (x - (centerX - half)) / worldSpan;
-      const ny = (y - (centerY - half)) / worldSpan;
-      if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return;
-
-      const px = dx + nx * dw;
-      const py = dy + ny * dh;
-
-      ctx.fillStyle = color;
+      ctx.fillStyle = fill;
       ctx.beginPath();
-      ctx.arc(px, py, r, 0, Math.PI * 2);
+      ctx.arc(sx, sy, r, 0, Math.PI * 2);
       ctx.fill();
+
+      ctx.strokeStyle = "rgba(0,0,0,0.55)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      if (label) {
+        ctx.fillStyle = "rgba(240,244,251,0.92)";
+        ctx.font = "11px Arial";
+        ctx.fillText(label, sx + 7, sy - 6);
+      }
     };
 
-    for (const c of world.camps || []) drawPoi(c.x, c.y, "#f3c46e", 3);
-    for (const w of world.waystones || []) drawPoi(w.x, w.y, "#bde4ff", 2.5);
-    for (const d of world.docks || []) drawPoi(d.x, d.y, "#d6c3a1", 2.5);
-    for (const g of world.dungeons || []) drawPoi(g.x, g.y, "#ff9f87", 3);
+    for (const c of info.camps || []) drawOne(c.x, c.y, "#ffb25c", "Camp", 4);
+    for (const w of info.waystones || []) drawOne(w.x, w.y, "#8fd4ff", "Waystone", 4);
+    for (const d of info.dungeons || []) drawOne(d.x, d.y, "#c995ff", "Dungeon", 4);
+    for (const dock of info.docks || []) drawOne(dock.x, dock.y, "#d9d4c6", "Dock", 4);
   }
 
-  _miniGroundColor(zone) {
-    if (zone === "Unknown") return "#4f5148";
-    if (zone === "Whisper Grass") return "#679f61";
-    if (zone === "Old Road") return "#948c68";
-    if (zone === "Stone Flats") return "#869177";
-    if (zone === "High Meadow") return "#7cb56b";
-    if (zone === "Ash Fields") return "#87836f";
-    if (zone === "Pine Verge") return "#5c8555";
-    if (zone === "Camp Grounds") return "#958764";
-    if (zone === "Ruin Approach") return "#7a7468";
-    if (zone === "Waystone Rise") return "#76947c";
-    if (zone === "Shoreline") return "#989d72";
-    if (zone === "Riverbank") return "#78a46d";
-    return "#72a265";
+  _legendDot(ctx, x, y, fill, text) {
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.arc(x, y - 4, 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(0,0,0,0.55)";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    ctx.fillStyle = "#d7dfeb";
+    ctx.font = "12px Arial";
+    ctx.fillText(text, x + 9, y);
+  }
+
+  _colorFromWorldCell(cell) {
+    if (!cell) return "#2a2f38";
+    if (cell.ground === "water") return "#3f87b8";
+    if (cell.ground === "unknown_water") return "#22384c";
+    if (cell.ground === "unknown_land") return "#3a4334";
+    if (cell.ground === "pine") return "#607d4d";
+    if (cell.ground === "lush") return "#56ad5d";
+    if (cell.ground === "ash") return "#8d7862";
+    if (cell.ground === "stone") return "#84857d";
+    if (cell.ground === "road") return "#9b885e";
+    if (cell.ground === "shore") return "#b9a66d";
+    if (cell.ground === "riverbank") return "#829f67";
+    return "#74ae64";
+  }
+
+  _fallbackMapSpan(world, mode) {
+    const r =
+      world?.mapHalfSize ||
+      world?.boundsRadius ||
+      world?.boundsHalfSize ||
+      5200;
+
+    if (mode === "large") return r * 2;
+    return r * 2;
+  }
+
+  _drawHelp(ctx) {
+    ctx.save();
+    ctx.fillStyle = "rgba(10,14,20,0.62)";
+    ctx.fillRect(14, this.h - 42, 250, 28);
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.strokeRect(14.5, this.h - 41.5, 249, 27);
+
+    ctx.fillStyle = "#cfd7e4";
+    ctx.font = "12px Arial";
+    ctx.fillText("Arrow keys move • Mouse aim • QWER cast", 24, this.h - 23);
+    ctx.restore();
+  }
+
+  _drawPrompt(ctx, game) {
+    const camp = game?._cachedNearbyCamp;
+    const dock = game?._cachedNearbyDock;
+    const waystone = game?._cachedNearbyWaystone;
+    const dungeon = game?._cachedNearbyDungeon;
+
+    let txt = "";
+    if (camp) txt = "F rest at camp";
+    else if (dock) txt = "B dock / sail";
+    else if (waystone) txt = "F discover waystone";
+    else if (dungeon) txt = "F enter dungeon";
+
+    if (!txt) return;
+
+    const w = Math.max(180, ctx.measureText(txt).width + 24);
+    const x = ((this.w - w) / 2) | 0;
+    const y = this.h - 108;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(8,10,14,0.74)";
+    ctx.fillRect(x, y, w, 28);
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, 27);
+
+    ctx.fillStyle = "#f2f5fb";
+    ctx.font = "13px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(txt, x + w / 2, y + 18);
+    ctx.restore();
+  }
+
+  _drawToast(ctx, game) {
+    const msg = game?.msg || this._msg;
+    const t = game?.msgT || this._msgT;
+    if (!msg || t <= 0) return;
+
+    ctx.save();
+    ctx.font = "bold 18px Arial";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.strokeStyle = "rgba(0,0,0,0.52)";
+    ctx.lineWidth = 4;
+    ctx.strokeText(msg, this.w * 0.5, this.h - 86);
+    ctx.fillText(msg, this.w * 0.5, this.h - 86);
+    ctx.restore();
+  }
+
+  _drawSimplePanel(ctx, title) {
+    const w = Math.min(800, this.w - 80);
+    const h = Math.min(520, this.h - 80);
+    const x = ((this.w - w) / 2) | 0;
+    const y = ((this.h - h) / 2) | 0;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(8,10,14,0.84)";
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+
+    ctx.fillStyle = "#eef4fb";
+    ctx.font = "bold 22px Arial";
+    ctx.fillText(title, x + 18, y + 32);
+
+    ctx.fillStyle = "#95a7bd";
+    ctx.font = "13px Arial";
+    ctx.fillText("Panel placeholder", x + 18, y + 58);
+    ctx.restore();
   }
 }
