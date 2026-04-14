@@ -1,13 +1,5 @@
 // src/game.js
-// v97.6 STABLE FULL FILE
-// - restores a complete Game class
-// - Arrow keys move
-// - Q / W / E / R cast
-// - W no longer moves
-// - restores _updateNearbyPOIs and _applyEnemyTuning
-// - keeps safer spawn behavior
-// - keeps grouped enemy spawns
-// - avoids partial-file crashes
+// v98.2 ROAD SPEED + BRIDGE COMPAT + STABLE FULL FILE
 
 import World from "./world.js";
 import { clamp, lerp, dist2, norm, RNG, hash2 } from "./util.js";
@@ -30,7 +22,7 @@ export default class Game {
 
     this.input = new Input(window);
     this.ui = new UI(canvas);
-    this.save = new Save("broke-knight-save-v97-6");
+    this.save = new Save("broke-knight-save-v98-2");
 
     this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
     this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
@@ -512,7 +504,7 @@ export default class Game {
 
       const label = this._enemyVariantLabel(e);
       const barW = e.dragonBoss ? 60 : e.boss ? 46 : (e.elite || e.variant ? 34 : 0);
-      const baseY = e.y - (e.radius || 12) - 18;
+      const baseY = e.y - (e.radius || e.r || 12) - 18;
 
       if (barW > 0) {
         ctx.fillStyle = "rgba(0,0,0,0.45)";
@@ -669,8 +661,16 @@ export default class Game {
 
     const move = norm(mx, my);
     const slowMult = (this.hero.state?.slowT || 0) > 0 ? 0.72 : 1;
-    const baseSpeed = typeof this.hero.getMoveSpeed === "function" ? this.hero.getMoveSpeed(this) : 140;
-    const speed = baseSpeed * slowMult;
+
+    const baseSpeed = typeof this.hero.getMoveSpeed === "function"
+      ? this.hero.getMoveSpeed(this)
+      : 140;
+
+    const terrainMod = this.hero.state?.sailing
+      ? 1
+      : (this.world.getMoveModifier?.(this.hero.x, this.hero.y) ?? 1);
+
+    const speed = baseSpeed * slowMult * terrainMod;
 
     this.hero.vx = move.x * speed;
     this.hero.vy = move.y * speed;
@@ -678,16 +678,25 @@ export default class Game {
     const nx = this.hero.x + this.hero.vx * dt;
     const ny = this.hero.y + this.hero.vy * dt;
 
-    if (this.world.canWalk?.(nx, this.hero.y) || this.hero.state?.sailing) {
+    const canX = this.hero.state?.sailing || this.world.canWalk?.(nx, this.hero.y);
+    const canY = this.hero.state?.sailing || this.world.canWalk?.(this.hero.x, ny);
+
+    if (canX) {
       this.hero.x = nx;
     } else {
       this.hero.vx = 0;
     }
 
-    if (this.world.canWalk?.(this.hero.x, ny) || this.hero.state?.sailing) {
+    if (canY) {
       this.hero.y = ny;
     } else {
       this.hero.vy = 0;
+    }
+
+    if ((move.x !== 0 || move.y !== 0) && !this.hero.state?.sailing) {
+      const n = norm(move.x, move.y);
+      this.hero.lastMove.x = n.x;
+      this.hero.lastMove.y = n.y;
     }
   }
 
@@ -763,8 +772,23 @@ export default class Game {
       this.hero.aimDir?.x || this.hero.lastMove?.x || 1,
       this.hero.aimDir?.y || this.hero.lastMove?.y || 0
     );
-    this.hero.x += dir.x * 54;
-    this.hero.y += dir.y * 54;
+
+    const dashDist = 54;
+    const tx = this.hero.x + dir.x * dashDist;
+    const ty = this.hero.y + dir.y * dashDist;
+
+    if (this.hero.state?.sailing || this.world.canWalk?.(tx, ty)) {
+      this.hero.x = tx;
+      this.hero.y = ty;
+    } else {
+      const hx = this.hero.x + dir.x * (dashDist * 0.5);
+      const hy = this.hero.y + dir.y * (dashDist * 0.5);
+      if (this.hero.state?.sailing || this.world.canWalk?.(hx, hy)) {
+        this.hero.x = hx;
+        this.hero.y = hy;
+      }
+    }
+
     this.hero.state.dashT = 0.20;
   }
 
@@ -1718,7 +1742,9 @@ export default class Game {
   }
 
   _ensureWorldPopulation() {
-    if ((this.world.camps || []).length === 0) this.world._generatePOIs?.();
+    if ((this.world.camps || []).length === 0 && this.world._initPOIs) {
+      this.world._initPOIs();
+    }
   }
 
   _ensureHeroSafe() {

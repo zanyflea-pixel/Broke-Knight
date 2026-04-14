@@ -1,5 +1,5 @@
 // src/world.js
-// v98.1 OVERWORLD PASS + BRIDGES + ROADS + MAP COMPAT (FULL FILE)
+// v98.3 OVERWORLD POLISH + CONNECTED ROADS + BRIDGES + MAP COMPAT (FULL FILE)
 
 import { clamp, hash2, fbm, RNG } from "./util.js";
 
@@ -16,7 +16,6 @@ export default class World {
 
     this.spawn = { x: 0, y: 0 };
 
-    // Keep compatibility with both old and newer files.
     this.boundsRadius = 5200;
     this.mapHalfSize = 5200;
     this.boundsHalfSize = 7000;
@@ -44,7 +43,11 @@ export default class World {
     this._zoneCache = new Map();
     this._groundCache = new Map();
 
+    this._roadAnchors = [];
+    this._roadLinkPairs = [];
+
     this._initPOIs();
+    this._buildRoadNetwork();
     this.revealAround(this.spawn.x, this.spawn.y, 260);
     this._queueAround(this.spawn.x, this.spawn.y, 2);
   }
@@ -146,7 +149,6 @@ export default class World {
   isWater(x, y) {
     if (Math.abs(x) > this.boundsHalfSize || Math.abs(y) > this.boundsHalfSize) return true;
 
-    // Outside mapped area = unknown band, mostly land with some heavy water.
     if (Math.abs(x) > this.mapHalfSize || Math.abs(y) > this.mapHalfSize) {
       const u = fbm((x + this.seed * 0.37) * 0.00056, (y - this.seed * 0.41) * 0.00056, 4);
       return u < 0.27;
@@ -156,7 +158,6 @@ export default class World {
     const lake = this._lakeNoise(x, y);
     const river = this._riverField(x, y);
 
-    // Broader water bodies and fewer tiny cuts.
     if (lake < -0.30) return true;
     if (terrain < -0.34) return true;
     if (river < 0.052) return true;
@@ -168,11 +169,13 @@ export default class World {
     if (Math.abs(x) > this.mapHalfSize || Math.abs(y) > this.mapHalfSize) return false;
     if (!this.isWater(x, y)) return false;
 
+    const nearRoad = this._isRoad(x, y);
+    if (!nearRoad) return false;
+
     const bx = this._bridgeFieldX(x, y);
     const by = this._bridgeFieldY(x, y);
-    const road = this._roadField(x, y);
 
-    return (bx < 0.020 && road > 0.17) || (by < 0.020 && road > 0.17);
+    return bx < 0.020 || by < 0.020;
   }
 
   getGroundType(x, y) {
@@ -255,7 +258,6 @@ export default class World {
       zone = "High Meadow";
     }
 
-    // Cleaner central square.
     if (Math.abs(x) < 1200 && Math.abs(y) < 1200) {
       zone = "High Meadow";
     }
@@ -288,7 +290,7 @@ export default class World {
     return Math.min(a, b);
   }
 
-  _roadField(x, y) {
+  _rawRoadField(x, y) {
     const warpX = fbm((x + this.seed * 0.41) * 0.0010, (y - this.seed * 0.27) * 0.0010, 2) * 90;
     const warpY = fbm((x - this.seed * 0.37) * 0.0010, (y + this.seed * 0.33) * 0.0010, 2) * 90;
     const rx = x + warpX;
@@ -305,6 +307,34 @@ export default class World {
     v = Math.min(v, roadC * 1.16);
 
     return field - v;
+  }
+
+  _distToRoadLink(x, y) {
+    if (!this._roadLinkPairs.length) return Infinity;
+
+    let best = Infinity;
+    for (const pair of this._roadLinkPairs) {
+      const d = this._distancePointToSegment(
+        x, y,
+        pair.a.x, pair.a.y,
+        pair.b.x, pair.b.y
+      );
+      if (d < best) best = d;
+    }
+    return best;
+  }
+
+  _roadField(x, y) {
+    const procedural = this._rawRoadField(x, y);
+    const d = this._distToRoadLink(x, y);
+
+    let anchorBoost = -1;
+    if (Number.isFinite(d)) {
+      // wider intended roads between POIs
+      anchorBoost = 1 - clamp(d / 120, 0, 1);
+    }
+
+    return Math.max(procedural, anchorBoost);
   }
 
   _isRoad(x, y) {
@@ -756,6 +786,83 @@ export default class World {
       const p = findShore(x, y, 420);
       if (p) this.docks.push({ id: id++, x: p.x, y: p.y });
     }
+  }
+
+  _buildRoadNetwork() {
+    this._roadAnchors = [];
+    this._roadLinkPairs = [];
+
+    const addAnchor = (p, type) => {
+      if (!p) return;
+      this._roadAnchors.push({ x: p.x, y: p.y, type });
+    };
+
+    addAnchor(this.spawn, "spawn");
+    for (const p of this.camps) addAnchor(p, "camp");
+    for (const p of this.waystones) addAnchor(p, "waystone");
+    for (const p of this.docks) addAnchor(p, "dock");
+    for (const p of this.dungeons) addAnchor(p, "dungeon");
+
+    const anchors = this._roadAnchors;
+    if (!anchors.length) return;
+
+    for (const a of anchors) {
+      let best = null;
+      let bestD = Infinity;
+
+      for (const b of anchors) {
+        if (a === b) continue;
+
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        const d = Math.hypot(dx, dy);
+
+        let typeBias = 1;
+        if (a.type === "spawn" || b.type === "spawn") typeBias *= 0.82;
+        if (a.type === "camp" && b.type === "waystone") typeBias *= 0.88;
+        if (a.type === "dock" || b.type === "dock") typeBias *= 0.94;
+        if (a.type === "dungeon" && b.type === "dungeon") typeBias *= 1.10;
+
+        const score = d * typeBias;
+        if (score < bestD) {
+          bestD = score;
+          best = b;
+        }
+      }
+
+      if (best) this._pushRoadPair(a, best);
+    }
+
+    const centerish = anchors.filter((p) => Math.abs(p.x) < 2600 && Math.abs(p.y) < 2600);
+    for (let i = 0; i < centerish.length; i++) {
+      const a = centerish[i];
+      const b = centerish[(i + 1) % centerish.length];
+      if (a && b) this._pushRoadPair(a, b);
+    }
+  }
+
+  _pushRoadPair(a, b) {
+    if (!a || !b) return;
+    const key1 = `${a.x},${a.y}|${b.x},${b.y}`;
+    const key2 = `${b.x},${b.y}|${a.x},${a.y}`;
+    if (!this._roadPairSet) this._roadPairSet = new Set();
+    if (this._roadPairSet.has(key1) || this._roadPairSet.has(key2)) return;
+    this._roadPairSet.add(key1);
+    this._roadLinkPairs.push({ a: { x: a.x, y: a.y }, b: { x: b.x, y: b.y } });
+  }
+
+  _distancePointToSegment(px, py, ax, ay, bx, by) {
+    const abx = bx - ax;
+    const aby = by - ay;
+    const apx = px - ax;
+    const apy = py - ay;
+    const ab2 = abx * abx + aby * aby;
+    if (ab2 <= 0.00001) return Math.hypot(px - ax, py - ay);
+    let t = (apx * abx + apy * aby) / ab2;
+    t = clamp(t, 0, 1);
+    const qx = ax + abx * t;
+    const qy = ay + aby * t;
+    return Math.hypot(px - qx, py - qy);
   }
 
   _isNearWater(x, y, r = 40) {
