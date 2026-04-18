@@ -1,10 +1,13 @@
 // src/ui.js
-// v99.6 UI SKILLS PANEL + MAP FIXES
-// - minimap has no zoom hint
-// - big map uses crisp world data path
-// - skills panel shows Q/W/E/R levels and XP bars
-// - hero stays centered only on minimap
-// - big map shows true hero position
+// v102.1 FULL UI RESTORE
+// - fuller HUD
+// - skill bar with cooldown overlays
+// - minimap + world map panel
+// - inventory panel with selected item details
+// - skills panel
+// - shop panel
+// - prompts + toasts
+// - built to match current game.js / world.js / util.js
 
 import { clamp } from "./util.js";
 
@@ -13,10 +16,6 @@ export default class UI {
     this.canvas = canvas;
     this.w = canvas?.width || 960;
     this.h = canvas?.height || 540;
-
-    this._open = null;
-    this._msg = "";
-    this._msgT = 0;
 
     this._mini = null;
     this._miniT = 0;
@@ -27,25 +26,7 @@ export default class UI {
     this.h = h | 0;
   }
 
-  open(name) {
-    this._open = name || null;
-  }
-
-  closeAll() {
-    this._open = null;
-  }
-
-  setMsg(text, t = 2) {
-    this._msg = String(text || "");
-    this._msgT = Math.max(0, +t || 0);
-  }
-
   update(dt, game) {
-    if (this._msgT > 0) {
-      this._msgT = Math.max(0, this._msgT - dt);
-      if (this._msgT <= 0) this._msg = "";
-    }
-
     this._miniT += dt;
     if (this._miniT >= 0.18) {
       this._miniT = 0;
@@ -64,151 +45,145 @@ export default class UI {
     this._drawHelp(ctx);
     this._drawPrompt(ctx, game);
     this._drawToast(ctx, game);
+    this._drawZoneText(ctx, game);
 
-    const open = game?.menu?.open || this._open || null;
+    const open = game?.menu?.open || null;
     if (!open) return;
 
     if (open === "map") this._drawMap(ctx, game);
     else if (open === "inventory") this._drawInventoryPanel(ctx, game);
     else if (open === "skills") this._drawSkillsPanel(ctx, game);
-    else if (open === "quests") this._drawSimplePanel(ctx, "Quests", "Quest tracking coming next.");
-    else if (open === "shop") this._drawSimplePanel(ctx, "Shop");
-    else if (open === "options") this._drawSimplePanel(ctx, "Options");
-    else if (open === "god") this._drawSimplePanel(ctx, "Menu");
+    else if (open === "shop") this._drawShopPanel(ctx, game);
   }
 
   _syncViewFromCanvas() {
-    this.w = this.canvas?.width || this.w;
-    this.h = this.canvas?.height || this.h;
+    const c = this.canvas;
+    if (!c) return;
+    this.w = c.width | 0;
+    this.h = c.height | 0;
   }
 
   _drawHUD(ctx, game) {
     const hero = game.hero;
-    if (!hero) return;
-
-    const st = hero.getStats?.() || {
+    const stats = hero.getStats?.() || {
       maxHp: hero.maxHp || 100,
       maxMana: hero.maxMana || 60,
       dmg: 8,
       armor: 0,
       crit: 0.05,
-      critMult: 1.6,
     };
 
-    const hpP = clamp((hero.hp || 0) / Math.max(1, st.maxHp || 1), 0, 1);
-    const mpP = clamp((hero.mana || 0) / Math.max(1, st.maxMana || 1), 0, 1);
-    const xpP = clamp((hero.xp || 0) / Math.max(1, hero.nextXp || 1), 0, 1);
+    const x = 16;
+    const y = 16;
+    const w = 330;
+    const hpH = 18;
+    const manaH = 12;
+    const xpH = 8;
 
-    const x = 14;
-    const y = 12;
-    const panelW = 350;
-    const barW = 228;
-    const barH = 14;
-    const gap = 8;
+    const hpMax = Math.max(1, stats.maxHp || hero.maxHp || 100);
+    const manaMax = Math.max(1, stats.maxMana || hero.maxMana || 60);
+    const xpNeed = Math.max(1, hero.nextXp || 1);
+
+    const hpFrac = clamp((hero.hp || 0) / hpMax, 0, 1);
+    const manaFrac = clamp((hero.mana || 0) / manaMax, 0, 1);
+    const xpFrac = clamp((hero.xp || 0) / xpNeed, 0, 1);
 
     ctx.save();
 
-    ctx.fillStyle = "rgba(10,14,20,0.72)";
-    ctx.fillRect(x, y, panelW, 94);
-
+    ctx.fillStyle = "rgba(8,12,18,0.78)";
+    ctx.fillRect(x - 8, y - 8, w + 16, 108);
     ctx.strokeStyle = "rgba(255,255,255,0.10)";
-    ctx.strokeRect(x + 0.5, y + 0.5, panelW - 1, 94 - 1);
+    ctx.strokeRect(x - 7.5, y - 7.5, w + 15, 107);
 
-    ctx.fillStyle = "#eaf0f7";
-    ctx.font = "bold 18px Arial";
-    ctx.fillText(`Lv ${hero.level || 1}`, x + 12, y + 24);
+    ctx.fillStyle = "#dfe7f2";
+    ctx.font = "bold 15px Arial";
+    ctx.fillText(`Lv ${hero.level || 1}`, x, y + 2);
+    ctx.fillText(`Gold ${hero.gold || 0}`, x + 92, y + 2);
 
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fillRect(x, y + 12, w, hpH);
+    ctx.fillStyle = "#cf4d5f";
+    ctx.fillRect(x, y + 12, (w * hpFrac) | 0, hpH);
+
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fillRect(x, y + 38, w, manaH);
+    ctx.fillStyle = "#4d87d6";
+    ctx.fillRect(x, y + 38, (w * manaFrac) | 0, manaH);
+
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fillRect(x, y + 58, w, xpH);
+    ctx.fillStyle = "#d2b766";
+    ctx.fillRect(x, y + 58, (w * xpFrac) | 0, xpH);
+
+    ctx.fillStyle = "#f3f6fb";
     ctx.font = "12px Arial";
-    ctx.fillStyle = "#cfd7e4";
-    ctx.fillText(`Gold ${hero.gold || 0}`, x + 82, y + 22);
+    ctx.fillText(`HP ${Math.round(hero.hp || 0)} / ${hpMax}`, x + 8, y + 26);
+    ctx.fillText(`Mana ${Math.round(hero.mana || 0)} / ${manaMax}`, x + 8, y + 48);
+    ctx.fillText(`XP ${hero.xp || 0} / ${xpNeed}`, x + 8, y + 74);
 
-    this._drawBar(ctx, x + 12, y + 33, barW, barH, hpP, "#d94c62", "#63222d", `HP ${Math.round(hero.hp || 0)} / ${Math.round(st.maxHp || 0)}`);
-    this._drawBar(ctx, x + 12, y + 33 + barH + gap, barW, barH, mpP, "#4f8cff", "#223766", `MP ${Math.round(hero.mana || 0)} / ${Math.round(st.maxMana || 0)}`);
-    this._drawBar(ctx, x + 12, y + 33 + (barH + gap) * 2, barW, 10, xpP, "#efc24a", "#6a5622", `XP ${Math.round(hero.xp || 0)} / ${Math.round(hero.nextXp || 0)}`, 11);
+    const potX = x + w - 112;
+    ctx.fillStyle = "#e2ebf7";
+    ctx.fillText(`1:HP ${hero?.potions?.hp || 0}`, potX, y + 26);
+    ctx.fillText(`2:MP ${hero?.potions?.mana || 0}`, potX, y + 48);
 
-    ctx.fillStyle = "#cfd7e4";
-    ctx.font = "12px Arial";
-    ctx.fillText(`DMG ${Math.round(st.dmg || 0)}`, x + 258, y + 44);
-    ctx.fillText(`ARM ${Math.round(st.armor || 0)}`, x + 258, y + 61);
-    ctx.fillText(`CRIT ${Math.round((st.crit || 0) * 100)}%`, x + 258, y + 78);
-
-    ctx.restore();
-  }
-
-  _drawBar(ctx, x, y, w, h, p, fill, back, label, labelSize = 12) {
-    ctx.save();
-
-    ctx.fillStyle = "rgba(0,0,0,0.35)";
-    ctx.fillRect(x, y, w, h);
-
-    ctx.fillStyle = back;
-    ctx.fillRect(x + 1, y + 1, w - 2, h - 2);
-
-    ctx.fillStyle = fill;
-    ctx.fillRect(x + 1, y + 1, Math.max(0, (w - 2) * p), h - 2);
-
-    ctx.strokeStyle = "rgba(255,255,255,0.12)";
-    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-
-    if (label) {
-      ctx.fillStyle = "#eef4fb";
-      ctx.font = `${labelSize}px Arial`;
-      ctx.fillText(label, x + 6, y + h - 3);
-    }
+    ctx.fillStyle = "#9fb1c7";
+    ctx.fillText(`DMG ${stats.dmg || 0}`, x + 8, y + 94);
+    ctx.fillText(`ARM ${stats.armor || 0}`, x + 92, y + 94);
+    ctx.fillText(`CRIT ${Math.round((stats.crit || 0) * 100)}%`, x + 168, y + 94);
 
     ctx.restore();
   }
 
   _drawSpellBar(ctx, game) {
-    const defs = game?.skillDefs || {};
-    const cds = game?.cooldowns || {};
-    const prog = game?.skillProg || {};
-    const hero = game?.hero;
-    if (!hero) return;
-
-    const order = ["q", "w", "e", "r"];
+    const defs = game.skillDefs || {};
+    const cds = game.cooldowns || {};
+    const hero = game.hero;
+    const bottomY = this.h - 62;
     const box = 46;
     const gap = 10;
-    const total = order.length * box + (order.length - 1) * gap;
-    const x0 = ((this.w - total) / 2) | 0;
-    const y = this.h - 68;
+    const total = box * 4 + gap * 3;
+    const startX = ((this.w - total) / 2) | 0;
+    const order = ["q", "w", "e", "r"];
 
     ctx.save();
 
     for (let i = 0; i < order.length; i++) {
-      const k = order[i];
-      const d = defs[k];
-      const x = x0 + i * (box + gap);
-      const ready = (cds[k] || 0) <= 0;
-      const manaOK = (hero.mana || 0) >= (d?.mana || 0);
+      const key = order[i];
+      const def = defs[key];
+      const cd = Math.max(0, cds[key] || 0);
+      const x = startX + i * (box + gap);
+      const y = bottomY;
 
-      ctx.fillStyle = ready && manaOK ? "rgba(24,32,44,0.90)" : "rgba(16,18,22,0.88)";
+      ctx.fillStyle = "rgba(10,14,20,0.82)";
       ctx.fillRect(x, y, box, box);
+      ctx.strokeStyle = "rgba(255,255,255,0.15)";
+      ctx.strokeRect(x + 0.5, y + 0.5, box - 1, box - 1);
 
-      ctx.strokeStyle = ready && manaOK ? (d?.color || "#9fd0ff") : "rgba(255,255,255,0.10)";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(x + 1, y + 1, box - 2, box - 2);
+      ctx.fillStyle = def?.color || "#a9c3ff";
+      ctx.globalAlpha = 0.22;
+      ctx.fillRect(x + 4, y + 4, box - 8, box - 8);
+      ctx.globalAlpha = 1;
 
-      ctx.fillStyle = d?.color || "#dfe8f5";
-      ctx.font = "bold 18px Arial";
+      ctx.fillStyle = "#eef4ff";
       ctx.textAlign = "center";
-      ctx.fillText((k || "?").toUpperCase(), x + box / 2, y + 22);
+      ctx.textBaseline = "middle";
+      ctx.font = "bold 16px Arial";
+      ctx.fillText((key || "?").toUpperCase(), x + box * 0.5, y + box * 0.5 - 3);
 
       ctx.font = "10px Arial";
-      ctx.fillStyle = "#d7dfeb";
-      ctx.fillText(d?.name || "", x + box / 2, y + 35);
+      ctx.fillStyle = "#9ab2cf";
+      ctx.fillText(`${def?.mana || 0}`, x + box * 0.5, y + box - 8);
 
-      const lv = prog[k]?.level || 1;
-      ctx.fillStyle = "rgba(255,255,255,0.85)";
-      ctx.font = "bold 9px Arial";
-      ctx.fillText(`Lv${lv}`, x + box / 2, y + 44);
+      const manaOK = (hero?.mana || 0) >= (def?.mana || 0);
 
-      if (!ready) {
-        ctx.fillStyle = "rgba(0,0,0,0.52)";
-        ctx.fillRect(x, y, box, box);
+      if (cd > 0) {
+        const frac = clamp(cd / Math.max(0.01, def?.cd || 1), 0, 1);
+        ctx.fillStyle = "rgba(8,10,14,0.64)";
+        ctx.fillRect(x, y, box, box * frac);
+
         ctx.fillStyle = "#ffffff";
-        ctx.font = "bold 13px Arial";
-        ctx.fillText((cds[k] || 0).toFixed(1), x + box / 2, y + 27);
+        ctx.font = "bold 11px Arial";
+        ctx.fillText(cd.toFixed(1), x + box * 0.5, y + box * 0.5 + 9);
       }
 
       if (!manaOK) {
@@ -288,444 +263,540 @@ export default class UI {
     const half = worldSpan * 0.5;
     const pxPerWorld = w / worldSpan;
 
-    const tile = info.mapTile;
-    const startGX = Math.floor((hero.x - half + info.mapHalfSize) / tile);
-    const endGX = Math.floor((hero.x + half + info.mapHalfSize) / tile);
-    const startGY = Math.floor((hero.y - half + info.mapHalfSize) / tile);
-    const endGY = Math.floor((hero.y + half + info.mapHalfSize) / tile);
+    const left = hero.x - half;
+    const top = hero.y - half;
+
+    const revealed = info.revealed;
+    const cols = revealed[0]?.length || 0;
+    const rows = revealed.length || 0;
+    if (!rows || !cols) {
+      ctx.fillStyle = "rgba(255,255,255,0.06)";
+      ctx.fillRect(x, y, w, h);
+      return;
+    }
+
+    const mapHalf = game.world.mapHalfSize || 5200;
+    const worldFull = mapHalf * 2;
+
+    const worldToCellX = (wx) => clamp(Math.floor(((wx + mapHalf) / worldFull) * cols), 0, cols - 1);
+    const worldToCellY = (wy) => clamp(Math.floor(((wy + mapHalf) / worldFull) * rows), 0, rows - 1);
+
+    const cellWorldW = worldFull / cols;
+    const cellWorldH = worldFull / rows;
+
+    const c0 = worldToCellX(left);
+    const c1 = worldToCellX(left + worldSpan);
+    const r0 = worldToCellY(top);
+    const r1 = worldToCellY(top + worldSpan);
 
     ctx.save();
     ctx.beginPath();
     ctx.rect(x, y, w, h);
     ctx.clip();
 
-    ctx.fillStyle = "rgba(20,24,30,0.95)";
-    ctx.fillRect(x, y, w, h);
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        if (!revealed[r]?.[c]) continue;
 
-    for (let gy = startGY; gy <= endGY; gy++) {
-      if (gy < 0 || gy >= info.rows) continue;
-      for (let gx = startGX; gx <= endGX; gx++) {
-        if (gx < 0 || gx >= info.cols) continue;
-        if (!info.revealed?.[gy]?.[gx]) continue;
+        const wx = -mapHalf + c * cellWorldW;
+        const wy = -mapHalf + r * cellWorldH;
+        const sx = x + (wx - left) * pxPerWorld;
+        const sy = y + (wy - top) * pxPerWorld;
+        const sw = Math.ceil(cellWorldW * pxPerWorld) + 1;
+        const sh = Math.ceil(cellWorldH * pxPerWorld) + 1;
 
-        const wx = gx * tile - info.mapHalfSize;
-        const wy = gy * tile - info.mapHalfSize;
-        const color = game.world.getMapColorAtWorld?.(wx + tile * 0.5, wy + tile * 0.5) || "#2f5f3a";
+        const tile =
+          info.tiles?.[r]?.[c] ||
+          info.colors?.[r]?.[c] ||
+          "#4f6b5a";
 
-        const sx = x + ((wx - (hero.x - half)) * pxPerWorld);
-        const sy = y + ((wy - (hero.y - half)) * pxPerWorld);
-        const sw = Math.ceil(tile * pxPerWorld) + 1;
-        const sh = Math.ceil(tile * pxPerWorld) + 1;
-
-        ctx.fillStyle = color;
+        ctx.fillStyle = tile;
         ctx.fillRect(sx, sy, sw, sh);
       }
     }
 
-    this._drawPOIMarkersMini(ctx, info, x, y, w, hero.x, hero.y, half, pxPerWorld);
+    ctx.restore();
     this._drawHeroCrosshair(ctx, x, y, w, x + w * 0.5, y + h * 0.5);
+  }
 
+  _drawHeroCrosshair(ctx, x, y, size, hx, hy) {
+    ctx.save();
+
+    ctx.strokeStyle = "rgba(10,20,34,0.95)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(hx - 7, hy);
+    ctx.lineTo(hx + 7, hy);
+    ctx.moveTo(hx, hy - 7);
+    ctx.lineTo(hx, hy + 7);
+    ctx.stroke();
+
+    ctx.strokeStyle = "#f2f7ff";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(hx - 6, hy);
+    ctx.lineTo(hx + 6, hy);
+    ctx.moveTo(hx, hy - 6);
+    ctx.lineTo(hx, hy + 6);
+    ctx.stroke();
+
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
     ctx.restore();
   }
 
-  _drawHeroCrosshair(ctx, x, y, size, px, py) {
-    ctx.strokeStyle = "rgba(255,255,255,0.10)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(x, py + 0.5);
-    ctx.lineTo(x + size, py + 0.5);
-    ctx.moveTo(px + 0.5, y);
-    ctx.lineTo(px + 0.5, y + size);
-    ctx.stroke();
+  _drawHelp(ctx) {
+    const lines = [
+      "WASD move",
+      "Mouse aim",
+      "Q/W/E/R skills",
+      "1/2 potions",
+      "F interact",
+      "B dock/sail",
+      "M map",
+      "I inventory",
+      "K skills",
+      "Esc close",
+    ];
 
-    ctx.fillStyle = "rgba(20,20,20,0.92)";
-    ctx.fillRect((px - 3) | 0, (py - 3) | 0, 6, 6);
-    ctx.fillStyle = "rgba(255,255,255,1)";
-    ctx.fillRect((px - 1) | 0, (py - 1) | 0, 2, 2);
+    const x = 16;
+    const y = this.h - 152;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(8,10,14,0.56)";
+    ctx.fillRect(x - 8, y - 16, 132, 148);
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.strokeRect(x - 7.5, y - 15.5, 131, 147);
+
+    ctx.fillStyle = "#dfe7f2";
+    ctx.font = "bold 13px Arial";
+    ctx.fillText("Controls", x, y);
+
+    ctx.font = "12px Arial";
+    ctx.fillStyle = "#9fb1c7";
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], x, y + 20 + i * 12);
+    }
+    ctx.restore();
   }
 
-  _drawPOIMarkersMini(ctx, info, clipX, clipY, inner, heroX, heroY, half, pxPerWorld) {
-    const drawOne = (wx, wy, fill, r = 3) => {
-      const sx = clipX + ((wx - (heroX - half)) * pxPerWorld);
-      const sy = clipY + ((wy - (heroY - half)) * pxPerWorld);
-      if (sx < clipX || sx > clipX + inner || sy < clipY || sy > clipY + inner) return;
+  _drawPrompt(ctx, game) {
+    let text = "";
 
-      ctx.fillStyle = fill;
-      ctx.beginPath();
-      ctx.arc(sx, sy, r, 0, Math.PI * 2);
-      ctx.fill();
+    if (game?._cachedNearbyCamp) text = "F: Camp shop";
+    else if (game?._cachedNearbyWaystone) text = "F: Use waystone";
+    else if (game?._cachedNearbyDungeon) text = "F: Enter dungeon";
+    else if (game?._cachedNearbyDock) text = game?.hero?.state?.sailing ? "B: Dock" : "B: Sail";
 
-      ctx.strokeStyle = "rgba(0,0,0,0.55)";
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-    };
+    if (!text) return;
 
-    for (const c of info.camps || []) drawOne(c.x, c.y, "#ffb25c", 3);
-    for (const w of info.waystones || []) drawOne(w.x, w.y, "#8fd4ff", 3);
-    for (const d of info.dungeons || []) drawOne(d.x, d.y, "#c995ff", 3);
-    for (const dock of info.docks || []) drawOne(dock.x, dock.y, "#d9d4c6", 3);
+    ctx.save();
+    ctx.fillStyle = "rgba(8,10,14,0.74)";
+    ctx.fillRect((this.w - 170) / 2, this.h - 112, 170, 30);
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.strokeRect((this.w - 170) / 2 + 0.5, this.h - 111.5, 169, 29);
+
+    ctx.fillStyle = "#edf3fb";
+    ctx.font = "bold 14px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(text, this.w * 0.5, this.h - 92);
+    ctx.restore();
+  }
+
+  _drawToast(ctx, game) {
+    const msg = game?.msg || "";
+    const msgT = game?.msgT || 0;
+    if (!msg || msgT <= 0) return;
+
+    ctx.save();
+    ctx.globalAlpha = clamp(msgT / 0.25, 0, 1);
+
+    const w = Math.min(360, Math.max(170, msg.length * 8 + 30));
+    const x = ((this.w - w) / 2) | 0;
+    const y = 18;
+
+    ctx.fillStyle = "rgba(8,10,14,0.84)";
+    ctx.fillRect(x, y, w, 30);
+    ctx.strokeStyle = "rgba(255,255,255,0.11)";
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, 29);
+
+    ctx.fillStyle = "#eef4fb";
+    ctx.font = "bold 14px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(msg, x + w / 2, y + 20);
+    ctx.restore();
+  }
+
+  _drawZoneText(ctx, game) {
+    const zone = game?.zoneMsg || "";
+    const t = game?.zoneMsgT || 0;
+    if (!zone || t <= 0) return;
+
+    ctx.save();
+    ctx.globalAlpha = clamp(t / 0.25, 0, 1);
+    ctx.fillStyle = "#dbe8f6";
+    ctx.font = "bold 18px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(zone, this.w * 0.5, 72);
+    ctx.restore();
   }
 
   _drawMap(ctx, game) {
-    const info = game?.world?.getMapInfo?.();
-    if (info && info.revealed) {
-      this._drawMapFromMapInfo(ctx, game, info);
-      return;
-    }
-
-    const mini = game?.world?.getMinimapCanvas?.() || this._mini;
-    if (mini) {
-      this._drawMapFromCanvas(ctx, game, mini);
-      return;
-    }
-
-    this._drawSimplePanel(ctx, "Map");
-  }
-
-  _drawMapFromCanvas(ctx, game, mini) {
-    const w = Math.min(980, this.w - 60);
-    const h = Math.min(720, this.h - 60);
-    const x = ((this.w - w) / 2) | 0;
-    const y = ((this.h - h) / 2) | 0;
-    const pad = 18;
-    const mapX = x + pad;
-    const mapY = y + 56;
-    const mapW = w - pad * 2;
-    const mapH = h - 76;
+    const panelW = Math.min(this.w - 60, 820);
+    const panelH = Math.min(this.h - 60, 820);
+    const x = ((this.w - panelW) / 2) | 0;
+    const y = ((this.h - panelH) / 2) | 0;
 
     ctx.save();
-    ctx.fillStyle = "rgba(8,10,14,0.86)";
-    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = "rgba(8,10,14,0.92)";
+    ctx.fillRect(x, y, panelW, panelH);
     ctx.strokeStyle = "rgba(255,255,255,0.12)";
-    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    ctx.strokeRect(x + 0.5, y + 0.5, panelW - 1, panelH - 1);
 
     ctx.fillStyle = "#eef4fb";
-    ctx.font = "bold 22px Arial";
-    ctx.fillText("World Map", x + 18, y + 31);
+    ctx.font = "bold 20px Arial";
+    ctx.textAlign = "left";
+    ctx.fillText("World Map", x + 18, y + 28);
+
+    const mapX = x + 18;
+    const mapY = y + 42;
+    const mapW = panelW - 36;
+    const mapH = panelH - 72;
+
+    const info = game?.world?.getMapInfo?.();
+    if (info?.revealed) {
+      this._drawBigMapFromMapInfo(ctx, game, info, mapX, mapY, mapW, mapH);
+    } else if (this._mini) {
+      this._drawBigMapFromCanvas(ctx, game, this._mini, mapX, mapY, mapW, mapH);
+    } else {
+      ctx.fillStyle = "rgba(255,255,255,0.05)";
+      ctx.fillRect(mapX, mapY, mapW, mapH);
+    }
 
     ctx.fillStyle = "#95a7bd";
     ctx.font = "12px Arial";
-    ctx.fillText("M close • Z zoom", x + 18, y + 48);
-
-    ctx.fillStyle = "rgba(20,24,30,0.95)";
-    ctx.fillRect(mapX, mapY, mapW, mapH);
-
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(mini, mapX, mapY, mapW, mapH);
-    ctx.imageSmoothingEnabled = true;
-
-    const span = (game.world?.mapHalfSize || 5200) * 2;
-    const heroNormX = clamp((game.hero.x + span * 0.5) / span, 0, 1);
-    const heroNormY = clamp((game.hero.y + span * 0.5) / span, 0, 1);
-    const hx = mapX + heroNormX * mapW;
-    const hy = mapY + heroNormY * mapH;
-
-    ctx.fillStyle = "#ffffff";
-    ctx.beginPath();
-    ctx.arc(hx, hy, 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,0.65)";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
+    ctx.fillText("M or Esc to close", x + 18, y + panelH - 12);
     ctx.restore();
   }
 
-  _drawMapFromMapInfo(ctx, game, info) {
-    const hero = game.hero;
+  _drawBigMapFromCanvas(ctx, game, mini, x, y, w, h) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(mini, x, y, w, h);
+    ctx.imageSmoothingEnabled = true;
+    ctx.restore();
 
-    const panelW = Math.min(980, this.w - 60);
-    const panelH = Math.min(720, this.h - 60);
-    const x = ((this.w - panelW) / 2) | 0;
-    const y = ((this.h - panelH) / 2) | 0;
-    const pad = 18;
-    const mapX = x + pad;
-    const mapY = y + 56;
-    const mapW = panelW - pad * 2;
-    const mapH = panelH - 76;
+    const span = (game.world?.mapHalfSize || 5200) * 2;
+    const half = span * 0.5;
+    const hx = x + clamp((game.hero.x + half) / span, 0, 1) * w;
+    const hy = y + clamp((game.hero.y + half) / span, 0, 1) * h;
+
+    this._drawHeroCrosshair(ctx, x, y, w, hx, hy);
+  }
+
+  _drawBigMapFromMapInfo(ctx, game, info, x, y, w, h) {
+    const revealed = info.revealed;
+    const rows = revealed.length || 0;
+    const cols = revealed[0]?.length || 0;
+
+    if (!rows || !cols) {
+      ctx.fillStyle = "rgba(255,255,255,0.05)";
+      ctx.fillRect(x, y, w, h);
+      return;
+    }
+
+    const cw = w / cols;
+    const ch = h / rows;
 
     ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
 
-    ctx.fillStyle = "rgba(8,10,14,0.86)";
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (!revealed[r]?.[c]) continue;
+        ctx.fillStyle =
+          info.tiles?.[r]?.[c] ||
+          info.colors?.[r]?.[c] ||
+          "#526b59";
+        ctx.fillRect(x + c * cw, y + r * ch, Math.ceil(cw) + 1, Math.ceil(ch) + 1);
+      }
+    }
+
+    ctx.restore();
+
+    const mapHalf = game.world?.mapHalfSize || 5200;
+    const span = mapHalf * 2;
+    const hx = x + clamp((game.hero.x + mapHalf) / span, 0, 1) * w;
+    const hy = y + clamp((game.hero.y + mapHalf) / span, 0, 1) * h;
+
+    this._drawHeroCrosshair(ctx, x, y, w, hx, hy);
+  }
+
+  _drawInventoryPanel(ctx, game) {
+    const hero = game.hero;
+    const items = hero.inventory || [];
+    const equip = hero.equip || {};
+
+    const panelW = Math.min(this.w - 90, 860);
+    const panelH = Math.min(this.h - 90, 540);
+    const x = ((this.w - panelW) / 2) | 0;
+    const y = ((this.h - panelH) / 2) | 0;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(8,10,14,0.92)";
     ctx.fillRect(x, y, panelW, panelH);
     ctx.strokeStyle = "rgba(255,255,255,0.12)";
     ctx.strokeRect(x + 0.5, y + 0.5, panelW - 1, panelH - 1);
 
     ctx.fillStyle = "#eef4fb";
     ctx.font = "bold 22px Arial";
-    ctx.fillText("World Map", x + 18, y + 31);
+    ctx.fillText("Inventory", x + 18, y + 30);
 
     ctx.fillStyle = "#95a7bd";
-    ctx.font = "12px Arial";
-    ctx.fillText("M close • Z zoom", x + 18, y + 48);
+    ctx.font = "13px Arial";
+    ctx.fillText("I or Esc to close", x + 18, y + 52);
 
-    const left = -info.mapHalfSize;
-    const top = -info.mapHalfSize;
-    const span = info.mapHalfSize * 2;
-    const pxPerWorldX = mapW / span;
-    const pxPerWorldY = mapH / span;
-    const tile = info.mapTile;
+    const leftX = x + 18;
+    const leftY = y + 74;
+    const leftW = 370;
+    const leftH = panelH - 92;
 
-    ctx.fillStyle = "rgba(20,24,30,0.95)";
-    ctx.fillRect(mapX, mapY, mapW, mapH);
+    ctx.fillStyle = "rgba(255,255,255,0.04)";
+    ctx.fillRect(leftX, leftY, leftW, leftH);
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.strokeRect(leftX + 0.5, leftY + 0.5, leftW - 1, leftH - 1);
 
-    for (let gy = 0; gy < info.rows; gy++) {
-      for (let gx = 0; gx < info.cols; gx++) {
-        if (!info.revealed?.[gy]?.[gx]) continue;
+    ctx.fillStyle = "#dce6f4";
+    ctx.font = "bold 15px Arial";
+    ctx.fillText(`Bag (${items.length})`, leftX + 12, leftY + 22);
 
-        const wx = gx * tile - info.mapHalfSize;
-        const wy = gy * tile - info.mapHalfSize;
-        const color = game.world.getMapColorAtWorld?.(wx + tile * 0.5, wy + tile * 0.5) || "#2f5f3a";
+    const rowH = 28;
+    const visible = Math.max(1, Math.floor((leftH - 40) / rowH));
+    const selected = clamp(game?.invIndex || 0, 0, Math.max(0, items.length - 1));
+    const scroll = clamp(selected - visible + 1, 0, Math.max(0, items.length - visible));
 
-        const sx = mapX + (wx - left) * pxPerWorldX;
-        const sy = mapY + (wy - top) * pxPerWorldY;
-        const sw = Math.ceil(tile * pxPerWorldX) + 1;
-        const sh = Math.ceil(tile * pxPerWorldY) + 1;
+    for (let i = 0; i < visible; i++) {
+      const idx = scroll + i;
+      if (idx >= items.length) break;
 
-        ctx.fillStyle = color;
-        ctx.fillRect(sx, sy, sw, sh);
+      const item = items[idx];
+      const iy = leftY + 32 + i * rowH;
+      const active = idx === selected;
+
+      if (active) {
+        ctx.fillStyle = "rgba(120,160,220,0.22)";
+        ctx.fillRect(leftX + 8, iy - 16, leftW - 16, rowH - 2);
+        ctx.strokeStyle = "rgba(170,210,255,0.32)";
+        ctx.strokeRect(leftX + 8.5, iy - 15.5, leftW - 17, rowH - 3);
       }
+
+      ctx.fillStyle = item?.color || "#d9dee8";
+      ctx.font = "bold 13px Arial";
+      ctx.fillText(item?.name || "Unknown Gear", leftX + 16, iy);
+
+      ctx.fillStyle = "#92a3b8";
+      ctx.font = "12px Arial";
+      ctx.fillText(
+        `${(item?.slot || "gear").toUpperCase()}  Lv.${item?.level || 1}  ${(item?.rarity || "common").toUpperCase()}`,
+        leftX + 190,
+        iy
+      );
     }
 
-    ctx.strokeStyle = "rgba(255,255,255,0.18)";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(mapX + 0.5, mapY + 0.5, mapW - 1, mapH - 1);
+    const rightX = x + 408;
+    const rightY = leftY;
+    const rightW = panelW - (rightX - x) - 18;
+    const rightH = leftH;
 
-    for (const c of info.camps || []) this._drawBigMapMarker(ctx, c.x, c.y, "#ffb25c", mapX, mapY, left, top, pxPerWorldX, pxPerWorldY);
-    for (const w of info.waystones || []) this._drawBigMapMarker(ctx, w.x, w.y, "#8fd4ff", mapX, mapY, left, top, pxPerWorldX, pxPerWorldY);
-    for (const d of info.dungeons || []) this._drawBigMapMarker(ctx, d.x, d.y, "#c995ff", mapX, mapY, left, top, pxPerWorldX, pxPerWorldY);
-    for (const dock of info.docks || []) this._drawBigMapMarker(ctx, dock.x, dock.y, "#d9d4c6", mapX, mapY, left, top, pxPerWorldX, pxPerWorldY);
+    ctx.fillStyle = "rgba(255,255,255,0.04)";
+    ctx.fillRect(rightX, rightY, rightW, rightH);
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.strokeRect(rightX + 0.5, rightY + 0.5, rightW - 1, rightH - 1);
 
-    if (Math.abs(hero.x) <= info.mapHalfSize && Math.abs(hero.y) <= info.mapHalfSize) {
-      const hx = mapX + (hero.x - left) * pxPerWorldX;
-      const hy = mapY + (hero.y - top) * pxPerWorldY;
-      ctx.fillStyle = "#ffffff";
-      ctx.beginPath();
-      ctx.arc(hx, hy, 4, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "rgba(0,0,0,0.65)";
-      ctx.lineWidth = 2;
-      ctx.stroke();
+    ctx.fillStyle = "#dce6f4";
+    ctx.font = "bold 15px Arial";
+    ctx.fillText("Equipped", rightX + 12, rightY + 22);
+
+    const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+    for (let i = 0; i < slots.length; i++) {
+      const slot = slots[i];
+      const item = equip[slot];
+      const iy = rightY + 46 + i * 34;
+
+      ctx.fillStyle = "#9db0c8";
+      ctx.font = "12px Arial";
+      ctx.fillText(slot.toUpperCase(), rightX + 12, iy);
+
+      ctx.fillStyle = item?.color || "#dce6f4";
+      ctx.font = "bold 13px Arial";
+      ctx.fillText(item?.name || "-", rightX + 110, iy);
+    }
+
+    const picked = items[selected];
+    const statX = rightX + 12;
+    let sy = rightY + 272;
+
+    ctx.fillStyle = "#dce6f4";
+    ctx.font = "bold 15px Arial";
+    ctx.fillText("Selected Item", statX, sy);
+    sy += 22;
+
+    if (picked) {
+      ctx.fillStyle = picked.color || "#eef4fb";
+      ctx.font = "bold 14px Arial";
+      ctx.fillText(picked.name || "Unknown Gear", statX, sy);
+      sy += 20;
+
+      ctx.fillStyle = "#9cb0c9";
+      ctx.font = "12px Arial";
+      ctx.fillText(
+        `${(picked.slot || "gear").toUpperCase()}  Lv.${picked.level || 1}  ${(picked.rarity || "common").toUpperCase()}`,
+        statX,
+        sy
+      );
+      sy += 20;
+
+      const stats = picked.stats || {};
+      const lines = [];
+      if (stats.dmg) lines.push(`Damage +${stats.dmg}`);
+      if (stats.armor) lines.push(`Armor +${stats.armor}`);
+      if (stats.hp) lines.push(`Max HP +${stats.hp}`);
+      if (stats.mana) lines.push(`Max Mana +${stats.mana}`);
+      if (stats.crit) lines.push(`Crit +${Math.round(stats.crit * 100)}%`);
+      if (stats.critMult) lines.push(`Crit Power +${Math.round(stats.critMult * 100)}%`);
+      if (stats.move) lines.push(`Move +${Math.round(stats.move * 100)}%`);
+
+      ctx.fillStyle = "#dfe8f5";
+      for (const line of lines) {
+        ctx.fillText(line, statX, sy);
+        sy += 18;
+      }
+
+      sy += 12;
+      ctx.fillStyle = "#95a7bd";
+      ctx.fillText("Enter/E equip", statX, sy);
+      sy += 16;
+      ctx.fillText("X/Delete salvage", statX, sy);
+    } else {
+      ctx.fillStyle = "#8ea1b8";
+      ctx.font = "12px Arial";
+      ctx.fillText("No item selected.", statX, sy);
     }
 
     ctx.restore();
-  }
-
-  _drawBigMapMarker(ctx, wx, wy, fill, mapX, mapY, left, top, pxPerWorldX, pxPerWorldY) {
-    const sx = mapX + (wx - left) * pxPerWorldX;
-    const sy = mapY + (wy - top) * pxPerWorldY;
-    ctx.fillStyle = fill;
-    ctx.beginPath();
-    ctx.arc(sx, sy, 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,0.55)";
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
   }
 
   _drawSkillsPanel(ctx, game) {
-    const defs = game?.skillDefs || {};
-    const prog = game?.skillProg || {};
-    const cd = game?.cooldowns || {};
+    const panelW = Math.min(this.w - 110, 620);
+    const panelH = Math.min(this.h - 120, 400);
+    const x = ((this.w - panelW) / 2) | 0;
+    const y = ((this.h - panelH) / 2) | 0;
 
-    const w = Math.min(760, this.w - 80);
-    const h = Math.min(520, this.h - 80);
-    const x = ((this.w - w) / 2) | 0;
-    const y = ((this.h - h) / 2) | 0;
+    const defs = game.skillDefs || {};
+    const prog = game.skillProg || {};
+
+    ctx.save();
+    ctx.fillStyle = "rgba(8,10,14,0.92)";
+    ctx.fillRect(x, y, panelW, panelH);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.strokeRect(x + 0.5, y + 0.5, panelW - 1, panelH - 1);
+
+    ctx.fillStyle = "#eef4fb";
+    ctx.font = "bold 22px Arial";
+    ctx.fillText("Skills", x + 18, y + 30);
+
+    ctx.fillStyle = "#95a7bd";
+    ctx.font = "13px Arial";
+    ctx.fillText("K or Esc to close", x + 18, y + 52);
 
     const order = ["q", "w", "e", "r"];
-    const descriptions = {
-      q: "Fast ranged cast. Gains damage as it levels.",
-      w: "Area burst around the hero. Gains size and damage.",
-      e: "Dash movement skill. Gains distance and efficiency.",
-      r: "Heavy orb projectile. Gains damage and duration.",
-    };
+    let sy = y + 90;
 
-    ctx.save();
-    ctx.fillStyle = "rgba(8,10,14,0.90)";
-    ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = "rgba(255,255,255,0.12)";
-    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-
-    ctx.fillStyle = "#eef4fb";
-    ctx.font = "bold 24px Arial";
-    ctx.fillText("Skills", x + 20, y + 32);
-
-    ctx.fillStyle = "#95a7bd";
-    ctx.font = "12px Arial";
-    ctx.fillText("K close • Use skills to gain XP", x + 20, y + 50);
-
-    for (let i = 0; i < order.length; i++) {
-      const key = order[i];
-      const def = defs[key] || {};
-      const p = prog[key] || { level: 1, xp: 0 };
-      const rowY = y + 84 + i * 96;
-      const need = 10 + (p.level - 1) * 8;
-      const frac = clamp((p.xp || 0) / need, 0, 1);
+    for (const key of order) {
+      const def = defs[key];
+      const s = prog[key] || { xp: 0, level: 1 };
+      const need = 10 + (s.level - 1) * 8;
+      const frac = clamp((s.xp || 0) / Math.max(1, need), 0, 1);
 
       ctx.fillStyle = "rgba(255,255,255,0.04)";
-      ctx.fillRect(x + 18, rowY - 22, w - 36, 78);
+      ctx.fillRect(x + 18, sy - 18, panelW - 36, 58);
+      ctx.strokeStyle = "rgba(255,255,255,0.08)";
+      ctx.strokeRect(x + 18.5, sy - 17.5, panelW - 37, 57);
 
-      ctx.strokeStyle = def.color || "#9fd0ff";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(x + 22, rowY - 18, 52, 52);
-
-      ctx.fillStyle = def.color || "#e5edf8";
-      ctx.font = "bold 22px Arial";
-      ctx.textAlign = "center";
-      ctx.fillText(key.toUpperCase(), x + 48, rowY + 14);
-
-      ctx.textAlign = "left";
-      ctx.fillStyle = "#eef4fb";
+      ctx.fillStyle = def?.color || "#dbe7ff";
       ctx.font = "bold 16px Arial";
-      ctx.fillText(`${def.name || key.toUpperCase()}  •  Lv ${p.level || 1}`, x + 92, rowY);
+      ctx.fillText(`${(key || "?").toUpperCase()}  ${def?.name || "Skill"}`, x + 30, sy);
 
-      ctx.fillStyle = "#c7d1df";
+      ctx.fillStyle = "#9bb0c8";
       ctx.font = "12px Arial";
-      ctx.fillText(descriptions[key] || "", x + 92, rowY + 18);
+      ctx.fillText(`Mana ${def?.mana || 0}`, x + 190, sy);
+      ctx.fillText(`Cooldown ${(def?.cd || 0).toFixed(1)}s`, x + 270, sy);
+      ctx.fillText(`Level ${s.level || 1}`, x + 400, sy);
 
-      ctx.fillStyle = "#9aa7b8";
-      ctx.fillText(`Cooldown: ${((cd[key] || 0) > 0 ? (cd[key] || 0).toFixed(1) + "s remaining" : "Ready")}`, x + 92, rowY + 36);
+      ctx.fillStyle = "rgba(255,255,255,0.08)";
+      ctx.fillRect(x + 30, sy + 10, panelW - 120, 10);
+      ctx.fillStyle = def?.color || "#b7ceff";
+      ctx.fillRect(x + 30, sy + 10, ((panelW - 120) * frac) | 0, 10);
 
-      ctx.fillStyle = "rgba(0,0,0,0.36)";
-      ctx.fillRect(x + 92, rowY + 46, w - 160, 12);
-      ctx.fillStyle = def.color || "#7fb2ff";
-      ctx.fillRect(x + 92, rowY + 46, (w - 160) * frac, 12);
-      ctx.strokeStyle = "rgba(255,255,255,0.10)";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x + 92.5, rowY + 46.5, w - 161, 11);
+      ctx.fillStyle = "#dce6f4";
+      ctx.fillText(`XP ${s.xp || 0} / ${need}`, x + panelW - 120, sy + 19);
 
-      ctx.fillStyle = "#dbe4f1";
-      ctx.font = "11px Arial";
-      ctx.fillText(`${Math.round(p.xp || 0)} / ${need} XP`, x + w - 120, rowY + 56);
+      sy += 74;
     }
 
     ctx.restore();
   }
 
-  _drawInventoryPanel(ctx, game) {
-    const inv = game?.hero?.inventory || [];
-
-    const w = Math.min(760, this.w - 80);
-    const h = Math.min(520, this.h - 80);
+  _drawShopPanel(ctx, game) {
+    const w = 430;
+    const h = 260;
     const x = ((this.w - w) / 2) | 0;
     const y = ((this.h - h) / 2) | 0;
 
-    ctx.save();
-    ctx.fillStyle = "rgba(8,10,14,0.90)";
-    ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = "rgba(255,255,255,0.12)";
-    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-
-    ctx.fillStyle = "#eef4fb";
-    ctx.font = "bold 24px Arial";
-    ctx.fillText("Inventory", x + 20, y + 32);
-
-    ctx.fillStyle = "#95a7bd";
-    ctx.font = "12px Arial";
-    ctx.fillText("I close", x + 20, y + 50);
-
-    const shown = Math.min(inv.length, 10);
-    for (let i = 0; i < shown; i++) {
-      const item = inv[i];
-      const yy = y + 88 + i * 34;
-
-      ctx.fillStyle = "rgba(255,255,255,0.04)";
-      ctx.fillRect(x + 20, yy - 16, w - 40, 26);
-
-      ctx.fillStyle = "#dfe8f5";
-      ctx.font = "13px Arial";
-      ctx.fillText(item?.name || `Item ${i + 1}`, x + 28, yy + 2);
-    }
-
-    if (shown === 0) {
-      ctx.fillStyle = "#95a7bd";
-      ctx.font = "14px Arial";
-      ctx.fillText("No items yet.", x + 20, y + 94);
-    }
-
-    ctx.restore();
-  }
-
-  _drawHelp(ctx) {
-    ctx.save();
-    ctx.fillStyle = "rgba(10,14,20,0.62)";
-    ctx.fillRect(14, this.h - 42, 290, 28);
-    ctx.strokeStyle = "rgba(255,255,255,0.08)";
-    ctx.strokeRect(14.5, this.h - 41.5, 289, 27);
-
-    ctx.fillStyle = "#cfd7e4";
-    ctx.font = "12px Arial";
-    ctx.fillText("Arrow keys move • Mouse aim • QWER cast • K skills", 24, this.h - 23);
-    ctx.restore();
-  }
-
-  _drawPrompt(ctx, game) {
-    const camp = game?._cachedNearbyCamp;
-    const dock = game?._cachedNearbyDock;
-    const waystone = game?._cachedNearbyWaystone;
-    const dungeon = game?._cachedNearbyDungeon;
-
-    let txt = "";
-    if (camp) txt = "F open camp shop";
-    else if (dock) txt = "B dock / sail";
-    else if (waystone) txt = "F discover waystone";
-    else if (dungeon) txt = "F enter dungeon";
-
-    if (!txt) return;
-
-    const w = Math.max(190, ctx.measureText(txt).width + 24);
-    const x = ((this.w - w) / 2) | 0;
-    const y = this.h - 108;
+    const items = game?.shop?.items || [];
 
     ctx.save();
-    ctx.fillStyle = "rgba(8,10,14,0.74)";
-    ctx.fillRect(x, y, w, 28);
-    ctx.strokeStyle = "rgba(255,255,255,0.10)";
-    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, 27);
-
-    ctx.fillStyle = "#f2f5fb";
-    ctx.font = "13px Arial";
-    ctx.textAlign = "center";
-    ctx.fillText(txt, x + w / 2, y + 18);
-    ctx.restore();
-  }
-
-  _drawToast(ctx, game) {
-    const msg = game?.msg || this._msg;
-    const t = game?.msgT || this._msgT;
-    if (!msg || t <= 0) return;
-
-    ctx.save();
-    ctx.font = "bold 18px Arial";
-    ctx.textAlign = "center";
-    ctx.fillStyle = "rgba(255,255,255,0.96)";
-    ctx.strokeStyle = "rgba(0,0,0,0.52)";
-    ctx.lineWidth = 4;
-    ctx.strokeText(msg, this.w * 0.5, this.h - 86);
-    ctx.fillText(msg, this.w * 0.5, this.h - 86);
-    ctx.restore();
-  }
-
-  _drawSimplePanel(ctx, title, subtitle = "Panel placeholder") {
-    const w = Math.min(800, this.w - 80);
-    const h = Math.min(520, this.h - 80);
-    const x = ((this.w - w) / 2) | 0;
-    const y = ((this.h - h) / 2) | 0;
-
-    ctx.save();
-    ctx.fillStyle = "rgba(8,10,14,0.84)";
+    ctx.fillStyle = "rgba(8,10,14,0.92)";
     ctx.fillRect(x, y, w, h);
     ctx.strokeStyle = "rgba(255,255,255,0.12)";
     ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
 
     ctx.fillStyle = "#eef4fb";
     ctx.font = "bold 22px Arial";
-    ctx.fillText(title, x + 18, y + 32);
+    ctx.fillText("Camp Shop", x + 18, y + 30);
 
     ctx.fillStyle = "#95a7bd";
-    ctx.font = "13px Arial";
-    ctx.fillText(subtitle, x + 18, y + 58);
+    ctx.font = "12px Arial";
+    ctx.fillText("1-4 buy • Esc close", x + 18, y + 48);
+
+    ctx.fillStyle = "#d7dfeb";
+    ctx.font = "bold 13px Arial";
+    ctx.fillText(`Gold: ${game?.hero?.gold || 0}`, x + w - 110, y + 30);
+
+    for (let i = 0; i < 4; i++) {
+      const item = items[i];
+      const yy = y + 70 + i * 42;
+
+      ctx.fillStyle = "rgba(255,255,255,0.04)";
+      ctx.fillRect(x + 16, yy - 16, w - 32, 32);
+
+      ctx.fillStyle = "#dfe8f5";
+      ctx.font = "13px Arial";
+      if (item) {
+        ctx.fillText(`${i + 1}. ${item.name}`, x + 24, yy + 4);
+        ctx.fillStyle = "#ffd98a";
+        ctx.fillText(`${item.price}g`, x + w - 80, yy + 4);
+      } else {
+        ctx.fillStyle = "#7d899a";
+        ctx.fillText(`${i + 1}. Sold out`, x + 24, yy + 4);
+      }
+    }
+
     ctx.restore();
   }
 }

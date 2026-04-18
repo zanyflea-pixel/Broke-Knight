@@ -1,9 +1,10 @@
 // src/entities.js
-// v97.6 STABLE ENTITIES FILE
-// - Hero / Enemy / Projectile / Loot / makeGear exports
-// - enemy patrol + leash around spawn
-// - hero sword points toward aim direction
-// - compatible with current game.js
+// v102.3 FULL ENTITIES RESTORE
+// - fuller hero visuals / equipment visuals
+// - fuller enemy variety + behavior
+// - projectile / loot behavior
+// - makeGear compatible with current game.js
+// - built to match current util.js / world.js / ui.js
 
 import { clamp, norm } from "./util.js";
 
@@ -462,6 +463,7 @@ export class Hero {
       ctx.arc(0, -1, 15, 0, Math.PI * 2);
       ctx.fill();
     }
+
     if (this.equip?.trinket) {
       ctx.fillStyle = "rgba(210,160,255,0.16)";
       ctx.beginPath();
@@ -491,12 +493,6 @@ export class Enemy {
 
     this.elite = !!elite;
     this.boss = !!boss;
-    this.borderThreat = false;
-    this.cornerDragon = false;
-    this.dragonBoss = false;
-    this.cornerTag = "";
-
-    this.variant = "";
 
     this.alive = true;
     this.dead = false;
@@ -514,7 +510,6 @@ export class Enemy {
     this.vx = 0;
     this.vy = 0;
 
-    this.home = null;
     this.leashRadius = 0;
     this.aggroRadius = 0;
     this.forgetRadius = 0;
@@ -527,12 +522,9 @@ export class Enemy {
 
     this.attackCd = 0;
     this.rangedCd = 0;
-    this.variantBurstCd = 0;
 
     this.colorA = "#d95b5b";
     this.colorB = "#8c2f38";
-
-    this.lootScalar = 1;
 
     this._initByKind();
     this._initLeash();
@@ -587,20 +579,6 @@ export class Enemy {
       this.touchDps *= 1.08;
       this.colorA = "#8a7c67";
       this.colorB = "#564d41";
-    } else if (this.kind === "unknown") {
-      this.radius = 12;
-      this.hp *= 1.3;
-      this.moveSpeed *= 1.02;
-      this.touchDps *= 1.22;
-      this.colorA = "#6f7c63";
-      this.colorB = "#3f4537";
-    } else if (this.kind === "dragon") {
-      this.radius = 26;
-      this.hp *= 4.2;
-      this.moveSpeed *= 0.9;
-      this.touchDps *= 2.6;
-      this.colorA = "#d96a39";
-      this.colorB = "#7f2f1c";
     }
 
     if (this.elite) {
@@ -624,14 +602,6 @@ export class Enemy {
   }
 
   _initLeash() {
-    if (this.kind === "dragon") {
-      this.leashRadius = 820;
-      this.aggroRadius = 560;
-      this.forgetRadius = 860;
-      this.returnSpeedMul = 1.0;
-      return;
-    }
-
     if (this.kind === "wolf" || this.kind === "scout" || this.kind === "stalker") {
       this.leashRadius = 210;
       this.aggroRadius = 180;
@@ -642,7 +612,7 @@ export class Enemy {
       this.aggroRadius = 220;
       this.forgetRadius = 300;
       this.returnSpeedMul = 0.85;
-    } else if (this.kind === "brute" || this.kind === "unknown") {
+    } else if (this.kind === "brute") {
       this.leashRadius = 240;
       this.aggroRadius = 200;
       this.forgetRadius = 300;
@@ -671,14 +641,12 @@ export class Enemy {
     let base = 4 + this.level * 2;
     if (this.elite) base *= 2;
     if (this.boss) base *= 3;
-    if (this.dragonBoss) base *= 4;
     return Math.round(base);
   }
 
   lootBonus() {
     let b = this.elite ? 4 : 0;
     if (this.boss) b += 8;
-    if (this.dragonBoss) b += 18;
     return b;
   }
 
@@ -721,21 +689,14 @@ export class Enemy {
     const homeDy = this.spawnY - this.y;
     const homeDir = norm(homeDx, homeDy);
 
-    let speed = this.moveSpeed;
-    if (this.variant === "berserker" && d < 120) speed *= 1.16;
-    if (this.variant === "tank") speed *= 0.96;
-    if (this.variant === "skirmisher" && d < 85) speed *= 1.26;
-
     const inAggro = d <= this.aggroRadius;
     if (inAggro) this.alertT = Math.max(this.alertT, 1.4);
 
-    const shouldReturnHome =
-      !this.dragonBoss &&
-      (d > this.forgetRadius || homeDist > this.leashRadius);
+    const shouldReturnHome = d > this.forgetRadius || homeDist > this.leashRadius;
 
     if (shouldReturnHome) {
-      this.vx = homeDir.x * speed * this.returnSpeedMul;
-      this.vy = homeDir.y * speed * this.returnSpeedMul;
+      this.vx = homeDir.x * this.moveSpeed * this.returnSpeedMul;
+      this.vy = homeDir.y * this.moveSpeed * this.returnSpeedMul;
 
       const nx = this.x + this.vx * dt;
       const ny = this.y + this.vy * dt;
@@ -745,7 +706,7 @@ export class Enemy {
       return;
     }
 
-    const shouldChase = this.dragonBoss || inAggro || this.alertT > 0.01;
+    const shouldChase = inAggro || this.alertT > 0.01;
 
     if (!shouldChase) {
       if (this.patrolTimer <= 0 || Math.hypot(this.patrolX - this.x, this.patrolY - this.y) < 12) {
@@ -757,16 +718,10 @@ export class Enemy {
       const pdy = this.patrolY - this.y;
       const pdir = norm(pdx, pdy);
 
-      const patrolSpeed = speed * (this.kind === "wolf" ? 0.34 : this.kind === "brute" ? 0.22 : 0.28);
+      const patrolSpeed = this.moveSpeed * (this.kind === "wolf" ? 0.34 : this.kind === "brute" ? 0.22 : 0.28);
 
       this.vx = pdir.x * patrolSpeed;
       this.vy = pdir.y * patrolSpeed;
-
-      if (homeDist > this.leashRadius * 0.72) {
-        const pull = clamp((homeDist - this.leashRadius * 0.72) / Math.max(1, this.leashRadius * 0.35), 0, 1);
-        this.vx = lerp(this.vx, homeDir.x * speed * 0.55, pull * 0.55);
-        this.vy = lerp(this.vy, homeDir.y * speed * 0.55, pull * 0.55);
-      }
 
       const nx = this.x + this.vx * dt;
       const ny = this.y + this.vy * dt;
@@ -775,24 +730,22 @@ export class Enemy {
       return;
     }
 
-    if (this.kind === "caster" || this.variant === "sniper") {
+    if (this.kind === "caster") {
       if (d > 170) {
-        this.vx = dir.x * speed;
-        this.vy = dir.y * speed;
+        this.vx = dir.x * this.moveSpeed;
+        this.vy = dir.y * this.moveSpeed;
       } else if (d < 120) {
-        this.vx = -dir.x * speed * 0.82;
-        this.vy = -dir.y * speed * 0.82;
+        this.vx = -dir.x * this.moveSpeed * 0.82;
+        this.vy = -dir.y * this.moveSpeed * 0.82;
       } else {
-        this.vx = -dir.y * speed * 0.65;
-        this.vy = dir.x * speed * 0.65;
+        this.vx = -dir.y * this.moveSpeed * 0.65;
+        this.vy = dir.x * this.moveSpeed * 0.65;
       }
 
-      if (this.rangedCd <= 0 && d < (this.variant === "sniper" ? 340 : 260) && game?.projectiles) {
+      if (this.rangedCd <= 0 && d < 260 && game?.projectiles) {
         const shotDir = norm(dx, dy);
-        const shotSpeed = this.variant === "sniper" ? 200 : 155;
-        const dmg = this.variant === "sniper"
-          ? Math.max(7, Math.round(this.level * 0.85))
-          : Math.max(5, Math.round(this.level * 0.60));
+        const shotSpeed = 155;
+        const dmg = Math.max(5, Math.round(this.level * 0.60));
 
         game.projectiles.push(
           new Projectile(
@@ -805,36 +758,17 @@ export class Enemy {
             this.level,
             {
               friendly: false,
-              color: this.variant === "sniper" ? "rgba(210,240,255,0.94)" : "rgba(115,176,255,0.92)",
-              radius: this.variant === "sniper" ? 5 : 4,
-              hitRadius: this.variant === "sniper" ? 12 : 10,
+              color: "rgba(115,176,255,0.92)",
+              radius: 4,
+              hitRadius: 10,
             }
           )
         );
-        this.rangedCd = this.variant === "sniper" ? 2.6 : 2.2;
-      }
-    } else if (this.kind === "dragon") {
-      if (d > 150) {
-        this.vx = dir.x * speed;
-        this.vy = dir.y * speed;
-      } else {
-        this.vx = dir.x * speed * 0.58;
-        this.vy = dir.y * speed * 0.58;
+        this.rangedCd = 2.2;
       }
     } else {
-      if (this.variant === "skirmisher" && d < 70) {
-        this.vx = -dir.x * speed * 0.8 + (-dir.y * 18);
-        this.vy = -dir.y * speed * 0.8 + (dir.x * 18);
-      } else {
-        this.vx = dir.x * speed;
-        this.vy = dir.y * speed;
-      }
-    }
-
-    if (!this.dragonBoss && homeDist > this.leashRadius * 0.72) {
-      const pull = clamp((homeDist - this.leashRadius * 0.72) / Math.max(1, this.leashRadius * 0.4), 0, 1);
-      this.vx = lerp(this.vx, homeDir.x * speed, pull * 0.35);
-      this.vy = lerp(this.vy, homeDir.y * speed, pull * 0.35);
+      this.vx = dir.x * this.moveSpeed;
+      this.vy = dir.y * this.moveSpeed;
     }
 
     const nx = this.x + this.vx * dt;
@@ -842,17 +776,6 @@ export class Enemy {
 
     if (world?.canWalk?.(nx, this.y)) this.x = nx;
     if (world?.canWalk?.(this.x, ny)) this.y = ny;
-
-    if (this.home && this.leashRadius > 0) {
-      const hx2 = this.x - this.home.x;
-      const hy2 = this.y - this.home.y;
-      const hd = Math.hypot(hx2, hy2);
-      if (hd > this.leashRadius) {
-        const back = norm(this.home.x - this.x, this.home.y - this.y);
-        this.x += back.x * 40 * dt;
-        this.y += back.y * 40 * dt;
-      }
-    }
   }
 
   draw(ctx) {
@@ -868,34 +791,16 @@ export class Enemy {
     ctx.ellipse(0, r + 3, r * 1.05, Math.max(4, r * 0.34), 0, 0, Math.PI * 2);
     ctx.fill();
 
-    if (this.kind === "dragon") {
-      this._drawDragon(ctx, t);
-    } else if (this.kind === "wolf") {
-      this._drawWolf(ctx);
-    } else if (this.kind === "brute") {
-      this._drawBrute(ctx);
-    } else if (this.kind === "caster") {
-      this._drawCaster(ctx, t);
-    } else if (this.kind === "scout") {
-      this._drawScout(ctx);
-    } else if (this.kind === "stalker") {
-      this._drawStalker(ctx);
-    } else if (this.kind === "ashling") {
-      this._drawAshling(ctx, t);
-    } else if (this.kind === "unknown") {
-      this._drawUnknown(ctx, t);
-    } else {
-      this._drawBlob(ctx, t);
-    }
-
-    this._drawVariantMarks(ctx, t);
+    if (this.kind === "wolf") this._drawWolf(ctx);
+    else if (this.kind === "brute") this._drawBrute(ctx);
+    else if (this.kind === "caster") this._drawCaster(ctx, t);
+    else if (this.kind === "scout") this._drawScout(ctx);
+    else if (this.kind === "stalker") this._drawStalker(ctx);
+    else if (this.kind === "ashling") this._drawAshling(ctx, t);
+    else this._drawBlob(ctx, t);
 
     if (this.elite || this.boss) {
-      ctx.strokeStyle = this.dragonBoss
-        ? "rgba(255,170,110,0.58)"
-        : this.boss
-          ? "rgba(255,150,150,0.48)"
-          : "rgba(255,226,130,0.42)";
+      ctx.strokeStyle = this.boss ? "rgba(255,150,150,0.48)" : "rgba(255,226,130,0.42)";
       ctx.lineWidth = this.boss ? 3 : 2;
       ctx.beginPath();
       ctx.arc(0, 0, r + 4, 0, Math.PI * 2);
@@ -950,6 +855,7 @@ export class Enemy {
     ctx.lineTo(1, -7);
     ctx.closePath();
     ctx.fill();
+
     ctx.beginPath();
     ctx.moveTo(2, -7);
     ctx.lineTo(8, -15);
@@ -1093,198 +999,6 @@ export class Enemy {
 
     this._drawEyes(ctx, -2, "#ffe7cf");
   }
-
-  _drawUnknown(ctx, t) {
-    ctx.fillStyle = this.colorB;
-    ctx.beginPath();
-    ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = this.colorA;
-    ctx.beginPath();
-    ctx.arc(0, -1, this.radius * 0.84, 0, Math.PI * 2);
-    ctx.fill();
-
-    for (let i = 0; i < 4; i++) {
-      const a = t * 0.8 + i * (Math.PI / 2);
-      ctx.strokeStyle = "rgba(185,210,160,0.18)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(Math.cos(a) * 2, Math.sin(a) * 2, this.radius + 2 + i * 0.8, 0, Math.PI * 1.2);
-      ctx.stroke();
-    }
-
-    ctx.fillStyle = "#b9d2a0";
-    ctx.beginPath();
-    ctx.moveTo(-4, -this.radius - 3);
-    ctx.lineTo(0, -this.radius - 9);
-    ctx.lineTo(4, -this.radius - 3);
-    ctx.closePath();
-    ctx.fill();
-
-    this._drawEyes(ctx, -2, "#e8f2d2");
-  }
-
-  _drawDragon(ctx, t) {
-    const flap = Math.sin(t * 7 + this.seed * 0.01) * 0.28;
-
-    ctx.strokeStyle = "#522013";
-    ctx.lineWidth = 7;
-    ctx.beginPath();
-    ctx.moveTo(-18, 8);
-    ctx.quadraticCurveTo(-34, 14, -42, 6);
-    ctx.stroke();
-
-    ctx.fillStyle = "#5b2014";
-    ctx.beginPath();
-    ctx.moveTo(-10, -2);
-    ctx.lineTo(-32, -24 - flap * 12);
-    ctx.lineTo(-20, 2);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.beginPath();
-    ctx.moveTo(12, -2);
-    ctx.lineTo(34, -24 - flap * 12);
-    ctx.lineTo(20, 2);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.fillStyle = this.colorB;
-    ctx.beginPath();
-    ctx.ellipse(0, 1, 20, 15, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = this.colorA;
-    ctx.beginPath();
-    ctx.ellipse(2, -2, 17, 11, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = "#e2a16d";
-    ctx.beginPath();
-    ctx.ellipse(3, 5, 10, 5, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.strokeStyle = "#7f2f1c";
-    ctx.lineWidth = 8;
-    ctx.beginPath();
-    ctx.moveTo(10, -4);
-    ctx.lineTo(19, -10);
-    ctx.stroke();
-
-    ctx.fillStyle = "#7f2f1c";
-    ctx.beginPath();
-    ctx.ellipse(24, -12, 12, 9, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = "#5e2115";
-    ctx.beginPath();
-    ctx.ellipse(33, -11, 6, 4, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = "#dbc99b";
-    ctx.beginPath();
-    ctx.moveTo(21, -19);
-    ctx.lineTo(17, -28);
-    ctx.lineTo(22, -22);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.beginPath();
-    ctx.moveTo(28, -19);
-    ctx.lineTo(32, -28);
-    ctx.lineTo(29, -22);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.fillStyle = "#8f3922";
-    ctx.beginPath();
-    ctx.moveTo(-7, -4);
-    ctx.lineTo(-24, -20 - flap * 12);
-    ctx.lineTo(-12, 2);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.beginPath();
-    ctx.moveTo(8, -4);
-    ctx.lineTo(26, -20 - flap * 12);
-    ctx.lineTo(14, 2);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.fillStyle = "#5f2417";
-    ctx.fillRect(-10, 9, 5, 10);
-    ctx.fillRect(2, 9, 5, 10);
-
-    ctx.fillStyle = "#ead9b2";
-    ctx.fillRect(-10, 18, 5, 2);
-    ctx.fillRect(2, 18, 5, 2);
-
-    ctx.fillStyle = "#ffd88a";
-    ctx.beginPath();
-    ctx.arc(22, -13, 1.8, 0, Math.PI * 2);
-    ctx.arc(27, -13, 1.6, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.strokeStyle = `rgba(255,150,70,${0.25 + Math.sin(t * 10) * 0.08})`;
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(38, -11);
-    ctx.lineTo(47, -8);
-    ctx.stroke();
-  }
-
-  _drawVariantMarks(ctx, t) {
-    if (this.variant === "berserker") {
-      ctx.strokeStyle = "#ff9e9e";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(-5, -this.radius - 4);
-      ctx.lineTo(0, -this.radius + 2);
-      ctx.lineTo(5, -this.radius - 4);
-      ctx.stroke();
-    } else if (this.variant === "tank") {
-      ctx.strokeStyle = "#d7d7d7";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(-5, -this.radius - 6, 10, 6);
-    } else if (this.variant === "skirmisher") {
-      ctx.strokeStyle = "#9ef5c7";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(0, -this.radius - 3, 4, 0, Math.PI * 2);
-      ctx.stroke();
-    } else if (this.variant === "sniper") {
-      ctx.strokeStyle = "#bfe8ff";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(-5, -this.radius - 3);
-      ctx.lineTo(5, -this.radius - 3);
-      ctx.moveTo(0, -this.radius - 8);
-      ctx.lineTo(0, -this.radius + 2);
-      ctx.stroke();
-    } else if (this.variant === "volatile") {
-      ctx.fillStyle = `rgba(255,120,170,${0.25 + Math.sin(t * 12) * 0.08})`;
-      ctx.beginPath();
-      ctx.arc(0, 0, this.radius + 4, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (this.variant === "frost") {
-      ctx.strokeStyle = "#bfe7ff";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(0, -this.radius - 7);
-      ctx.lineTo(0, -this.radius + 1);
-      ctx.moveTo(-4, -this.radius - 3);
-      ctx.lineTo(4, -this.radius - 3);
-      ctx.stroke();
-    } else if (this.variant === "venom") {
-      ctx.strokeStyle = "#b6f08a";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(-4, -this.radius - 7);
-      ctx.quadraticCurveTo(0, -this.radius - 2, 4, -this.radius - 7);
-      ctx.stroke();
-    }
-  }
 }
 
 export class Projectile {
@@ -1388,9 +1102,9 @@ export class Loot {
     const dy = hero.y - this.y;
     const d = Math.hypot(dx, dy) || 0.001;
 
-    if (d < 86) {
+    if (d < 96) {
       const dir = { x: dx / d, y: dy / d };
-      const speed = 40 + (86 - d) * 3.2;
+      const speed = 44 + (96 - d) * 3.5;
       this.x += dir.x * speed * dt;
       this.y += dir.y * speed * dt;
     }
