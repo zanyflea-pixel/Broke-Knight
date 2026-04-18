@@ -1,13 +1,10 @@
 // src/ui.js
-// v102.1 FULL UI RESTORE
-// - fuller HUD
-// - skill bar with cooldown overlays
-// - minimap + world map panel
-// - inventory panel with selected item details
-// - skills panel
-// - shop panel
-// - prompts + toasts
-// - built to match current game.js / world.js / util.js
+// v103.2 UI PERFORMANCE + FEATURE RESTORE
+// - keeps full HUD / map / inventory / skills / shop
+// - restores quest/options placeholder panels
+// - reduces minimap cost with lightweight caching
+// - keeps prompts / toast / zone text
+// - built for current game.js / world.js / util.js
 
 import { clamp } from "./util.js";
 
@@ -19,18 +16,63 @@ export default class UI {
 
     this._mini = null;
     this._miniT = 0;
+
+    this._open = null;
+    this._msg = "";
+    this._msgT = 0;
+
+    this._miniFrame = document.createElement("canvas");
+    this._miniFrame.width = 172;
+    this._miniFrame.height = 172;
+    this._miniFrameCtx = this._miniFrame.getContext("2d");
+    this._miniFrameDirty = true;
+    this._miniFrameT = 0;
+    this._lastMiniHeroX = 0;
+    this._lastMiniHeroY = 0;
   }
 
   setViewSize(w, h) {
     this.w = w | 0;
     this.h = h | 0;
+    this._miniFrameDirty = true;
+  }
+
+  open(name) {
+    this._open = name || null;
+  }
+
+  closeAll() {
+    this._open = null;
+  }
+
+  setMsg(text, t = 2) {
+    this._msg = String(text || "");
+    this._msgT = Math.max(0, +t || 0);
   }
 
   update(dt, game) {
+    if (this._msgT > 0) {
+      this._msgT = Math.max(0, this._msgT - dt);
+      if (this._msgT <= 0) this._msg = "";
+    }
+
     this._miniT += dt;
-    if (this._miniT >= 0.18) {
+    if (this._miniT >= 0.28) {
       this._miniT = 0;
       this._mini = game?.world?.getMinimapCanvas?.() || null;
+      this._miniFrameDirty = true;
+    }
+
+    this._miniFrameT += dt;
+    const hx = game?.hero?.x || 0;
+    const hy = game?.hero?.y || 0;
+    const heroShift = Math.abs(hx - this._lastMiniHeroX) + Math.abs(hy - this._lastMiniHeroY);
+
+    if (heroShift > 42 || this._miniFrameT >= 0.12) {
+      this._miniFrameT = 0;
+      this._lastMiniHeroX = hx;
+      this._lastMiniHeroY = hy;
+      this._miniFrameDirty = true;
     }
   }
 
@@ -47,13 +89,16 @@ export default class UI {
     this._drawToast(ctx, game);
     this._drawZoneText(ctx, game);
 
-    const open = game?.menu?.open || null;
+    const open = game?.menu?.open || this._open || null;
     if (!open) return;
 
     if (open === "map") this._drawMap(ctx, game);
     else if (open === "inventory") this._drawInventoryPanel(ctx, game);
     else if (open === "skills") this._drawSkillsPanel(ctx, game);
     else if (open === "shop") this._drawShopPanel(ctx, game);
+    else if (open === "quests") this._drawSimplePanel(ctx, "Quests", "Quest tracking is not fully restored yet.");
+    else if (open === "options") this._drawSimplePanel(ctx, "Options", "Settings panel placeholder restored.");
+    else if (open === "god" || open === "menu") this._drawSimplePanel(ctx, "Menu", "More menu features can be added next.");
   }
 
   _syncViewFromCanvas() {
@@ -97,6 +142,7 @@ export default class UI {
 
     ctx.fillStyle = "#dfe7f2";
     ctx.font = "bold 15px Arial";
+    ctx.textAlign = "left";
     ctx.fillText(`Lv ${hero.level || 1}`, x, y + 2);
     ctx.fillText(`Gold ${hero.gold || 0}`, x + 92, y + 2);
 
@@ -204,26 +250,48 @@ export default class UI {
     const x = this.w - size - 16;
     const y = 16;
 
+    if (this._miniFrameDirty) {
+      this._rebuildMiniFrame(game);
+      this._miniFrameDirty = false;
+    }
+
     ctx.save();
     ctx.fillStyle = "rgba(10,14,20,0.72)";
     ctx.fillRect(x, y, size, size);
     ctx.strokeStyle = "rgba(255,255,255,0.12)";
     ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
 
-    const info = world.getMapInfo?.();
-    if (info && info.revealed) {
-      this._drawMinimapFromMapInfo(ctx, game, x + 8, y + 8, size - 16, size - 16);
-    } else if (this._mini) {
-      this._drawMinimapFromCanvas(ctx, game, this._mini, x + 8, y + 8, size - 16);
-    } else {
-      ctx.fillStyle = "rgba(255,255,255,0.06)";
-      ctx.fillRect(x + 8, y + 8, size - 16, size - 16);
-    }
+    ctx.drawImage(this._miniFrame, x + 8, y + 8, size - 16, size - 16);
 
     ctx.fillStyle = "#d8e1ee";
     ctx.font = "bold 12px Arial";
+    ctx.textAlign = "left";
     ctx.fillText("Map", x + 10, y + size - 8);
     ctx.restore();
+  }
+
+  _rebuildMiniFrame(game) {
+    const c = this._miniFrameCtx;
+    if (!c) return;
+
+    const w = this._miniFrame.width;
+    const h = this._miniFrame.height;
+
+    c.clearRect(0, 0, w, h);
+
+    const info = game?.world?.getMapInfo?.();
+    if (info?.revealed) {
+      this._drawMinimapFromMapInfo(c, game, 0, 0, w, h);
+      return;
+    }
+
+    if (this._mini) {
+      this._drawMinimapFromCanvas(c, game, this._mini, 0, 0, w);
+      return;
+    }
+
+    c.fillStyle = "rgba(255,255,255,0.06)";
+    c.fillRect(0, 0, w, h);
   }
 
   _drawMinimapFromCanvas(ctx, game, mini, x, y, size) {
@@ -363,13 +431,14 @@ export default class UI {
     const y = this.h - 152;
 
     ctx.save();
-    ctx.fillStyle = "rgba(8,10,14,0.56)";
+    ctx.fillStyle = "rgba(8,10,14,0.50)";
     ctx.fillRect(x - 8, y - 16, 132, 148);
     ctx.strokeStyle = "rgba(255,255,255,0.08)";
     ctx.strokeRect(x - 7.5, y - 15.5, 131, 147);
 
     ctx.fillStyle = "#dfe7f2";
     ctx.font = "bold 13px Arial";
+    ctx.textAlign = "left";
     ctx.fillText("Controls", x, y);
 
     ctx.font = "12px Arial";
@@ -404,8 +473,8 @@ export default class UI {
   }
 
   _drawToast(ctx, game) {
-    const msg = game?.msg || "";
-    const msgT = game?.msgT || 0;
+    const msg = game?.msg || this._msg || "";
+    const msgT = Math.max(game?.msgT || 0, this._msgT || 0);
     if (!msg || msgT <= 0) return;
 
     ctx.save();
@@ -798,5 +867,56 @@ export default class UI {
     }
 
     ctx.restore();
+  }
+
+  _drawSimplePanel(ctx, title, body = "") {
+    const panelW = Math.min(this.w - 140, 520);
+    const panelH = Math.min(this.h - 160, 260);
+    const x = ((this.w - panelW) / 2) | 0;
+    const y = ((this.h - panelH) / 2) | 0;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(8,10,14,0.92)";
+    ctx.fillRect(x, y, panelW, panelH);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.strokeRect(x + 0.5, y + 0.5, panelW - 1, panelH - 1);
+
+    ctx.fillStyle = "#eef4fb";
+    ctx.font = "bold 22px Arial";
+    ctx.textAlign = "left";
+    ctx.fillText(title, x + 20, y + 34);
+
+    if (body) {
+      ctx.fillStyle = "#a7b8cc";
+      ctx.font = "14px Arial";
+      this._drawWrappedText(ctx, body, x + 20, y + 74, panelW - 40, 20);
+    }
+
+    ctx.fillStyle = "#95a7bd";
+    ctx.font = "12px Arial";
+    ctx.fillText("Esc to close", x + 20, y + panelH - 14);
+
+    ctx.restore();
+  }
+
+  _drawWrappedText(ctx, text, x, y, maxWidth, lineHeight) {
+    const words = String(text || "").split(/\s+/);
+    let line = "";
+    let yy = y;
+
+    for (let i = 0; i < words.length; i++) {
+      const test = line ? line + " " + words[i] : words[i];
+      if (ctx.measureText(test).width > maxWidth && line) {
+        ctx.fillText(line, x, yy);
+        line = words[i];
+        yy += lineHeight;
+      } else {
+        line = test;
+      }
+    }
+
+    if (line) {
+      ctx.fillText(line, x, yy);
+    }
   }
 }

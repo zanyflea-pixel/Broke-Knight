@@ -1,70 +1,29 @@
 // src/main.js
-// v43 MAIN LOOP + RECOVERY + CANVAS SAFETY PASS (FULL FILE)
-// Goals:
-// - keep current boot flow
-// - smoother frame pacing
-// - safer resize / focus handling
-// - recover cleanly after alt-tab / hidden tab
-// - avoid duplicate loops / runaway delta spikes
-// - keep canvas crisp and correctly sized
+// v103 MAIN GLUE RESTORE
+// - matches current fuller game.js API
+// - keeps all existing game features
+// - proper canvas sizing for #overworld
+// - stable boot / tick loop / pause-resume handling
 
 import Game from "./game.js";
 
 const canvas = document.getElementById("overworld");
 if (!canvas) {
-  throw new Error('Missing <canvas id="overworld"> in index.html');
-}
-
-const ctx = canvas.getContext("2d", { alpha: false });
-if (!ctx) {
-  throw new Error("Could not get 2D canvas context");
+  throw new Error("Missing #overworld canvas");
 }
 
 let game = null;
 let rafId = 0;
-let booted = false;
+let lastTime = 0;
 let running = false;
-let lastTime = performance.now();
-let accumulator = 0;
-let resizeQueued = false;
-let resumeTimer = 0;
-let dprCache = 1;
 
-const STEP = 1 / 60;
-const MAX_FRAME = 0.05;
-const MAX_STEPS = 4;
+function fitCanvasToScreen() {
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const cssW = Math.max(960, Math.floor(window.innerWidth));
+  const cssH = Math.max(540, Math.floor(window.innerHeight));
 
-setupCanvasElement();
-boot();
-
-function setupCanvasElement() {
-  if (!canvas.hasAttribute("tabindex")) {
-    canvas.tabIndex = 0;
-  }
-
-  canvas.setAttribute("role", "application");
-  canvas.setAttribute("aria-label", "Broke Knight game canvas");
-
-  canvas.style.outline = "none";
-  canvas.style.userSelect = "none";
-  canvas.style.webkitUserSelect = "none";
-  canvas.style.touchAction = "none";
-  canvas.style.display = "block";
-}
-
-function getDPR() {
-  return Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-}
-
-function getCssSize() {
-  const w = Math.max(320, window.innerWidth | 0);
-  const h = Math.max(240, window.innerHeight | 0);
-  return { w, h };
-}
-
-function applyCanvasSize(cssW, cssH, dpr) {
-  canvas.style.width = `${cssW}px`;
-  canvas.style.height = `${cssH}px`;
+  canvas.style.width = cssW + "px";
+  canvas.style.height = cssH + "px";
 
   const pixelW = Math.max(1, Math.floor(cssW * dpr));
   const pixelH = Math.max(1, Math.floor(cssH * dpr));
@@ -74,189 +33,106 @@ function applyCanvasSize(cssW, cssH, dpr) {
     canvas.height = pixelH;
   }
 
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.imageSmoothingEnabled = true;
+  return {
+    cssW,
+    cssH,
+    dpr,
+    pixelW,
+    pixelH,
+  };
 }
 
-function resizeCanvas() {
-  const { w: cssW, h: cssH } = getCssSize();
-  const dpr = getDPR();
-  dprCache = dpr;
-
-  applyCanvasSize(cssW, cssH, dpr);
-
-  if (game?.resize) {
-    game.resize(cssW, cssH);
-  } else if (game) {
-    game.w = cssW;
-    game.h = cssH;
+function resizeGame() {
+  const view = fitCanvasToScreen();
+  if (game && typeof game.resize === "function") {
+    game.resize(view.pixelW, view.pixelH);
   }
 }
 
-function queueResize() {
-  if (resizeQueued) return;
-  resizeQueued = true;
-
-  requestAnimationFrame(() => {
-    resizeQueued = false;
-    resizeCanvas();
-  });
-}
-
-function focusCanvas() {
-  try {
-    canvas.focus({ preventScroll: true });
-  } catch (_) {
-    try {
-      canvas.focus();
-    } catch (_) {}
-  }
-}
-
-function cancelLoop() {
+function stopLoop() {
+  running = false;
   if (rafId) {
     cancelAnimationFrame(rafId);
     rafId = 0;
   }
-  running = false;
-}
-
-function render() {
-  if (!game) return;
-  game.draw?.();
 }
 
 function tick(now) {
-  if (!running) return;
+  if (!running || !game) return;
 
-  rafId = requestAnimationFrame(tick);
-
-  let frame = (now - lastTime) / 1000;
+  if (!lastTime) lastTime = now;
+  let dt = (now - lastTime) / 1000;
   lastTime = now;
 
-  if (!Number.isFinite(frame) || frame < 0) {
-    frame = STEP;
-  }
+  if (!Number.isFinite(dt) || dt < 0) dt = 0;
+  dt = Math.min(dt, 0.05);
 
-  frame = Math.min(MAX_FRAME, frame);
-  accumulator += frame;
+  game.update(dt);
+  game.draw();
 
-  let steps = 0;
-  while (accumulator >= STEP && steps < MAX_STEPS) {
-    game?.update?.(STEP);
-    accumulator -= STEP;
-    steps++;
-  }
-
-  if (steps >= MAX_STEPS) {
-    accumulator = 0;
-  }
-
-  render();
+  rafId = requestAnimationFrame(tick);
 }
 
 function startLoop() {
-  cancelLoop();
-  lastTime = performance.now();
-  accumulator = 0;
+  if (running) return;
   running = true;
+  lastTime = performance.now();
   rafId = requestAnimationFrame(tick);
 }
 
-function boot() {
-  if (booted) return;
-  booted = true;
-
-  resizeCanvas();
-  game = new Game(canvas);
-  resizeCanvas();
-  focusCanvas();
+function hardResume() {
+  stopLoop();
+  resizeGame();
+  if (game && game.input && typeof game.input.endFrame === "function") {
+    game.input.endFrame();
+  }
   startLoop();
 }
 
-function hardResume() {
-  if (!booted || !game) return;
-
-  resizeCanvas();
-  focusCanvas();
-
-  lastTime = performance.now();
-  accumulator = 0;
-
-  if (!running) {
-    startLoop();
-  }
+function softResumeSoon() {
+  setTimeout(() => {
+    if (!document.hidden) hardResume();
+  }, 60);
 }
 
-function softResumeSoon(delay = 50) {
-  if (resumeTimer) {
-    clearTimeout(resumeTimer);
-    resumeTimer = 0;
+function boot() {
+  resizeGame();
+
+  game = new Game(canvas);
+  if (typeof game.resize === "function") {
+    game.resize(canvas.width, canvas.height);
   }
 
-  resumeTimer = window.setTimeout(() => {
-    resumeTimer = 0;
-    hardResume();
-  }, delay);
+  canvas.focus();
+  startLoop();
 }
 
-window.addEventListener("resize", queueResize);
-window.addEventListener("orientationchange", () => softResumeSoon(80));
-window.addEventListener("focus", () => softResumeSoon(0));
-window.addEventListener("pageshow", () => softResumeSoon(0));
+window.addEventListener("resize", () => {
+  resizeGame();
+});
 
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) {
-    cancelLoop();
-  } else {
-    softResumeSoon(0);
-  }
+window.addEventListener("orientationchange", () => {
+  softResumeSoon();
+});
+
+window.addEventListener("focus", () => {
+  softResumeSoon();
 });
 
 window.addEventListener("blur", () => {
-  cancelLoop();
+  if (game?.input?.endFrame) game.input.endFrame();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    stopLoop();
+  } else {
+    hardResume();
+  }
 });
 
 canvas.addEventListener("mousedown", () => {
-  focusCanvas();
+  canvas.focus();
 });
 
-canvas.addEventListener(
-  "touchstart",
-  () => {
-    focusCanvas();
-  },
-  { passive: true }
-);
-
-window.addEventListener(
-  "keydown",
-  (e) => {
-    const blocked = [
-      "ArrowUp",
-      "ArrowDown",
-      "ArrowLeft",
-      "ArrowRight",
-      " ",
-      "Spacebar"
-    ];
-
-    if (blocked.includes(e.key)) {
-      e.preventDefault();
-    }
-  },
-  { passive: false }
-);
-
-window.addEventListener("devicepixelratiochange", () => {
-  const next = getDPR();
-  if (next !== dprCache) queueResize();
-});
-
-// Fallback DPR check for browsers without a devicepixelratiochange event.
-setInterval(() => {
-  const next = getDPR();
-  if (next !== dprCache) {
-    queueResize();
-  }
-}, 1000);
+boot();

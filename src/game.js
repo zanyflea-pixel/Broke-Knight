@@ -1,11 +1,11 @@
 // src/game.js
-// v102 FULL GAMEPLAY RESTORE
-// - fuller gameplay loop
+// v101 FULLER GAMEPLAY RESTORE
+// - restores fuller gameplay loop on top of current stable build
 // - inventory / equip / salvage
 // - skills / cooldowns / mouse aim
-// - shop / waystone / dock / dungeon interactions
+// - camp shop / waystones / docks / dungeon entry marker
 // - zone messages / autosave / loot pickup / enemy spawning
-// - built to work with current world.js / entities.js / ui.js / util.js / save.js
+// - works with current main.js, ui.js, world.js, entities.js, util.js, save.js
 
 import World from "./world.js";
 import { clamp, dist2, norm, RNG, hash2 } from "./util.js";
@@ -28,7 +28,7 @@ export default class Game {
 
     this.input = new Input(window);
     this.ui = new UI(canvas);
-    this.save = new Save("broke-knight-save-v102");
+    this.save = new Save("broke-knight-save-v101");
 
     this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
     this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
@@ -36,6 +36,7 @@ export default class Game {
     this.enemies = [];
     this.projectiles = [];
     this.loot = [];
+
     this.hitSparks = [];
     this.floatingTexts = [];
 
@@ -53,7 +54,7 @@ export default class Game {
       enemyUpdateRadius: 1040,
       lootUpdateRadius: 760,
       projectileUpdateRadius: 1320,
-      maxEnemies: 46,
+      maxEnemies: 42,
       cleanupTimer: 0,
       cleanupEvery: 0.55,
       touchDamageTick: 0.18,
@@ -66,8 +67,11 @@ export default class Game {
     this.time = 0;
     this._dtClamp = 0.05;
     this._autosaveT = 8;
+
     this._spawnTimer = 0;
     this._campRespawnT = 0;
+    this._dragonCheckT = 0;
+    this._rng = new RNG(hash2(this.seed, 9001));
 
     this.menu = { open: null };
     this.invIndex = 0;
@@ -83,14 +87,12 @@ export default class Game {
     this._zoneSampleT = 0;
     this._lastZoneName = "";
     this._killFlashT = 0;
-    this._nearbyPoiTimer = 0;
 
     this._cachedNearbyCamp = null;
     this._cachedNearbyDock = null;
     this._cachedNearbyWaystone = null;
     this._cachedNearbyDungeon = null;
-
-    this._rng = new RNG(hash2(this.seed, 9001));
+    this._nearbyPoiTimer = 0;
 
     this.mouse = {
       x: this.w * 0.5,
@@ -706,12 +708,6 @@ export default class Game {
             }
             break;
           }
-        }
-      } else {
-        const rr = (p.hitRadius || p.radius || 4) + (this.hero.radius || this.hero.r || 12);
-        if (dist2(p.x, p.y, this.hero.x, this.hero.y) <= rr * rr) {
-          this.hero.takeDamage?.(p.dmg || 1);
-          p.alive = false;
         }
       }
     }
