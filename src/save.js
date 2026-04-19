@@ -1,14 +1,14 @@
 // src/save.js
-// v101.2 SAVE RESTORE
-// - stable save/load
-// - compatibility aliases
-// - sanitizes partial / older saves
-// - prevents bad coords / bad state reloads
+// v104 SAVE RECOVERY FIX
+// - protects against broken saved positions
+// - never reloads unsafe transient states
+// - keeps current game.js compatibility
+// - safer sanitizing for partial / older saves
 
 export default class Save {
   constructor(key = "broke-knight-save") {
     this.key = String(key || "broke-knight-save");
-    this.version = 7;
+    this.version = 8;
   }
 
   load() {
@@ -108,34 +108,36 @@ export default class Save {
     const skillProgSrc = src.skillProg && typeof src.skillProg === "object" ? src.skillProg : {};
 
     const out = {
-      seed: this._num(src.seed, 0),
+      seed: this._num(src.seed, 0, -2147483648, 2147483647),
 
       hero: {
         x: this._finiteCoord(heroSrc.x, 0),
         y: this._finiteCoord(heroSrc.y, 0),
-        vx: this._safeVelocity(heroSrc.vx),
-        vy: this._safeVelocity(heroSrc.vy),
+        vx: 0,
+        vy: 0,
 
-        level: Math.max(1, this._int(heroSrc.level, 1)),
-        xp: Math.max(0, this._int(heroSrc.xp, 0)),
-        nextXp: Math.max(1, this._int(heroSrc.nextXp, 16)),
+        level: this._int(heroSrc.level, 1, 1, 999),
+        xp: this._int(heroSrc.xp, 0, 0, 999999999),
+        nextXp: this._int(heroSrc.nextXp, 16, 1, 999999999),
 
-        maxHp: Math.max(1, this._int(heroSrc.maxHp, 100)),
-        hp: Math.max(1, this._int(heroSrc.hp, 100)),
+        maxHp: this._int(heroSrc.maxHp, 100, 1, 999999),
+        hp: this._int(heroSrc.hp, 100, 1, 999999),
 
-        maxMana: Math.max(0, this._int(heroSrc.maxMana, 60)),
-        mana: Math.max(0, this._int(heroSrc.mana, 60)),
+        maxMana: this._int(heroSrc.maxMana, 60, 0, 999999),
+        mana: this._int(heroSrc.mana, 60, 0, 999999),
 
-        gold: Math.max(0, this._int(heroSrc.gold, 0)),
+        gold: this._int(heroSrc.gold, 0, 0, 999999999),
 
-        inventory: this._array(heroSrc.inventory),
-        equip: this._object(heroSrc.equip),
+        inventory: this._sanitizeInventory(heroSrc.inventory),
+        equip: this._sanitizeEquip(heroSrc.equip),
+
         potions: {
-          hp: Math.max(0, this._int(heroSrc?.potions?.hp, 2)),
-          mana: Math.max(0, this._int(heroSrc?.potions?.mana, 1)),
+          hp: this._int(heroSrc?.potions?.hp, 2, 0, 9999),
+          mana: this._int(heroSrc?.potions?.mana, 1, 0, 9999),
         },
 
         state: {
+          // never restore into sailing/hurt/dash states from disk
           sailing: false,
           dashT: 0,
           hurtT: 0,
@@ -150,18 +152,19 @@ export default class Save {
       progress: {
         discoveredWaystones: this._stringArray(progressSrc.discoveredWaystones),
         discoveredDocks: this._stringArray(progressSrc.discoveredDocks),
-        dungeonBest: Math.max(0, this._int(progressSrc.dungeonBest, 0)),
+        dungeonBest: this._int(progressSrc.dungeonBest, 0, 0, 9999),
         visitedCamps: this._stringArray(progressSrc.visitedCamps),
-        eliteKills: Math.max(0, this._int(progressSrc.eliteKills, 0)),
+        eliteKills: this._int(progressSrc.eliteKills, 0, 0, 999999),
         campRenown: this._object(progressSrc.campRenown),
         campRestBonusClaimed: this._object(progressSrc.campRestBonusClaimed),
       },
 
       dungeon: {
+        // never restore active dungeon state blindly
         active: false,
-        floor: Math.max(0, this._int(dungeonSrc.floor, 0)),
-        currentRoomIndex: Math.max(0, this._int(dungeonSrc.currentRoomIndex, 0)),
-        seed: this._int(dungeonSrc.seed, 0),
+        floor: this._int(dungeonSrc.floor, 0, 0, 9999),
+        currentRoomIndex: this._int(dungeonSrc.currentRoomIndex, 0, 0, 9999),
+        seed: this._int(dungeonSrc.seed, 0, -2147483648, 2147483647),
       },
 
       menu: {
@@ -169,10 +172,10 @@ export default class Save {
       },
 
       cooldowns: {
-        q: Math.max(0, this._num(cooldownsSrc.q, 0)),
-        w: Math.max(0, this._num(cooldownsSrc.w, 0)),
-        e: Math.max(0, this._num(cooldownsSrc.e, 0)),
-        r: Math.max(0, this._num(cooldownsSrc.r, 0)),
+        q: this._num(cooldownsSrc.q, 0, 0, 999),
+        w: this._num(cooldownsSrc.w, 0, 0, 999),
+        e: this._num(cooldownsSrc.e, 0, 0, 999),
+        r: this._num(cooldownsSrc.r, 0, 0, 999),
       },
 
       skillProg: {
@@ -189,11 +192,54 @@ export default class Save {
     return out;
   }
 
+  _sanitizeInventory(v) {
+    if (!Array.isArray(v)) return [];
+    return v
+      .filter((item) => item && typeof item === "object")
+      .map((item) => this._sanitizeGear(item));
+  }
+
+  _sanitizeEquip(v) {
+    const src = this._object(v);
+    const out = {};
+    for (const key of ["weapon", "armor", "helm", "boots", "ring", "trinket"]) {
+      if (src[key] && typeof src[key] === "object") {
+        out[key] = this._sanitizeGear(src[key]);
+      }
+    }
+    return out;
+  }
+
+  _sanitizeGear(item) {
+    const src = item && typeof item === "object" ? item : {};
+    const statsSrc = this._object(src.stats);
+
+    const allowedSlots = new Set(["weapon", "armor", "helm", "boots", "ring", "trinket"]);
+    const allowedRarities = new Set(["common", "uncommon", "rare", "epic"]);
+
+    return {
+      slot: allowedSlots.has(src.slot) ? src.slot : "trinket",
+      level: this._int(src.level, 1, 1, 999),
+      rarity: allowedRarities.has(src.rarity) ? src.rarity : "common",
+      name: String(src.name || "Gear"),
+      color: typeof src.color === "string" ? src.color : "#d9dee8",
+      stats: {
+        dmg: this._int(statsSrc.dmg, 0, 0, 99999),
+        armor: this._int(statsSrc.armor, 0, 0, 99999),
+        hp: this._int(statsSrc.hp, 0, 0, 99999),
+        mana: this._int(statsSrc.mana, 0, 0, 99999),
+        crit: this._num(statsSrc.crit, 0, 0, 1),
+        critMult: this._num(statsSrc.critMult, 0, 0, 100),
+        move: this._num(statsSrc.move, 0, 0, 100),
+      },
+    };
+  }
+
   _skill(src) {
     const s = src && typeof src === "object" ? src : {};
     return {
-      xp: Math.max(0, this._int(s.xp, 0)),
-      level: Math.max(1, this._int(s.level, 1)),
+      xp: this._int(s.xp, 0, 0, 99999999),
+      level: this._int(s.level, 1, 1, 9999),
     };
   }
 
@@ -213,23 +259,21 @@ export default class Save {
     return allowed.has(v ?? null) ? (v ?? null) : null;
   }
 
-  _safeVelocity(v) {
-    const n = this._num(v, 0);
-    return Math.max(-2000, Math.min(2000, n));
+  _vec2(v, fallback = { x: 0, y: 0 }) {
+    const src = v && typeof v === "object" ? v : {};
+    let x = this._num(src.x, fallback.x, -1, 1);
+    let y = this._num(src.y, fallback.y, -1, 1);
+
+    if (Math.abs(x) < 0.0001 && Math.abs(y) < 0.0001) {
+      x = fallback.x;
+      y = fallback.y;
+    }
+
+    return { x, y };
   }
 
   _finiteCoord(v, fallback = 0) {
-    const n = this._num(v, fallback);
-    const limit = 100000;
-    return Math.max(-limit, Math.min(limit, n));
-  }
-
-  _vec2(v, fallback = { x: 0, y: 0 }) {
-    const src = v && typeof v === "object" ? v : {};
-    return {
-      x: this._num(src.x, fallback.x),
-      y: this._num(src.y, fallback.y),
-    };
+    return this._num(v, fallback, -100000, 100000);
   }
 
   _array(v) {
@@ -245,13 +289,20 @@ export default class Save {
     return v && typeof v === "object" && !Array.isArray(v) ? v : {};
   }
 
-  _num(v, fallback = 0) {
+  _num(v, fallback = 0, min = -Infinity, max = Infinity) {
     const n = Number(v);
-    return Number.isFinite(n) ? n : fallback;
+    if (!Number.isFinite(n)) return fallback;
+    if (n < min) return min;
+    if (n > max) return max;
+    return n;
   }
 
-  _int(v, fallback = 0) {
+  _int(v, fallback = 0, min = -Infinity, max = Infinity) {
     const n = Number(v);
-    return Number.isFinite(n) ? Math.round(n) : fallback;
+    if (!Number.isFinite(n)) return fallback;
+    const i = Math.trunc(n);
+    if (i < min) return min;
+    if (i > max) return max;
+    return i;
   }
 }

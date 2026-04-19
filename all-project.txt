@@ -1,0 +1,4326 @@
+===== ./index.html =====
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Broke Knight</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #070b12;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    body {
+      display: block;
+    }
+
+    #game-shell {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 50% 16%, rgba(42, 74, 114, 0.28), rgba(0, 0, 0, 0) 42%),
+        linear-gradient(180deg, #0b1220 0%, #091019 100%);
+    }
+
+    #overworld {
+      display: block;
+      width: 100%;
+      height: 100%;
+      outline: none;
+      cursor: crosshair;
+      image-rendering: auto;
+    }
+
+    #noscript-msg {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      padding: 14px 18px;
+      border-radius: 12px;
+      background: rgba(10, 14, 22, 0.92);
+      color: rgba(240, 244, 252, 0.96);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+      font-size: 14px;
+      line-height: 1.4;
+      z-index: 10;
+    }
+
+    .js-ready #noscript-msg {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="game-shell">
+    <canvas id="overworld" tabindex="0" aria-label="Broke Knight game canvas"></canvas>
+  </div>
+
+  <div id="noscript-msg">Enable JavaScript to run Broke Knight.</div>
+
+  <script>
+    document.documentElement.classList.add("js-ready");
+  </script>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
+===== ./src/entities.js =====
+// src/entities.js
+// v102.3 FULL ENTITIES RESTORE
+// - fuller hero visuals / equipment visuals
+// - fuller enemy variety + behavior
+// - projectile / loot behavior
+// - makeGear compatible with current game.js
+// - built to match current util.js / world.js / ui.js
+
+import { clamp, norm } from "./util.js";
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function rarityColor(rarity) {
+  if (rarity === "epic") return "#c995ff";
+  if (rarity === "rare") return "#88cfff";
+  if (rarity === "uncommon") return "#94e48d";
+  return "#d9dee8";
+}
+
+function makeName(slot, rarity, seed) {
+  const roots = {
+    weapon: ["Blade", "Edge", "Fang", "Brand", "Saber"],
+    armor: ["Mail", "Plate", "Guard", "Harness", "Shell"],
+    helm: ["Helm", "Crown", "Visor", "Cap", "Hood"],
+    boots: ["Greaves", "Boots", "Treads", "Steps", "Soles"],
+    ring: ["Band", "Loop", "Ring", "Seal", "Circle"],
+    trinket: ["Charm", "Idol", "Sigil", "Relic", "Token"],
+  };
+
+  const prefixes = ["Old", "Iron", "Knight", "Hunter", "Ash", "Moon", "River", "Storm", "Gold"];
+  const epics = ["Ancient", "Dragon", "Void", "Sun", "Star", "Royal"];
+
+  const pool = roots[slot] || ["Gear"];
+  const p = rarity === "epic"
+    ? epics[(seed + 13) % epics.length]
+    : prefixes[(seed + 7) % prefixes.length];
+  const r = pool[(seed + 3) % pool.length];
+  return `${p} ${r}`;
+}
+
+function weaponShapeFromRarity(rarity) {
+  if (rarity === "epic") return "greatblade";
+  if (rarity === "rare") return "longsword";
+  if (rarity === "uncommon") return "sword";
+  return "shortsword";
+}
+
+function armorWeightFromItem(item) {
+  const armor = item?.stats?.armor || 0;
+  const hp = item?.stats?.hp || 0;
+  const score = armor * 2 + hp * 0.15;
+  if (score >= 18) return "heavy";
+  if (score >= 9) return "medium";
+  return "light";
+}
+
+export function makeGear(slot, level = 1, rarity = "common", seed = 1) {
+  const scale =
+    rarity === "epic" ? 1.9 :
+    rarity === "rare" ? 1.45 :
+    rarity === "uncommon" ? 1.18 :
+    1.0;
+
+  const lvl = Math.max(1, level | 0);
+  const rollA = ((seed * 17) % 1000) / 1000;
+  const rollB = ((seed * 31) % 1000) / 1000;
+
+  const stats = {};
+
+  if (slot === "weapon") {
+    stats.dmg = Math.max(1, Math.round((4 + lvl * 1.7 + rollA * 4) * scale));
+    if (rollB > 0.55) stats.crit = +(0.01 + rollB * 0.05).toFixed(3);
+    if (rollA > 0.70) stats.critMult = +(0.10 + rollA * 0.25).toFixed(3);
+  } else if (slot === "armor") {
+    stats.armor = Math.max(1, Math.round((2 + lvl * 1.3 + rollA * 3) * scale));
+    if (rollB > 0.45) stats.hp = Math.round((8 + lvl * 2.0) * (0.5 + rollB) * 0.65);
+  } else if (slot === "helm") {
+    stats.hp = Math.max(4, Math.round((6 + lvl * 1.6 + rollA * 6) * scale * 0.8));
+    if (rollB > 0.55) stats.mana = Math.max(3, Math.round((4 + lvl * 1.2) * 0.7));
+  } else if (slot === "boots") {
+    stats.move = +(0.03 + rollA * 0.08 * scale * 0.7).toFixed(3);
+    if (rollB > 0.50) stats.armor = Math.max(1, Math.round((1 + lvl * 0.5) * 0.7));
+  } else if (slot === "ring") {
+    if (rollA > 0.40) stats.crit = +(0.02 + rollA * 0.06 * scale * 0.55).toFixed(3);
+    if (rollB > 0.50) stats.dmg = Math.max(1, Math.round((1 + lvl * 0.7) * 0.7 * scale));
+  } else if (slot === "trinket") {
+    stats.mana = Math.max(4, Math.round((5 + lvl * 1.5 + rollA * 5) * scale * 0.8));
+    if (rollB > 0.55) stats.hp = Math.max(4, Math.round((5 + lvl * 1.4) * 0.8));
+  }
+
+  return {
+    slot,
+    level: lvl,
+    rarity,
+    name: makeName(slot, rarity, seed % 97),
+    stats,
+    color: rarityColor(rarity),
+  };
+}
+
+export class Hero {
+  constructor(x = 0, y = 0) {
+    this.x = x;
+    this.y = y;
+    this.vx = 0;
+    this.vy = 0;
+    this.radius = 12;
+    this.r = this.radius;
+
+    this.level = 1;
+    this.xp = 0;
+    this.nextXp = 16;
+
+    this.maxHp = 100;
+    this.hp = this.maxHp;
+
+    this.maxMana = 60;
+    this.mana = this.maxMana;
+
+    this.gold = 0;
+    this.inventory = [];
+    this.equip = {};
+    this.potions = { hp: 2, mana: 1 };
+
+    this.lastMove = { x: 1, y: 0 };
+    this.aimDir = { x: 1, y: 0 };
+
+    this.state = {
+      sailing: false,
+      dashT: 0,
+      hurtT: 0,
+      slowT: 0,
+      poisonT: 0,
+    };
+  }
+
+  getStats() {
+    const out = {
+      maxHp: 100 + (this.level - 1) * 10,
+      maxMana: 60 + (this.level - 1) * 5,
+      dmg: 8 + (this.level - 1) * 2,
+      armor: 0,
+      crit: 0.05,
+      critMult: 1.6,
+      move: 0,
+    };
+
+    for (const key of Object.keys(this.equip || {})) {
+      const item = this.equip[key];
+      if (!item?.stats) continue;
+      const s = item.stats;
+      if (s.hp) out.maxHp += s.hp;
+      if (s.mana) out.maxMana += s.mana;
+      if (s.dmg) out.dmg += s.dmg;
+      if (s.armor) out.armor += s.armor;
+      if (s.crit) out.crit += s.crit;
+      if (s.critMult) out.critMult += s.critMult;
+      if (s.move) out.move += s.move;
+    }
+
+    return out;
+  }
+
+  getMoveSpeed() {
+    const st = this.getStats();
+    let speed = 150 + st.move * 160;
+    if ((this.state?.dashT || 0) > 0) speed *= 1.45;
+    if (this.state?.sailing) speed *= 1.18;
+    return speed;
+  }
+
+  spendMana(cost) {
+    if (this.mana < cost) return false;
+    this.mana -= cost;
+    return true;
+  }
+
+  takeDamage(amount) {
+    const st = this.getStats();
+    const reduced = Math.max(1, Math.round(amount * (100 / (100 + (st.armor || 0) * 8))));
+    this.hp = Math.max(0, this.hp - reduced);
+    this.state.hurtT = 0.18;
+    return reduced;
+  }
+
+  giveXP(amount) {
+    this.xp += amount;
+    while (this.xp >= this.nextXp) {
+      this.xp -= this.nextXp;
+      this.level += 1;
+      this.nextXp = Math.round(this.nextXp * 1.24 + 8);
+
+      const st = this.getStats();
+      this.maxHp = st.maxHp;
+      this.maxMana = st.maxMana;
+      this.hp = this.maxHp;
+      this.mana = this.maxMana;
+    }
+  }
+
+  update(dt) {
+    this.state.dashT = Math.max(0, (this.state.dashT || 0) - dt);
+    this.state.hurtT = Math.max(0, (this.state.hurtT || 0) - dt);
+
+    const aim = norm(this.aimDir.x || this.lastMove.x || 1, this.aimDir.y || this.lastMove.y || 0);
+    this.aimDir.x = aim.x;
+    this.aimDir.y = aim.y;
+
+    if (Math.abs(this.vx) > 0.1 || Math.abs(this.vy) > 0.1) {
+      const mv = norm(this.vx, this.vy);
+      this.lastMove.x = mv.x;
+      this.lastMove.y = mv.y;
+    }
+
+    const st = this.getStats();
+    this.maxHp = st.maxHp;
+    this.maxMana = st.maxMana;
+    this.hp = Math.min(this.hp, this.maxHp);
+    this.mana = Math.min(this.mana, this.maxMana);
+
+    this.mana = Math.min(this.maxMana, this.mana + dt * 1.4);
+    this.hp = Math.min(this.maxHp, this.hp + dt * 0.18);
+  }
+
+  _drawWeapon(ctx, aim) {
+    const sword = this.equip?.weapon;
+    const rarity = sword?.rarity || "common";
+    const shape = weaponShapeFromRarity(rarity);
+    const bladeColor = sword?.color || "#dce9f5";
+    const a = Math.atan2(aim.y, aim.x);
+
+    ctx.save();
+    ctx.translate(aim.x * 7, aim.y * 1);
+    ctx.rotate(a);
+
+    ctx.fillStyle = "#e2c3b0";
+    ctx.beginPath();
+    ctx.arc(5, 0, 2.3, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = rarity === "epic" ? "#b78cff" : rarity === "rare" ? "#8fc7ff" : "#8b6338";
+    ctx.fillRect(2, -1.5, 8, 3);
+
+    ctx.fillStyle = rarity === "epic" ? "#f2d7ff" : "#d2b070";
+    ctx.fillRect(0, -4, 2, 8);
+
+    if (shape === "greatblade") {
+      ctx.fillStyle = bladeColor;
+      ctx.beginPath();
+      ctx.moveTo(10, -3.2);
+      ctx.lineTo(24, -2.7);
+      ctx.lineTo(34, -1.2);
+      ctx.lineTo(39, 0);
+      ctx.lineTo(34, 1.2);
+      ctx.lineTo(24, 2.7);
+      ctx.lineTo(10, 3.2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.42)";
+      ctx.fillRect(13, -0.6, 19, 1.2);
+    } else if (shape === "longsword") {
+      ctx.fillStyle = bladeColor;
+      ctx.beginPath();
+      ctx.moveTo(10, -2.7);
+      ctx.lineTo(26, -1.9);
+      ctx.lineTo(34, 0);
+      ctx.lineTo(26, 1.9);
+      ctx.lineTo(10, 2.7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.45)";
+      ctx.fillRect(12, -0.55, 17, 1.1);
+    } else if (shape === "sword") {
+      ctx.fillStyle = bladeColor;
+      ctx.beginPath();
+      ctx.moveTo(10, -2.5);
+      ctx.lineTo(25, -1.4);
+      ctx.lineTo(31, 0);
+      ctx.lineTo(25, 1.4);
+      ctx.lineTo(10, 2.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.45)";
+      ctx.fillRect(12, -0.5, 14, 1);
+    } else {
+      ctx.fillStyle = bladeColor;
+      ctx.beginPath();
+      ctx.moveTo(10, -2.2);
+      ctx.lineTo(20, -1.2);
+      ctx.lineTo(24, 0);
+      ctx.lineTo(20, 1.2);
+      ctx.lineTo(10, 2.2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.38)";
+      ctx.fillRect(11, -0.45, 9, 0.9);
+    }
+
+    ctx.restore();
+  }
+
+  draw(ctx) {
+    const t = performance.now() * 0.001;
+    const bob = Math.sin(t * 7.5) * 0.7;
+    const hurtFlash = (this.state.hurtT || 0) > 0 ? 0.5 + Math.sin(t * 28) * 0.5 : 0;
+    const aim = norm(this.aimDir.x || this.lastMove.x || 1, this.aimDir.y || this.lastMove.y || 0);
+
+    const armorItem = this.equip?.armor;
+    const armorWeight = armorWeightFromItem(armorItem);
+    const armorColor = armorItem?.color || "#7f93aa";
+
+    const helmItem = this.equip?.helm;
+    const helmColor = helmItem?.color || "#9fb3ca";
+
+    const bootsItem = this.equip?.boots;
+    const bootsColor = bootsItem?.color || "#5a4030";
+
+    ctx.save();
+    ctx.translate(this.x, this.y + bob);
+
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.beginPath();
+    ctx.ellipse(0, 14, 14, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(128,42,52,0.88)";
+    ctx.beginPath();
+    ctx.moveTo(-6, -2);
+    ctx.lineTo(-11, 10);
+    ctx.lineTo(-3, 12);
+    ctx.lineTo(4, 3);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = bootsColor;
+    ctx.fillRect(-7, 8, 5, 7);
+    ctx.fillRect(2, 8, 5, 7);
+
+    if (bootsItem) {
+      ctx.fillStyle = "rgba(230,236,246,0.55)";
+      ctx.fillRect(-6, 5, 3, 4);
+      ctx.fillRect(3, 5, 3, 4);
+    }
+
+    ctx.fillStyle = "#3f4d6d";
+    ctx.fillRect(-6, 3, 4, 7);
+    ctx.fillRect(2, 3, 4, 7);
+
+    if (!armorItem) {
+      ctx.fillStyle = "#7f93aa";
+      ctx.beginPath();
+      ctx.moveTo(-8, -6);
+      ctx.lineTo(8, -6);
+      ctx.lineTo(7, 7);
+      ctx.lineTo(0, 10);
+      ctx.lineTo(-7, 7);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = "#cfd8e6";
+      ctx.fillRect(-8, -6, 4, 3);
+      ctx.fillRect(4, -6, 4, 3);
+    } else if (armorWeight === "light") {
+      ctx.fillStyle = armorColor;
+      ctx.beginPath();
+      ctx.moveTo(-8, -6);
+      ctx.lineTo(8, -6);
+      ctx.lineTo(6, 7);
+      ctx.lineTo(0, 10);
+      ctx.lineTo(-6, 7);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(240,244,252,0.55)";
+      ctx.fillRect(-7, -5, 14, 2);
+      ctx.fillRect(-2, -5, 4, 13);
+    } else if (armorWeight === "medium") {
+      ctx.fillStyle = armorColor;
+      ctx.beginPath();
+      ctx.moveTo(-9, -7);
+      ctx.lineTo(9, -7);
+      ctx.lineTo(8, 7);
+      ctx.lineTo(0, 11);
+      ctx.lineTo(-8, 7);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(230,236,246,0.60)";
+      ctx.fillRect(-8, -6, 5, 3);
+      ctx.fillRect(3, -6, 5, 3);
+      ctx.fillRect(-1.5, -6, 3, 14);
+      ctx.fillStyle = "rgba(40,50,64,0.28)";
+      ctx.fillRect(-9, -2, 2, 8);
+      ctx.fillRect(7, -2, 2, 8);
+    } else {
+      ctx.fillStyle = armorColor;
+      ctx.fillRect(-9, -7, 18, 15);
+
+      ctx.fillStyle = "rgba(232,238,248,0.65)";
+      ctx.fillRect(-8, -6, 16, 2);
+      ctx.fillRect(-2, -6, 4, 14);
+      ctx.fillRect(-10, -4, 4, 5);
+      ctx.fillRect(6, -4, 4, 5);
+
+      ctx.fillStyle = "rgba(40,50,64,0.30)";
+      ctx.fillRect(-9, 6, 18, 2);
+    }
+
+    if (helmItem) {
+      ctx.fillStyle = helmColor;
+      ctx.beginPath();
+      ctx.arc(0, -12, 7, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "#2f3b4b";
+      ctx.fillRect(-4, -12, 8, 4);
+
+      if (helmItem.rarity === "epic" || helmItem.rarity === "rare") {
+        ctx.fillStyle = helmItem.rarity === "epic" ? "#c995ff" : "#88cfff";
+        ctx.beginPath();
+        ctx.moveTo(0, -20);
+        ctx.lineTo(4, -12);
+        ctx.lineTo(-4, -12);
+        ctx.closePath();
+        ctx.fill();
+      }
+    } else {
+      ctx.fillStyle = hurtFlash > 0.2 ? "#ffd6d6" : "#f2c4a3";
+      ctx.beginPath();
+      ctx.arc(0, -11, 6.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "#6b4a2f";
+      ctx.beginPath();
+      ctx.arc(0, -13, 6.5, Math.PI, 0);
+      ctx.fill();
+    }
+
+    ctx.strokeStyle = "#d8c0ae";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(-8, -1);
+    ctx.lineTo(-12, 4);
+    ctx.moveTo(8, -1);
+    ctx.lineTo(12, 4);
+    ctx.stroke();
+
+    if (armorItem && armorWeight !== "light") {
+      ctx.fillStyle = "rgba(235,241,249,0.55)";
+      ctx.beginPath();
+      ctx.arc(-7, -4, 3, 0, Math.PI * 2);
+      ctx.arc(7, -4, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    this._drawWeapon(ctx, aim);
+
+    if (this.equip?.ring) {
+      ctx.fillStyle = "rgba(170,220,255,0.22)";
+      ctx.beginPath();
+      ctx.arc(0, -1, 15, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    if (this.equip?.trinket) {
+      ctx.fillStyle = "rgba(210,160,255,0.16)";
+      ctx.beginPath();
+      ctx.arc(0, 0, 18, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = this.equip.trinket.color || "#d9dee8";
+      ctx.beginPath();
+      ctx.arc(0, 2, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+}
+
+export class Enemy {
+  constructor(x = 0, y = 0, level = 1, kind = "blob", seed = 1, elite = false, boss = false) {
+    this.x = x;
+    this.y = y;
+    this.spawnX = x;
+    this.spawnY = y;
+
+    this.level = Math.max(1, level | 0);
+    this.kind = kind;
+    this.seed = seed | 0;
+
+    this.elite = !!elite;
+    this.boss = !!boss;
+
+    this.alive = true;
+    this.dead = false;
+
+    this.radius = 11;
+    this.r = this.radius;
+
+    this.moveSpeed = 52 + this.level * 1.4;
+    this.speed = this.moveSpeed;
+    this.touchDps = 4 + this.level * 0.4;
+
+    this.hp = 26 + this.level * 10;
+    this.maxHp = this.hp;
+
+    this.vx = 0;
+    this.vy = 0;
+
+    this.leashRadius = 0;
+    this.aggroRadius = 0;
+    this.forgetRadius = 0;
+    this.returnSpeedMul = 0.85;
+
+    this.patrolX = x;
+    this.patrolY = y;
+    this.patrolTimer = 0.4 + ((seed % 100) / 100) * 1.2;
+    this.alertT = 0;
+
+    this.attackCd = 0;
+    this.rangedCd = 0;
+
+    this.colorA = "#d95b5b";
+    this.colorB = "#8c2f38";
+
+    this._initByKind();
+    this._initLeash();
+  }
+
+  _initByKind() {
+    if (this.kind === "blob") {
+      this.radius = 11;
+      this.hp *= 1.0;
+      this.moveSpeed *= 0.95;
+      this.colorA = "#db5e63";
+      this.colorB = "#96313c";
+    } else if (this.kind === "stalker") {
+      this.radius = 10;
+      this.hp *= 0.92;
+      this.moveSpeed *= 1.18;
+      this.touchDps *= 1.05;
+      this.colorA = "#7c5cd8";
+      this.colorB = "#402b85";
+    } else if (this.kind === "wolf") {
+      this.radius = 11;
+      this.hp *= 0.9;
+      this.moveSpeed *= 1.28;
+      this.touchDps *= 1.08;
+      this.colorA = "#8b8d96";
+      this.colorB = "#4e5058";
+    } else if (this.kind === "scout") {
+      this.radius = 9;
+      this.hp *= 0.88;
+      this.moveSpeed *= 1.24;
+      this.colorA = "#58b96a";
+      this.colorB = "#317245";
+    } else if (this.kind === "caster") {
+      this.radius = 10;
+      this.hp *= 0.95;
+      this.moveSpeed *= 0.96;
+      this.touchDps *= 0.9;
+      this.rangedCd = 1.7;
+      this.colorA = "#63a9ff";
+      this.colorB = "#315e8f";
+    } else if (this.kind === "brute") {
+      this.radius = 14;
+      this.hp *= 1.45;
+      this.moveSpeed *= 0.76;
+      this.touchDps *= 1.35;
+      this.colorA = "#b08d54";
+      this.colorB = "#72552b";
+    } else if (this.kind === "ashling") {
+      this.radius = 11;
+      this.hp *= 1.08;
+      this.moveSpeed *= 1.02;
+      this.touchDps *= 1.08;
+      this.colorA = "#8a7c67";
+      this.colorB = "#564d41";
+    }
+
+    if (this.elite) {
+      this.hp *= 1.28;
+      this.maxHp = this.hp;
+      this.touchDps *= 1.14;
+    }
+
+    if (this.boss) {
+      this.hp *= 1.6;
+      this.maxHp = this.hp;
+      this.touchDps *= 1.28;
+    }
+
+    this.hp = Math.round(this.hp);
+    this.maxHp = this.hp;
+    this.touchDps = Math.max(1, Math.round(this.touchDps));
+    this.moveSpeed = Math.max(18, Math.round(this.moveSpeed));
+    this.speed = this.moveSpeed;
+    this.r = this.radius;
+  }
+
+  _initLeash() {
+    if (this.kind === "wolf" || this.kind === "scout" || this.kind === "stalker") {
+      this.leashRadius = 210;
+      this.aggroRadius = 180;
+      this.forgetRadius = 280;
+      this.returnSpeedMul = 0.95;
+    } else if (this.kind === "caster") {
+      this.leashRadius = 190;
+      this.aggroRadius = 220;
+      this.forgetRadius = 300;
+      this.returnSpeedMul = 0.85;
+    } else if (this.kind === "brute") {
+      this.leashRadius = 240;
+      this.aggroRadius = 200;
+      this.forgetRadius = 300;
+      this.returnSpeedMul = 0.82;
+    } else {
+      this.leashRadius = 200;
+      this.aggroRadius = 190;
+      this.forgetRadius = 290;
+      this.returnSpeedMul = 0.86;
+    }
+
+    if (this.elite) {
+      this.leashRadius += 35;
+      this.aggroRadius += 20;
+      this.forgetRadius += 35;
+    }
+
+    if (this.boss) {
+      this.leashRadius += 70;
+      this.aggroRadius += 50;
+      this.forgetRadius += 70;
+    }
+  }
+
+  xpValue() {
+    let base = 4 + this.level * 2;
+    if (this.elite) base *= 2;
+    if (this.boss) base *= 3;
+    return Math.round(base);
+  }
+
+  lootBonus() {
+    let b = this.elite ? 4 : 0;
+    if (this.boss) b += 8;
+    return b;
+  }
+
+  takeDamage(amount) {
+    this.hp -= amount;
+    if (this.hp <= 0) {
+      this.hp = 0;
+      this.alive = false;
+      this.dead = true;
+    } else {
+      this.alertT = Math.max(this.alertT, 1.8);
+    }
+  }
+
+  _pickNewPatrolPoint() {
+    const r = Math.max(22, this.leashRadius * 0.45);
+    const a = ((this.seed * 0.013) + performance.now() * 0.00012 + Math.random()) % (Math.PI * 2);
+    this.patrolX = this.spawnX + Math.cos(a) * (Math.random() * r);
+    this.patrolY = this.spawnY + Math.sin(a) * (Math.random() * r);
+  }
+
+  update(dt, hero, world, game) {
+    if (!this.alive) return;
+
+    this.attackCd = Math.max(0, this.attackCd - dt);
+    this.rangedCd = Math.max(0, this.rangedCd - dt);
+    this.alertT = Math.max(0, this.alertT - dt);
+    this.patrolTimer -= dt;
+
+    const dx = hero.x - this.x;
+    const dy = hero.y - this.y;
+    const d = Math.hypot(dx, dy) || 0.001;
+    const dir = { x: dx / d, y: dy / d };
+
+    const hx = this.x - this.spawnX;
+    const hy = this.y - this.spawnY;
+    const homeDist = Math.hypot(hx, hy) || 0.001;
+
+    const homeDx = this.spawnX - this.x;
+    const homeDy = this.spawnY - this.y;
+    const homeDir = norm(homeDx, homeDy);
+
+    const inAggro = d <= this.aggroRadius;
+    if (inAggro) this.alertT = Math.max(this.alertT, 1.4);
+
+    const shouldReturnHome = d > this.forgetRadius || homeDist > this.leashRadius;
+
+    if (shouldReturnHome) {
+      this.vx = homeDir.x * this.moveSpeed * this.returnSpeedMul;
+      this.vy = homeDir.y * this.moveSpeed * this.returnSpeedMul;
+
+      const nx = this.x + this.vx * dt;
+      const ny = this.y + this.vy * dt;
+
+      if (world?.canWalk?.(nx, this.y)) this.x = nx;
+      if (world?.canWalk?.(this.x, ny)) this.y = ny;
+      return;
+    }
+
+    const shouldChase = inAggro || this.alertT > 0.01;
+
+    if (!shouldChase) {
+      if (this.patrolTimer <= 0 || Math.hypot(this.patrolX - this.x, this.patrolY - this.y) < 12) {
+        this.patrolTimer = 1.5 + Math.random() * 2.8;
+        this._pickNewPatrolPoint();
+      }
+
+      const pdx = this.patrolX - this.x;
+      const pdy = this.patrolY - this.y;
+      const pdir = norm(pdx, pdy);
+
+      const patrolSpeed = this.moveSpeed * (this.kind === "wolf" ? 0.34 : this.kind === "brute" ? 0.22 : 0.28);
+
+      this.vx = pdir.x * patrolSpeed;
+      this.vy = pdir.y * patrolSpeed;
+
+      const nx = this.x + this.vx * dt;
+      const ny = this.y + this.vy * dt;
+      if (world?.canWalk?.(nx, this.y)) this.x = nx;
+      if (world?.canWalk?.(this.x, ny)) this.y = ny;
+      return;
+    }
+
+    if (this.kind === "caster") {
+      if (d > 170) {
+        this.vx = dir.x * this.moveSpeed;
+        this.vy = dir.y * this.moveSpeed;
+      } else if (d < 120) {
+        this.vx = -dir.x * this.moveSpeed * 0.82;
+        this.vy = -dir.y * this.moveSpeed * 0.82;
+      } else {
+        this.vx = -dir.y * this.moveSpeed * 0.65;
+        this.vy = dir.x * this.moveSpeed * 0.65;
+      }
+
+      if (this.rangedCd <= 0 && d < 260 && game?.projectiles) {
+        const shotDir = norm(dx, dy);
+        const shotSpeed = 155;
+        const dmg = Math.max(5, Math.round(this.level * 0.60));
+
+        game.projectiles.push(
+          new Projectile(
+            this.x + shotDir.x * (this.radius + 4),
+            this.y + shotDir.y * (this.radius + 4),
+            shotDir.x * shotSpeed,
+            shotDir.y * shotSpeed,
+            dmg,
+            1.7,
+            this.level,
+            {
+              friendly: false,
+              color: "rgba(115,176,255,0.92)",
+              radius: 4,
+              hitRadius: 10,
+            }
+          )
+        );
+        this.rangedCd = 2.2;
+      }
+    } else {
+      this.vx = dir.x * this.moveSpeed;
+      this.vy = dir.y * this.moveSpeed;
+    }
+
+    const nx = this.x + this.vx * dt;
+    const ny = this.y + this.vy * dt;
+
+    if (world?.canWalk?.(nx, this.y)) this.x = nx;
+    if (world?.canWalk?.(this.x, ny)) this.y = ny;
+  }
+
+  draw(ctx) {
+    const t = performance.now() * 0.001;
+    const bob = Math.sin((t + this.seed * 0.001) * (this.kind === "wolf" ? 12 : 8)) * 0.8;
+    const r = this.radius;
+
+    ctx.save();
+    ctx.translate(this.x, this.y + bob);
+
+    ctx.fillStyle = "rgba(0,0,0,0.16)";
+    ctx.beginPath();
+    ctx.ellipse(0, r + 3, r * 1.05, Math.max(4, r * 0.34), 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (this.kind === "wolf") this._drawWolf(ctx);
+    else if (this.kind === "brute") this._drawBrute(ctx);
+    else if (this.kind === "caster") this._drawCaster(ctx, t);
+    else if (this.kind === "scout") this._drawScout(ctx);
+    else if (this.kind === "stalker") this._drawStalker(ctx);
+    else if (this.kind === "ashling") this._drawAshling(ctx, t);
+    else this._drawBlob(ctx, t);
+
+    if (this.elite || this.boss) {
+      ctx.strokeStyle = this.boss ? "rgba(255,150,150,0.48)" : "rgba(255,226,130,0.42)";
+      ctx.lineWidth = this.boss ? 3 : 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, r + 4, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  _drawEyes(ctx, y = -2, glow = "#fff") {
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(-3, y, 1.2, 0, Math.PI * 2);
+    ctx.arc(3, y, 1.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  _drawBlob(ctx, t) {
+    const pulse = 1 + Math.sin(t * 6 + this.seed) * 0.03;
+    ctx.save();
+    ctx.scale(pulse, 1 / pulse);
+
+    ctx.fillStyle = this.colorB;
+    ctx.beginPath();
+    ctx.arc(0, 2, this.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = this.colorA;
+    ctx.beginPath();
+    ctx.arc(0, -1, this.radius * 0.86, 0, Math.PI * 2);
+    ctx.fill();
+
+    this._drawEyes(ctx, -1, "#fff6f6");
+    ctx.restore();
+  }
+
+  _drawWolf(ctx) {
+    ctx.fillStyle = this.colorB;
+    ctx.beginPath();
+    ctx.ellipse(-1, 1, this.radius + 5, this.radius - 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = this.colorA;
+    ctx.beginPath();
+    ctx.ellipse(2, -1, this.radius + 1, this.radius - 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = this.colorB;
+    ctx.beginPath();
+    ctx.moveTo(-6, -7);
+    ctx.lineTo(-2, -16);
+    ctx.lineTo(1, -7);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(2, -7);
+    ctx.lineTo(8, -15);
+    ctx.lineTo(7, -6);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "#f1f3f6";
+    ctx.fillRect(7, -1, 8, 2);
+    this._drawEyes(ctx, -3, "#ffffff");
+
+    ctx.strokeStyle = this.colorB;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(-10, 6);
+    ctx.lineTo(-16, 0);
+    ctx.stroke();
+  }
+
+  _drawBrute(ctx) {
+    ctx.fillStyle = this.colorB;
+    ctx.fillRect(-this.radius - 1, -this.radius + 1, this.radius * 2 + 2, this.radius * 2);
+
+    ctx.fillStyle = this.colorA;
+    ctx.fillRect(-this.radius + 1, -this.radius - 1, this.radius * 2 - 2, this.radius * 2 - 1);
+
+    ctx.fillStyle = "#d8c8a3";
+    ctx.fillRect(-this.radius + 1, -2, 4, 3);
+    ctx.fillRect(this.radius - 5, -2, 4, 3);
+
+    ctx.fillStyle = "#8a6e42";
+    ctx.fillRect(-this.radius - 4, -3, 4, 10);
+    ctx.fillRect(this.radius, -3, 4, 10);
+
+    this._drawEyes(ctx, -5, "#fff8da");
+  }
+
+  _drawCaster(ctx, t) {
+    ctx.fillStyle = this.colorB;
+    ctx.beginPath();
+    ctx.arc(0, -4, this.radius - 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = this.colorA;
+    ctx.beginPath();
+    ctx.moveTo(-this.radius, this.radius - 1);
+    ctx.lineTo(this.radius, this.radius - 1);
+    ctx.lineTo(0, -this.radius + 2);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(160,220,255,0.22)";
+    ctx.beginPath();
+    ctx.arc(0, -1, this.radius + 4 + Math.sin(t * 5) * 1.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "#dff3ff";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(this.radius + 2, -2);
+    ctx.lineTo(this.radius + 2, 10);
+    ctx.stroke();
+
+    ctx.fillStyle = "#bfe8ff";
+    ctx.beginPath();
+    ctx.arc(this.radius + 2, -4, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    this._drawEyes(ctx, -5, "#dff6ff");
+  }
+
+  _drawScout(ctx) {
+    ctx.fillStyle = this.colorB;
+    ctx.beginPath();
+    ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = this.colorA;
+    ctx.beginPath();
+    ctx.arc(0, -2, this.radius * 0.84, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "#d6f2da";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(this.radius + 2, -3);
+    ctx.lineTo(this.radius + 2, 10);
+    ctx.stroke();
+
+    ctx.fillStyle = "#a8e0b0";
+    ctx.beginPath();
+    ctx.moveTo(this.radius + 2, -6);
+    ctx.lineTo(this.radius + 9, -3);
+    ctx.lineTo(this.radius + 2, 0);
+    ctx.closePath();
+    ctx.fill();
+
+    this._drawEyes(ctx, -2, "#ffffff");
+  }
+
+  _drawStalker(ctx) {
+    ctx.fillStyle = this.colorB;
+    ctx.beginPath();
+    ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = this.colorA;
+    ctx.beginPath();
+    ctx.arc(0, -2, this.radius * 0.82, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-6, -7);
+    ctx.lineTo(5, 6);
+    ctx.moveTo(5, -7);
+    ctx.lineTo(-6, 6);
+    ctx.stroke();
+
+    ctx.fillStyle = "#e7dcff";
+    ctx.fillRect(this.radius - 1, -1, 6, 2);
+    this._drawEyes(ctx, -2, "#f2e9ff");
+  }
+
+  _drawAshling(ctx, t) {
+    ctx.fillStyle = this.colorB;
+    ctx.beginPath();
+    ctx.arc(0, 1, this.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = this.colorA;
+    ctx.beginPath();
+    ctx.arc(0, -2, this.radius * 0.86, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = `rgba(255,170,110,${0.18 + Math.sin(t * 7) * 0.05})`;
+    ctx.beginPath();
+    ctx.arc(0, -1, this.radius * 0.55, 0, Math.PI * 2);
+    ctx.fill();
+
+    this._drawEyes(ctx, -2, "#ffe7cf");
+  }
+}
+
+export class Projectile {
+  constructor(x, y, vx, vy, dmg, life, level, opts = {}) {
+    this.x = x;
+    this.y = y;
+    this.vx = vx;
+    this.vy = vy;
+    this.dmg = dmg;
+    this.life = life;
+    this.maxLife = life;
+    this.level = level;
+
+    this.friendly = !!opts.friendly;
+    this.nova = !!opts.nova;
+    this.color = opts.color || "#ffffff";
+    this.radius = opts.radius || 4;
+    this.hitRadius = opts.hitRadius || this.radius + 2;
+    this.ignoreWalls = !!opts.ignoreWalls;
+
+    this.alive = true;
+  }
+
+  update(dt, world) {
+    if (!this.alive) return;
+
+    this.life -= dt;
+    if (this.life <= 0) {
+      this.alive = false;
+      return;
+    }
+
+    if (!this.nova) {
+      const nx = this.x + this.vx * dt;
+      const ny = this.y + this.vy * dt;
+
+      if (!this.ignoreWalls && world?.canWalk && !world.canWalk(nx, ny)) {
+        this.alive = false;
+        return;
+      }
+
+      this.x = nx;
+      this.y = ny;
+    } else {
+      this.hitRadius = lerp(this.hitRadius, this.hitRadius + 40, 0.15);
+      this.radius = Math.max(this.radius, this.hitRadius * 0.18);
+    }
+  }
+
+  draw(ctx) {
+    if (!this.alive) return;
+
+    ctx.save();
+    ctx.translate(this.x, this.y);
+
+    if (this.nova) {
+      const alpha = clamp(this.life / this.maxLife, 0, 1);
+      ctx.strokeStyle = this.color;
+      ctx.globalAlpha = alpha * 0.9;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(0, 0, this.hitRadius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.globalAlpha = alpha * 0.22;
+      ctx.fillStyle = this.color;
+      ctx.beginPath();
+      ctx.arc(0, 0, this.hitRadius * 0.7, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.fillStyle = this.color;
+      ctx.beginPath();
+      ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(255,255,255,0.35)";
+      ctx.beginPath();
+      ctx.arc(-this.radius * 0.25, -this.radius * 0.25, this.radius * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+}
+
+export class Loot {
+  constructor(x, y, kind, data = {}) {
+    this.x = x;
+    this.y = y;
+    this.kind = kind;
+    this.data = data;
+    this.radius = 10;
+    this.alive = true;
+    this.t = 0;
+  }
+
+  update(dt, hero) {
+    this.t += dt;
+
+    const dx = hero.x - this.x;
+    const dy = hero.y - this.y;
+    const d = Math.hypot(dx, dy) || 0.001;
+
+    if (d < 96) {
+      const dir = { x: dx / d, y: dy / d };
+      const speed = 44 + (96 - d) * 3.5;
+      this.x += dir.x * speed * dt;
+      this.y += dir.y * speed * dt;
+    }
+
+    const rr = this.radius + (hero.radius || 12);
+    if (dx * dx + dy * dy <= rr * rr) {
+      this.alive = false;
+    }
+  }
+
+  draw(ctx) {
+    const bob = Math.sin(this.t * 6) * 2;
+
+    ctx.save();
+    ctx.translate(this.x, this.y + bob);
+
+    ctx.fillStyle = "rgba(0,0,0,0.14)";
+    ctx.beginPath();
+    ctx.ellipse(0, 10, 8, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (this.kind === "gold") {
+      ctx.fillStyle = "#efc24a";
+      ctx.beginPath();
+      ctx.arc(0, 0, 6, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "#fff0a8";
+      ctx.beginPath();
+      ctx.arc(-1.5, -1.5, 2, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (this.kind === "potion") {
+      const mana = this.data?.potionType === "mana";
+      ctx.fillStyle = mana ? "#6aa6ff" : "#df5b72";
+      ctx.beginPath();
+      ctx.arc(0, 2, 6, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "#d8cdb6";
+      ctx.fillRect(-2, -6, 4, 5);
+    } else if (this.kind === "gear") {
+      ctx.fillStyle = this.data?.color || "#d9dee8";
+      ctx.beginPath();
+      ctx.arc(0, 0, 6.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(255,255,255,0.5)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, 8.5, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+}
+===== ./src/game.js =====
+// src/game.js
+// v101 FULLER GAMEPLAY RESTORE
+// - restores fuller gameplay loop on top of current stable build
+// - inventory / equip / salvage
+// - skills / cooldowns / mouse aim
+// - camp shop / waystones / docks / dungeon entry marker
+// - zone messages / autosave / loot pickup / enemy spawning
+// - works with current main.js, ui.js, world.js, entities.js, util.js, save.js
+
+import World from "./world.js";
+import { clamp, dist2, norm, RNG, hash2 } from "./util.js";
+import { Hero, Enemy, Projectile, Loot, makeGear } from "./entities.js";
+import Input from "./input.js";
+import UI from "./ui.js";
+import Save from "./save.js";
+
+export default class Game {
+  constructor(canvas) {
+    if (!canvas) throw new Error("Game: canvas is required");
+
+    this.canvas = canvas;
+    this.ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
+
+    this.w = canvas.width | 0;
+    this.h = canvas.height | 0;
+
+    this.seed = (Date.now() & 0x7fffffff) | 0;
+
+    this.input = new Input(window);
+    this.ui = new UI(canvas);
+    this.save = new Save("broke-knight-save-v101");
+
+    this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
+    this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
+
+    this.enemies = [];
+    this.projectiles = [];
+    this.loot = [];
+
+    this.hitSparks = [];
+    this.floatingTexts = [];
+
+    this.camera = {
+      x: this.hero.x,
+      y: this.hero.y,
+      zoom: 1,
+      shakeT: 0,
+      shakeMag: 0,
+      sx: 0,
+      sy: 0,
+    };
+
+    this.perf = {
+      enemyUpdateRadius: 1040,
+      lootUpdateRadius: 760,
+      projectileUpdateRadius: 1320,
+      maxEnemies: 42,
+      cleanupTimer: 0,
+      cleanupEvery: 0.55,
+      touchDamageTick: 0.18,
+      spawnMinDistance: 700,
+      spawnMaxDistance: 1250,
+      worldSpawnSafeRadius: 760,
+      campSafeRadius: 180,
+    };
+
+    this.time = 0;
+    this._dtClamp = 0.05;
+    this._autosaveT = 8;
+
+    this._spawnTimer = 0;
+    this._campRespawnT = 0;
+    this._dragonCheckT = 0;
+    this._rng = new RNG(hash2(this.seed, 9001));
+
+    this.menu = { open: null };
+    this.invIndex = 0;
+
+    this.msg = "";
+    this.msgT = 0;
+    this.zoneMsg = "";
+    this.zoneMsgT = 0;
+
+    this._touchDamageCd = 0;
+    this._dockToggleCd = 0;
+    this._interactCd = 0;
+    this._zoneSampleT = 0;
+    this._lastZoneName = "";
+    this._killFlashT = 0;
+
+    this._cachedNearbyCamp = null;
+    this._cachedNearbyDock = null;
+    this._cachedNearbyWaystone = null;
+    this._cachedNearbyDungeon = null;
+    this._nearbyPoiTimer = 0;
+
+    this.mouse = {
+      x: this.w * 0.5,
+      y: this.h * 0.5,
+      worldX: this.hero.x,
+      worldY: this.hero.y,
+      down: false,
+    };
+
+    this.skillDefs = {
+      q: { key: "q", name: "Spark", mana: 8, cd: 0.22, color: "#8be9ff" },
+      w: { key: "w", name: "Nova", mana: 18, cd: 1.8, color: "#d6f5ff" },
+      e: { key: "e", name: "Dash", mana: 14, cd: 2.8, color: "#ffd36e" },
+      r: { key: "r", name: "Orb", mana: 22, cd: 3.4, color: "#c08cff" },
+    };
+
+    this.cooldowns = { q: 0, w: 0, e: 0, r: 0 };
+
+    this.skillProg = {
+      q: { xp: 0, level: 1 },
+      w: { xp: 0, level: 1 },
+      e: { xp: 0, level: 1 },
+      r: { xp: 0, level: 1 },
+    };
+
+    this.progress = {
+      discoveredWaystones: new Set(),
+      discoveredDocks: new Set(),
+      dungeonBest: 0,
+      visitedCamps: new Set(),
+      eliteKills: 0,
+      campRenown: {},
+      campRestBonusClaimed: {},
+    };
+
+    this.shop = {
+      campId: null,
+      items: [],
+    };
+
+    this.dungeon = {
+      active: false,
+      floor: 0,
+      origin: null,
+    };
+
+    this._bindMouse();
+    this._loadGame();
+
+    if (!this.hero.inventory) this.hero.inventory = [];
+    if (!this.hero.equip) this.hero.equip = {};
+    if (!this.hero.potions) this.hero.potions = { hp: 2, mana: 1 };
+    if (!this.hero.lastMove) this.hero.lastMove = { x: 1, y: 0 };
+    if (!this.hero.aimDir) this.hero.aimDir = { x: 1, y: 0 };
+    if (!this.hero.state) {
+      this.hero.state = {
+        sailing: false,
+        dashT: 0,
+        hurtT: 0,
+        slowT: 0,
+        poisonT: 0,
+      };
+    }
+
+    this._spawnInitialEnemies();
+    this._ensureHeroSafe();
+  }
+
+  resize(w, h) {
+    this.w = w | 0;
+    this.h = h | 0;
+    this.world?.setViewSize?.(this.w, this.h);
+    this.ui?.setViewSize?.(this.w, this.h);
+  }
+
+  update(dt) {
+    dt = Math.min(this._dtClamp, Math.max(0, dt || 0));
+    this.time += dt;
+
+    this._tickMessages(dt);
+    this._tickCooldowns(dt);
+    this._updateMouseWorld();
+    this._updateNearbyPOIs(dt);
+
+    this._handleMenus();
+
+    if (this.menu.open === "inventory") {
+      this._handleInventoryInput();
+    } else if (this.menu.open === "shop") {
+      this._handleShopInput();
+    } else {
+      this._handleMovement(dt);
+      this._handleSkills();
+    }
+
+    this._handleInteractShortcuts(dt);
+
+    this.hero.update?.(dt);
+    this._updateEnemies(dt);
+    this._updateProjectiles(dt);
+    this._updateLoot(dt);
+    this._updateZoneMessage(dt);
+    this._updateCamera(dt);
+    this._spawnWorldEnemies(dt);
+    this._respawnCampEnemies(dt);
+    this._cleanupFarEntities();
+
+    this._autosaveT -= dt;
+    if (this._autosaveT <= 0) {
+      this._autosaveT = 8;
+      this._saveGame();
+    }
+
+    this.input.endFrame();
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, this.w, this.h);
+
+    if (this._killFlashT > 0) {
+      ctx.fillStyle = `rgba(255,255,255,${0.06 * this._killFlashT})`;
+      ctx.fillRect(0, 0, this.w, this.h);
+      this._killFlashT = Math.max(0, this._killFlashT - 0.04);
+    }
+
+    ctx.save();
+    ctx.translate(
+      this.w * 0.5 - this.camera.x + this.camera.sx,
+      this.h * 0.5 - this.camera.y + this.camera.sy
+    );
+
+    this.world.draw(ctx, this.camera, this.hero);
+
+    for (const l of this.loot) {
+      if (l?.alive) l.draw(ctx);
+    }
+
+    for (const p of this.projectiles) {
+      if (p?.alive) p.draw(ctx);
+    }
+
+    for (const e of this.enemies) {
+      if (e?.alive) e.draw(ctx);
+    }
+
+    this.hero.draw(ctx);
+    this._drawFloatingTexts(ctx);
+
+    ctx.restore();
+
+    this.ui.update?.(0, this);
+    this.ui.draw(ctx, this);
+  }
+
+  _bindMouse() {
+    const onMove = (ev) => {
+      const rect = this.canvas.getBoundingClientRect();
+      const sx = (ev.clientX - rect.left) * (this.w / rect.width);
+      const sy = (ev.clientY - rect.top) * (this.h / rect.height);
+      this.mouse.x = sx;
+      this.mouse.y = sy;
+    };
+
+    this.canvas.addEventListener("mousemove", onMove);
+    this.canvas.addEventListener("mousedown", (ev) => {
+      this.mouse.down = true;
+      onMove(ev);
+    });
+    window.addEventListener("mouseup", () => {
+      this.mouse.down = false;
+    });
+  }
+
+  _updateMouseWorld() {
+    this.mouse.worldX = this.mouse.x - this.w * 0.5 + this.camera.x;
+    this.mouse.worldY = this.mouse.y - this.h * 0.5 + this.camera.y;
+
+    const dx = this.mouse.worldX - this.hero.x;
+    const dy = this.mouse.worldY - this.hero.y;
+    const a = norm(dx, dy);
+    this.hero.aimDir.x = a.x;
+    this.hero.aimDir.y = a.y;
+  }
+
+  _tickMessages(dt) {
+    this.msgT = Math.max(0, this.msgT - dt);
+    if (this.msgT <= 0) this.msg = "";
+
+    this.zoneMsgT = Math.max(0, this.zoneMsgT - dt);
+    if (this.zoneMsgT <= 0) this.zoneMsg = "";
+  }
+
+  _tickCooldowns(dt) {
+    for (const k of Object.keys(this.cooldowns)) {
+      this.cooldowns[k] = Math.max(0, this.cooldowns[k] - dt);
+    }
+  }
+
+  _handleMenus() {
+    if (this.input.wasPressed("m")) {
+      this.menu.open = this.menu.open === "map" ? null : "map";
+    }
+
+    if (this.input.wasPressed("i")) {
+      this.menu.open = this.menu.open === "inventory" ? null : "inventory";
+      this.invIndex = clamp(this.invIndex || 0, 0, Math.max(0, (this.hero.inventory?.length || 1) - 1));
+    }
+
+    if (this.input.wasPressed("k")) {
+      this.menu.open = this.menu.open === "skills" ? null : "skills";
+    }
+
+    if (this.input.wasPressed("Escape")) {
+      if (this.menu.open) {
+        this.menu.open = null;
+      } else if (this.dungeon.active) {
+        this._leaveDungeon();
+      }
+    }
+  }
+
+  _handleMovement(dt) {
+    let mx = 0;
+    let my = 0;
+
+    if (this.input.isDown("w") || this.input.isDown("ArrowUp")) my -= 1;
+    if (this.input.isDown("s") || this.input.isDown("ArrowDown")) my += 1;
+    if (this.input.isDown("a") || this.input.isDown("ArrowLeft")) mx -= 1;
+    if (this.input.isDown("d") || this.input.isDown("ArrowRight")) mx += 1;
+
+    const move = norm(mx, my);
+    const speed = this.hero.getMoveSpeed(this);
+
+    this.hero.vx = move.x * speed;
+    this.hero.vy = move.y * speed;
+
+    const nx = this.hero.x + this.hero.vx * dt;
+    const ny = this.hero.y + this.hero.vy * dt;
+
+    if (this.world.canWalk(nx, this.hero.y, this.hero)) this.hero.x = nx;
+    if (this.world.canWalk(this.hero.x, ny, this.hero)) this.hero.y = ny;
+  }
+
+  _handleSkills() {
+    if (this.input.wasPressed("1")) this._usePotion("hp");
+    if (this.input.wasPressed("2")) this._usePotion("mana");
+
+    if (this.input.wasPressed("q")) this._castSpark();
+    if (this.input.wasPressed("w")) this._castNova();
+    if (this.input.wasPressed("e")) this._castDash();
+    if (this.input.wasPressed("r")) this._castOrb();
+
+    if (this.mouse.down) this._castSpark();
+  }
+
+  _handleInteractShortcuts(dt) {
+    this._dockToggleCd = Math.max(0, this._dockToggleCd - dt);
+    this._interactCd = Math.max(0, this._interactCd - dt);
+
+    if (this.input.wasPressed("b") && this._dockToggleCd <= 0 && !this.menu.open) {
+      this._dockToggleCd = 0.18;
+      this._toggleDockingOrSailing();
+    }
+
+    if (this.input.wasPressed("f") && this._interactCd <= 0 && !this.menu.open) {
+      this._interactCd = 0.18;
+      this._interact();
+    }
+  }
+
+  _handleInventoryInput() {
+    const inv = this.hero.inventory || [];
+    if (inv.length <= 0) {
+      this.invIndex = 0;
+      return;
+    }
+
+    if (this.input.wasPressed("ArrowDown") || this.input.wasPressed("s")) {
+      this.invIndex = Math.min(inv.length - 1, (this.invIndex || 0) + 1);
+    }
+
+    if (this.input.wasPressed("ArrowUp") || this.input.wasPressed("w")) {
+      this.invIndex = Math.max(0, (this.invIndex || 0) - 1);
+    }
+
+    const item = inv[this.invIndex];
+
+    if ((this.input.wasPressed("Enter") || this.input.wasPressed("e")) && item) {
+      this._equipInventoryItem(this.invIndex);
+    }
+
+    if ((this.input.wasPressed("x") || this.input.wasPressed("Backspace") || this.input.wasPressed("Delete")) && item) {
+      this._salvageInventoryItem(this.invIndex);
+    }
+  }
+
+  _equipInventoryItem(index) {
+    const inv = this.hero.inventory || [];
+    const item = inv[index];
+    if (!item?.slot) return;
+
+    const prev = this.hero.equip?.[item.slot] || null;
+    this.hero.equip[item.slot] = item;
+    inv.splice(index, 1);
+    if (prev) inv.push(prev);
+
+    this.invIndex = clamp(index, 0, Math.max(0, inv.length - 1));
+    this._msg(`Equipped ${item.name}`, 1.6);
+  }
+
+  _salvageInventoryItem(index) {
+    const inv = this.hero.inventory || [];
+    const item = inv[index];
+    if (!item) return;
+
+    const rarityBonus =
+      item.rarity === "epic" ? 28 :
+      item.rarity === "rare" ? 14 :
+      item.rarity === "uncommon" ? 7 : 0;
+
+    const value = Math.max(4, 6 + (item.level || 1) * 3 + rarityBonus);
+    this.hero.gold += value;
+    inv.splice(index, 1);
+
+    this.invIndex = clamp(index, 0, Math.max(0, inv.length - 1));
+    this._msg(`Salvaged for ${value}g`, 1.4);
+  }
+
+  _handleShopInput() {
+    if (this.input.wasPressed("1")) this._buyShopItem(0);
+    if (this.input.wasPressed("2")) this._buyShopItem(1);
+    if (this.input.wasPressed("3")) this._buyShopItem(2);
+    if (this.input.wasPressed("4")) this._buyShopItem(3);
+  }
+
+  _usePotion(kind) {
+    if (!this.hero?.potions) return false;
+    if ((this.hero.potions[kind] || 0) <= 0) return false;
+
+    if (kind === "hp") {
+      if ((this.hero.hp || 0) >= (this.hero.maxHp || 1)) return false;
+      this.hero.hp = Math.min(this.hero.maxHp, this.hero.hp + 38);
+      this.hero.potions.hp -= 1;
+      this._msg("Health potion", 1.1);
+      return true;
+    }
+
+    if (kind === "mana") {
+      if ((this.hero.mana || 0) >= (this.hero.maxMana || 1)) return false;
+      this.hero.mana = Math.min(this.hero.maxMana, this.hero.mana + 30);
+      this.hero.potions.mana -= 1;
+      this._msg("Mana potion", 1.1);
+      return true;
+    }
+
+    return false;
+  }
+
+  _castSpark() {
+    if (this.cooldowns.q > 0) return;
+    const def = this.skillDefs.q;
+    if (!this.hero.spendMana(def.mana)) return;
+
+    this.cooldowns.q = def.cd;
+
+    const dir = norm(this.hero.aimDir?.x || 1, this.hero.aimDir?.y || 0);
+    const dmg = Math.round((this.hero.getStats?.().dmg || 8) * 0.95);
+
+    this.projectiles.push(
+      new Projectile(
+        this.hero.x + dir.x * 18,
+        this.hero.y + dir.y * 18,
+        dir.x * 270,
+        dir.y * 270,
+        dmg,
+        1.25,
+        this.hero.level,
+        { friendly: true, color: "rgba(148,225,255,0.95)", radius: 4, hitRadius: 15 }
+      )
+    );
+
+    this.skillProg.q.xp += 1;
+    this._checkSkillLevel("q");
+  }
+
+  _castNova() {
+    if (this.cooldowns.w > 0) return;
+    const def = this.skillDefs.w;
+    if (!this.hero.spendMana(def.mana)) return;
+
+    this.cooldowns.w = def.cd;
+
+    const dmg = Math.round((this.hero.getStats?.().dmg || 8) * 1.1);
+
+    this.projectiles.push(
+      new Projectile(
+        this.hero.x,
+        this.hero.y,
+        0,
+        0,
+        dmg,
+        0.45,
+        this.hero.level,
+        {
+          friendly: true,
+          nova: true,
+          color: "rgba(214,245,255,0.92)",
+          radius: 14,
+          hitRadius: 86,
+          ignoreWalls: true,
+        }
+      )
+    );
+
+    this.skillProg.w.xp += 2;
+    this._checkSkillLevel("w");
+  }
+
+  _castDash() {
+    if (this.cooldowns.e > 0) return;
+    const def = this.skillDefs.e;
+    if (!this.hero.spendMana(def.mana)) return;
+
+    this.cooldowns.e = def.cd;
+
+    const dir = norm(
+      this.hero.aimDir?.x || this.hero.lastMove?.x || 1,
+      this.hero.aimDir?.y || this.hero.lastMove?.y || 0
+    );
+
+    const dashDist = 54;
+    const tx = this.hero.x + dir.x * dashDist;
+    const ty = this.hero.y + dir.y * dashDist;
+
+    if (this.world.canWalk(tx, ty, this.hero)) {
+      this.hero.x = tx;
+      this.hero.y = ty;
+    }
+
+    this.hero.state.dashT = 0.20;
+    this.skillProg.e.xp += 2;
+    this._checkSkillLevel("e");
+  }
+
+  _castOrb() {
+    if (this.cooldowns.r > 0) return;
+    const def = this.skillDefs.r;
+    if (!this.hero.spendMana(def.mana)) return;
+
+    this.cooldowns.r = def.cd;
+
+    const dir = norm(this.hero.aimDir?.x || 1, this.hero.aimDir?.y || 0);
+    const dmg = Math.round((this.hero.getStats?.().dmg || 8) * 1.65);
+
+    this.projectiles.push(
+      new Projectile(
+        this.hero.x + dir.x * 22,
+        this.hero.y + dir.y * 22,
+        dir.x * 175,
+        dir.y * 175,
+        dmg,
+        1.7,
+        this.hero.level,
+        { friendly: true, color: "rgba(198,140,255,0.95)", radius: 8, hitRadius: 20 }
+      )
+    );
+
+    this.skillProg.r.xp += 3;
+    this._checkSkillLevel("r");
+  }
+
+  _checkSkillLevel(key) {
+    const s = this.skillProg[key];
+    if (!s) return;
+    const need = 10 + (s.level - 1) * 8;
+    if (s.xp >= need) {
+      s.xp -= need;
+      s.level += 1;
+      this._msg(`${this.skillDefs[key].name} Lv ${s.level}`, 1.2);
+    }
+  }
+
+  _spawnInitialEnemies() {
+    const pool = ["blob", "wolf", "stalker", "scout", "caster", "brute"];
+    for (let i = 0; i < 18; i++) {
+      const ang = (i / 18) * Math.PI * 2;
+      const rr = 700 + (i % 5) * 110;
+      const x = this.hero.x + Math.cos(ang) * rr;
+      const y = this.hero.y + Math.sin(ang) * rr;
+
+      if (!this.world.canWalk(x, y)) continue;
+
+      const kind = pool[i % pool.length];
+      const enemy = new Enemy(x, y, Math.max(1, this.hero.level), kind, hash2(x | 0, y | 0, this.seed), false, false);
+      this.enemies.push(enemy);
+    }
+  }
+
+  _spawnWorldEnemies(dt) {
+    this._spawnTimer -= dt;
+    if (this._spawnTimer > 0) return;
+    this._spawnTimer = 0.35;
+
+    if (this.enemies.length >= this.perf.maxEnemies) return;
+
+    const heroX = this.hero.x;
+    const heroY = this.hero.y;
+
+    let tries = 0;
+    while (tries++ < 8 && this.enemies.length < this.perf.maxEnemies) {
+      const ang = Math.random() * Math.PI * 2;
+      const dist = this.perf.spawnMinDistance + Math.random() * (this.perf.spawnMaxDistance - this.perf.spawnMinDistance);
+      const x = heroX + Math.cos(ang) * dist;
+      const y = heroY + Math.sin(ang) * dist;
+
+      if (!this.world.canWalk?.(x, y)) continue;
+      if (dist2(x, y, this.world.spawn?.x || 0, this.world.spawn?.y || 0) < this.perf.worldSpawnSafeRadius ** 2) continue;
+      if (this._nearPointOfInterest(x, y, this.perf.campSafeRadius)) continue;
+
+      const zone = this.world.getZoneName?.(x, y) || "meadow";
+      const kind = this._pickEnemyKind(zone);
+      const elite = Math.random() < 0.08;
+
+      const e = new Enemy(x, y, Math.max(1, this.hero.level), kind, hash2(x | 0, y | 0, this.seed), elite, false);
+      this.enemies.push(e);
+      break;
+    }
+  }
+
+  _respawnCampEnemies(dt) {
+    this._campRespawnT -= dt;
+    if (this._campRespawnT > 0) return;
+    this._campRespawnT = 12;
+
+    for (const camp of this.world.camps || []) {
+      if (dist2(this.hero.x, this.hero.y, camp.x, camp.y) < 440 * 440) continue;
+
+      const nearCount = this.enemies.filter(
+        (e) => e?.alive && dist2(e.x, e.y, camp.x, camp.y) < 220 * 220
+      ).length;
+
+      if (nearCount >= 2) continue;
+
+      const kinds = ["blob", "scout", "wolf"];
+      const kind = kinds[(Math.random() * kinds.length) | 0];
+      const ang = Math.random() * Math.PI * 2;
+      const rr = 120 + Math.random() * 70;
+      const x = camp.x + Math.cos(ang) * rr;
+      const y = camp.y + Math.sin(ang) * rr;
+
+      if (!this.world.canWalk?.(x, y)) continue;
+
+      this.enemies.push(
+        new Enemy(x, y, Math.max(1, this.hero.level), kind, hash2(x | 0, y | 0, this.seed), false, false)
+      );
+    }
+  }
+
+  _pickEnemyKind(zone) {
+    const z = String(zone || "").toLowerCase();
+    if (z.includes("wild")) return Math.random() < 0.5 ? "wolf" : "stalker";
+    if (z.includes("stone")) return Math.random() < 0.5 ? "brute" : "blob";
+    if (z.includes("ash")) return Math.random() < 0.5 ? "ashling" : "brute";
+    if (z.includes("shore")) return Math.random() < 0.5 ? "scout" : "caster";
+
+    const pool = ["blob", "wolf", "stalker", "scout", "caster", "brute"];
+    return pool[(Math.random() * pool.length) | 0];
+  }
+
+  _updateEnemies(dt) {
+    this._touchDamageCd = Math.max(0, this._touchDamageCd - dt);
+
+    for (const e of this.enemies) {
+      if (!e?.alive) continue;
+      e.update?.(dt, this.hero, this.world, this);
+
+      const rr = (this.hero.radius || this.hero.r || 12) + (e.radius || e.r || 12);
+      if (dist2(this.hero.x, this.hero.y, e.x, e.y) <= rr * rr) {
+        if (this._touchDamageCd <= 0) {
+          this.hero.takeDamage?.(e.touchDps || 1);
+          this._touchDamageCd = this.perf.touchDamageTick;
+        }
+      }
+    }
+
+    this.enemies = this.enemies.filter((e) => e.alive);
+  }
+
+  _updateProjectiles(dt) {
+    for (const p of this.projectiles) {
+      if (!p?.alive) continue;
+
+      p.update?.(dt, this.world);
+      if (!p.alive) continue;
+
+      if (p.friendly) {
+        for (const e of this.enemies) {
+          if (!e?.alive) continue;
+
+          const rr = (p.hitRadius || p.radius || 4) + (e.radius || e.r || 12);
+          if (dist2(p.x, p.y, e.x, e.y) <= rr * rr) {
+            e.takeDamage?.(p.dmg || 1);
+            this._spawnFloatingText(e.x, e.y - 12, `${p.dmg || 1}`, "#ffffff");
+            p.alive = false;
+
+            if (!e.alive) {
+              this.hero.giveXP?.(e.xpValue?.() || 4);
+              this._dropEnemyLoot(e);
+              this._killFlashT = 0.22;
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    this.projectiles = this.projectiles.filter((p) => p.alive);
+  }
+
+  _dropEnemyLoot(e) {
+    const goldAmt = Math.max(2, 3 + Math.round((e.level || 1) * 0.8) + (e.lootBonus?.() || 0));
+    this.loot.push(new Loot(e.x, e.y, "gold", { amount: goldAmt }));
+
+    if (Math.random() < 0.14) {
+      this.loot.push(new Loot(e.x + 8, e.y, "potion", { potionType: Math.random() < 0.35 ? "mana" : "hp" }));
+    }
+
+    if (Math.random() < (e.elite ? 0.26 : 0.10)) {
+      const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+      const slot = slots[(Math.random() * slots.length) | 0];
+      const rarity = e.elite ? (Math.random() < 0.45 ? "rare" : "uncommon") : (Math.random() < 0.18 ? "rare" : "uncommon");
+      const item = makeGear(slot, Math.max(1, e.level || 1), rarity, hash2(e.x | 0, e.y | 0, this.time | 0));
+      this.loot.push(new Loot(e.x - 8, e.y, "gear", item));
+    }
+  }
+
+  _updateLoot(dt) {
+    for (const l of this.loot) {
+      if (!l?.alive) continue;
+
+      const wasAlive = l.alive;
+      l.update?.(dt, this.hero);
+
+      if (wasAlive && !l.alive) {
+        this._pickupLoot(l);
+      }
+    }
+
+    this.loot = this.loot.filter((l) => l.alive);
+  }
+
+  _pickupLoot(l) {
+    if (l.kind === "gold") {
+      this.hero.gold += l.data?.amount || 1;
+      return;
+    }
+
+    if (l.kind === "potion") {
+      const pt = l.data?.potionType === "mana" ? "mana" : "hp";
+      this.hero.potions[pt] = (this.hero.potions[pt] || 0) + 1;
+      return;
+    }
+
+    if (l.kind === "gear" && l.data) {
+      this.hero.inventory.push(l.data);
+      this._msg(`Picked up ${l.data.name}`, 1.0);
+    }
+  }
+
+  _updateCamera(dt) {
+    const follow = Math.min(1, dt * 8);
+    this.camera.x = this.camera.x + (this.hero.x - this.camera.x) * follow;
+    this.camera.y = this.camera.y + (this.hero.y - this.camera.y) * follow;
+  }
+
+  _updateNearbyPOIs(dt) {
+    this._nearbyPoiTimer -= dt;
+    if (this._nearbyPoiTimer > 0) return;
+    this._nearbyPoiTimer = 0.12;
+
+    this._cachedNearbyCamp = null;
+    this._cachedNearbyDock = null;
+    this._cachedNearbyWaystone = null;
+    this._cachedNearbyDungeon = null;
+
+    const check = (arr, r) => {
+      const r2 = r * r;
+      for (const p of arr || []) {
+        if (dist2(this.hero.x, this.hero.y, p.x, p.y) <= r2) return p;
+      }
+      return null;
+    };
+
+    this._cachedNearbyCamp = check(this.world.camps, 84);
+    this._cachedNearbyDock = check(this.world.docks, 64);
+    this._cachedNearbyWaystone = check(this.world.waystones, 70);
+    this._cachedNearbyDungeon = check(this.world.dungeons, 74);
+  }
+
+  _toggleDockingOrSailing() {
+    const dock = this._cachedNearbyDock;
+    if (!dock) return;
+
+    this.hero.state.sailing = !this.hero.state.sailing;
+    this._msg(this.hero.state.sailing ? "Sailing" : "Docked", 0.9);
+  }
+
+  _interact() {
+    if (this._cachedNearbyCamp) {
+      this._openShop(this._cachedNearbyCamp);
+      return;
+    }
+
+    if (this._cachedNearbyWaystone) {
+      this._discoverWaystone(this._cachedNearbyWaystone);
+      return;
+    }
+
+    if (this._cachedNearbyDungeon) {
+      this._enterDungeon(this._cachedNearbyDungeon);
+    }
+  }
+
+  _openShop(camp) {
+    this.shop.campId = camp.id;
+    this.shop.items = this._buildShopForCamp(camp);
+    this.menu.open = "shop";
+  }
+
+  _buildShopForCamp(camp) {
+    const rng = new RNG(hash2(camp.x | 0, camp.y | 0, this.seed));
+    const items = [];
+
+    items.push({
+      kind: "potion",
+      name: "Health Potion",
+      price: 12,
+      data: { potionType: "hp" },
+    });
+
+    items.push({
+      kind: "potion",
+      name: "Mana Potion",
+      price: 13,
+      data: { potionType: "mana" },
+    });
+
+    const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+    for (let i = 0; i < 4; i++) {
+      const slot = slots[(rng.int(0, slots.length - 1) + i) % slots.length];
+      const rarityRoll = rng.float();
+      const rarity =
+        rarityRoll > 0.9 ? "rare" :
+        rarityRoll > 0.56 ? "uncommon" :
+        "common";
+
+      const gear = makeGear(slot, Math.max(1, this.hero.level), rarity, hash2(camp.x | 0, camp.y | 0, i + (this.time | 0)));
+      items.push({
+        kind: "gear",
+        name: gear.name,
+        price: rarity === "rare" ? 80 : rarity === "uncommon" ? 42 : 24,
+        data: gear,
+      });
+    }
+
+    return items.slice(0, 4);
+  }
+
+  _buyShopItem(index) {
+    const item = this.shop.items[index];
+    if (!item) return;
+
+    if ((this.hero.gold || 0) < item.price) {
+      this._msg("Not enough gold", 0.9);
+      return;
+    }
+
+    this.hero.gold -= item.price;
+
+    if (item.kind === "potion") {
+      const pt = item.data?.potionType === "mana" ? "mana" : "hp";
+      this.hero.potions[pt] = (this.hero.potions[pt] || 0) + 1;
+    } else if (item.kind === "gear") {
+      this.hero.inventory.push(item.data);
+    }
+
+    this.shop.items.splice(index, 1);
+    this._msg(`Bought ${item.name}`, 1.0);
+  }
+
+  _discoverWaystone(w) {
+    const id = w.id || `${w.x},${w.y}`;
+    if (this.progress.discoveredWaystones.has(id)) {
+      this._msg("Waystone already known", 0.8);
+      return;
+    }
+
+    this.progress.discoveredWaystones.add(id);
+    this._msg("Waystone discovered", 1.0);
+  }
+
+  _enterDungeon(dungeonPoi) {
+    if (this.dungeon.active) return;
+
+    this.dungeon.active = true;
+    this.dungeon.floor = Math.max(1, (this.progress.dungeonBest || 0) + 1);
+    this.dungeon.origin = { x: dungeonPoi.x, y: dungeonPoi.y };
+
+    this._msg(`Dungeon Floor ${this.dungeon.floor}`, 1.2);
+  }
+
+  _leaveDungeon() {
+    if (!this.dungeon.active) return;
+
+    const out = this.dungeon.origin || this.world.spawn || { x: 0, y: 0 };
+    const safe = this.world._findSafeLandPatchNear?.(out.x, out.y, 100) || out;
+
+    this.hero.x = safe.x;
+    this.hero.y = safe.y;
+    this.dungeon.active = false;
+
+    this._msg("Left dungeon", 1.0);
+  }
+
+  _updateZoneMessage(dt) {
+    this._zoneSampleT -= dt;
+    if (this._zoneSampleT > 0) return;
+    this._zoneSampleT = 0.2;
+
+    const zone = this.dungeon.active
+      ? "Dungeon"
+      : (this.world.getZoneName?.(this.hero.x, this.hero.y) || "");
+
+    if (zone && zone !== this._lastZoneName) {
+      this._lastZoneName = zone;
+      this.zoneMsg = zone;
+      this.zoneMsgT = 1.1;
+    }
+  }
+
+  _drawFloatingTexts(ctx) {
+    for (const f of this.floatingTexts) {
+      ctx.save();
+      ctx.globalAlpha = f.a;
+      ctx.fillStyle = f.color || "#fff";
+      ctx.font = "bold 13px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(f.text, f.x, f.y);
+      ctx.restore();
+
+      f.y -= 0.35;
+      f.a -= 0.015;
+    }
+
+    this.floatingTexts = this.floatingTexts.filter((f) => f.a > 0);
+  }
+
+  _spawnFloatingText(x, y, text, color = "#fff") {
+    this.floatingTexts.push({ x, y, text, color, a: 1 });
+  }
+
+  _nearPointOfInterest(x, y, r) {
+    const r2 = r * r;
+    const check = (arr) => {
+      for (const p of arr || []) {
+        if (dist2(x, y, p.x, p.y) <= r2) return true;
+      }
+      return false;
+    };
+    return check(this.world.camps) || check(this.world.docks) || check(this.world.waystones) || check(this.world.dungeons);
+  }
+
+  _cleanupFarEntities() {
+    this.perf.cleanupTimer += 0.016;
+    if (this.perf.cleanupTimer < this.perf.cleanupEvery) return;
+    this.perf.cleanupTimer = 0;
+
+    const maxEnemyD2 = (this.perf.enemyUpdateRadius + 560) ** 2;
+    const maxLootD2 = (this.perf.lootUpdateRadius + 420) ** 2;
+    const maxProjD2 = (this.perf.projectileUpdateRadius + 260) ** 2;
+
+    this.enemies = this.enemies.filter((e) => e?.alive && dist2(e.x, e.y, this.hero.x, this.hero.y) < maxEnemyD2);
+    this.loot = this.loot.filter((l) => l?.alive && dist2(l.x, l.y, this.hero.x, this.hero.y) < maxLootD2);
+    this.projectiles = this.projectiles.filter((p) => p?.alive && dist2(p.x, p.y, this.hero.x, this.hero.y) < maxProjD2);
+  }
+
+  _ensureHeroSafe() {
+    if (this.world.canWalk?.(this.hero.x, this.hero.y, this.hero)) return;
+    const p = this.world._findSafeLandPatchNear?.(this.hero.x, this.hero.y, 180);
+    if (p) {
+      this.hero.x = p.x;
+      this.hero.y = p.y;
+    }
+  }
+
+  _saveGame() {
+    try {
+      this.save.save({
+        seed: this.seed,
+        hero: {
+          x: this.hero.x,
+          y: this.hero.y,
+          level: this.hero.level,
+          xp: this.hero.xp,
+          nextXp: this.hero.nextXp,
+          hp: this.hero.hp,
+          maxHp: this.hero.maxHp,
+          mana: this.hero.mana,
+          maxMana: this.hero.maxMana,
+          gold: this.hero.gold,
+          inventory: this.hero.inventory,
+          equip: this.hero.equip,
+          potions: this.hero.potions,
+          state: this.hero.state,
+          lastMove: this.hero.lastMove,
+          aimDir: this.hero.aimDir,
+        },
+        progress: {
+          discoveredWaystones: Array.from(this.progress.discoveredWaystones || []),
+          discoveredDocks: Array.from(this.progress.discoveredDocks || []),
+          dungeonBest: this.progress.dungeonBest || 0,
+          visitedCamps: Array.from(this.progress.visitedCamps || []),
+          eliteKills: this.progress.eliteKills || 0,
+          campRenown: this.progress.campRenown || {},
+          campRestBonusClaimed: this.progress.campRestBonusClaimed || {},
+        },
+        skillProg: this.skillProg,
+      });
+    } catch (err) {
+      console.warn("Save failed", err);
+    }
+  }
+
+  _loadGame() {
+    try {
+      const data = this.save.load?.() || this.save.read?.() || this.save.get?.();
+      if (!data) return;
+
+      if (data.hero) {
+        const h = data.hero;
+        this.hero.x = +h.x || this.hero.x;
+        this.hero.y = +h.y || this.hero.y;
+        this.hero.level = Math.max(1, h.level || this.hero.level);
+        this.hero.xp = h.xp || 0;
+        this.hero.nextXp = h.nextXp || this.hero.nextXp;
+        this.hero.maxHp = h.maxHp || this.hero.maxHp;
+        this.hero.hp = h.hp || this.hero.hp;
+        this.hero.maxMana = h.maxMana || this.hero.maxMana;
+        this.hero.mana = h.mana || this.hero.mana;
+        this.hero.gold = h.gold || 0;
+        this.hero.inventory = Array.isArray(h.inventory) ? h.inventory : [];
+        this.hero.equip = h.equip || this.hero.equip;
+        this.hero.potions = h.potions || this.hero.potions;
+        this.hero.state = h.state || this.hero.state;
+        this.hero.lastMove = h.lastMove || this.hero.lastMove;
+        this.hero.aimDir = h.aimDir || this.hero.aimDir;
+      }
+
+      if (data.progress) {
+        this.progress.discoveredWaystones = new Set(data.progress.discoveredWaystones || []);
+        this.progress.discoveredDocks = new Set(data.progress.discoveredDocks || []);
+        this.progress.dungeonBest = data.progress.dungeonBest || 0;
+        this.progress.visitedCamps = new Set(data.progress.visitedCamps || []);
+        this.progress.eliteKills = data.progress.eliteKills || 0;
+        this.progress.campRenown = data.progress.campRenown || {};
+        this.progress.campRestBonusClaimed = data.progress.campRestBonusClaimed || {};
+      }
+
+      if (data.skillProg) {
+        for (const k of ["q", "w", "e", "r"]) {
+          if (data.skillProg[k]) {
+            this.skillProg[k].xp = data.skillProg[k].xp || 0;
+            this.skillProg[k].level = Math.max(1, data.skillProg[k].level || 1);
+          }
+        }
+      }
+
+      this.camera.x = this.hero.x;
+      this.camera.y = this.hero.y;
+    } catch (err) {
+      console.warn("Load failed", err);
+    }
+  }
+
+  _msg(text, t = 1.0) {
+    this.msg = text;
+    this.msgT = t;
+  }
+}
+===== ./src/input.js =====
+// src/input.js
+// v103.3 FULL INPUT RESTORE
+// - reliable press / hold / release
+// - broader key normalization
+// - blur / visibility recovery
+// - clearAll / clearPressed / destroy helpers
+// - compatible with current game.js and main.js
+
+export default class Input {
+  constructor(target = window) {
+    this.target = target;
+
+    this.down = new Set();
+    this.pressed = new Set();
+    this.released = new Set();
+
+    this._onKeyDown = this._handleKeyDown.bind(this);
+    this._onKeyUp = this._handleKeyUp.bind(this);
+    this._onBlur = this._handleBlur.bind(this);
+    this._onWindowFocus = this._handleFocus.bind(this);
+    this._onVisibilityChange = this._handleVisibilityChange.bind(this);
+    this._onPointerLockChange = this._handlePointerLockChange.bind(this);
+    this._onMouseLeave = this._handleMouseLeave.bind(this);
+
+    this._bind();
+  }
+
+  _bind() {
+    this.target.addEventListener("keydown", this._onKeyDown);
+    this.target.addEventListener("keyup", this._onKeyUp);
+
+    window.addEventListener("blur", this._onBlur);
+    window.addEventListener("focus", this._onWindowFocus);
+    window.addEventListener("mouseleave", this._onMouseLeave);
+
+    document.addEventListener("visibilitychange", this._onVisibilityChange);
+    document.addEventListener("pointerlockchange", this._onPointerLockChange);
+  }
+
+  _handleKeyDown(e) {
+    const keys = this._aliasesForEvent(e);
+    let wasAlreadyDown = false;
+
+    for (const k of keys) {
+      if (this.down.has(k)) {
+        wasAlreadyDown = true;
+      }
+    }
+
+    for (const k of keys) {
+      this.down.add(k);
+    }
+
+    if (!wasAlreadyDown) {
+      for (const k of keys) {
+        this.pressed.add(k);
+      }
+    }
+  }
+
+  _handleKeyUp(e) {
+    const keys = this._aliasesForEvent(e);
+
+    for (const k of keys) {
+      this.down.delete(k);
+      this.released.add(k);
+    }
+  }
+
+  _handleBlur() {
+    this.clearAll();
+  }
+
+  _handleFocus() {
+    this.clearPressed();
+    this.released.clear();
+  }
+
+  _handleVisibilityChange() {
+    if (document.hidden) {
+      this.clearAll();
+    }
+  }
+
+  _handlePointerLockChange() {
+    if (document.hidden) {
+      this.clearAll();
+    }
+  }
+
+  _handleMouseLeave() {
+    // Helps prevent "stuck movement" when keyboard focus gets weird after leaving the window.
+    if (!document.hasFocus()) {
+      this.clearAll();
+    }
+  }
+
+  _aliasesForEvent(e) {
+    const out = new Set();
+
+    const key = e?.key ?? "";
+    const code = e?.code ?? "";
+
+    const add = (v) => {
+      if (v == null) return;
+      const s = String(v);
+      if (!s) return;
+      out.add(s);
+      out.add(s.toLowerCase());
+      out.add(s.toUpperCase());
+    };
+
+    add(key);
+    add(code);
+
+    // Single chars
+    if (key && key.length === 1) {
+      add(key.toLowerCase());
+      add(key.toUpperCase());
+    }
+
+    // Common aliases
+    if (key === "Esc" || code === "Escape") {
+      add("Escape");
+      add("Esc");
+      add("escape");
+    }
+
+    if (key === " " || key === "Spacebar" || code === "Space") {
+      add(" ");
+      add("Space");
+      add("space");
+      add("Spacebar");
+    }
+
+    if (key === "Up" || code === "ArrowUp") add("ArrowUp");
+    if (key === "Down" || code === "ArrowDown") add("ArrowDown");
+    if (key === "Left" || code === "ArrowLeft") add("ArrowLeft");
+    if (key === "Right" || code === "ArrowRight") add("ArrowRight");
+
+    if (code === "KeyW") add("w");
+    if (code === "KeyA") add("a");
+    if (code === "KeyS") add("s");
+    if (code === "KeyD") add("d");
+    if (code === "KeyQ") add("q");
+    if (code === "KeyE") add("e");
+    if (code === "KeyR") add("r");
+    if (code === "KeyF") add("f");
+    if (code === "KeyI") add("i");
+    if (code === "KeyK") add("k");
+    if (code === "KeyM") add("m");
+    if (code === "KeyB") add("b");
+    if (code === "KeyX") add("x");
+
+    if (code === "Digit1") add("1");
+    if (code === "Digit2") add("2");
+    if (code === "Digit3") add("3");
+    if (code === "Digit4") add("4");
+
+    if (code === "Enter") add("Enter");
+    if (code === "Backspace") add("Backspace");
+    if (code === "Delete") add("Delete");
+
+    return Array.from(out);
+  }
+
+  _aliasesForLookup(key) {
+    const out = new Set();
+    if (key == null) return [];
+
+    const s = String(key);
+    if (!s) return [];
+
+    out.add(s);
+    out.add(s.toLowerCase());
+    out.add(s.toUpperCase());
+
+    if (s === "Esc") {
+      out.add("Escape");
+      out.add("escape");
+    }
+
+    if (s === "Escape") {
+      out.add("Esc");
+      out.add("escape");
+    }
+
+    if (s === " ") {
+      out.add("Space");
+      out.add("space");
+      out.add("Spacebar");
+    }
+
+    if (s === "Space") {
+      out.add(" ");
+      out.add("space");
+      out.add("Spacebar");
+    }
+
+    return Array.from(out);
+  }
+
+  isDown(key) {
+    const aliases = this._aliasesForLookup(key);
+    for (const k of aliases) {
+      if (this.down.has(k)) return true;
+    }
+    return false;
+  }
+
+  wasPressed(key) {
+    const aliases = this._aliasesForLookup(key);
+    for (const k of aliases) {
+      if (this.pressed.has(k)) return true;
+    }
+    return false;
+  }
+
+  wasReleased(key) {
+    const aliases = this._aliasesForLookup(key);
+    for (const k of aliases) {
+      if (this.released.has(k)) return true;
+    }
+    return false;
+  }
+
+  clearPressed() {
+    this.pressed.clear();
+  }
+
+  clearAll() {
+    this.down.clear();
+    this.pressed.clear();
+    this.released.clear();
+  }
+
+  endFrame() {
+    this.pressed.clear();
+    this.released.clear();
+  }
+
+  destroy() {
+    this.target.removeEventListener("keydown", this._onKeyDown);
+    this.target.removeEventListener("keyup", this._onKeyUp);
+    window.removeEventListener("blur", this._onBlur);
+    window.removeEventListener("focus", this._onWindowFocus);
+    window.removeEventListener("mouseleave", this._onMouseLeave);
+    document.removeEventListener("visibilitychange", this._onVisibilityChange);
+    document.removeEventListener("pointerlockchange", this._onPointerLockChange);
+    this.clearAll();
+  }
+}
+===== ./src/main.js =====
+// src/main.js
+// v103 MAIN GLUE RESTORE
+// - matches current fuller game.js API
+// - keeps all existing game features
+// - proper canvas sizing for #overworld
+// - stable boot / tick loop / pause-resume handling
+
+import Game from "./game.js";
+
+const canvas = document.getElementById("overworld");
+if (!canvas) {
+  throw new Error("Missing #overworld canvas");
+}
+
+let game = null;
+let rafId = 0;
+let lastTime = 0;
+let running = false;
+
+function fitCanvasToScreen() {
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const cssW = Math.max(960, Math.floor(window.innerWidth));
+  const cssH = Math.max(540, Math.floor(window.innerHeight));
+
+  canvas.style.width = cssW + "px";
+  canvas.style.height = cssH + "px";
+
+  const pixelW = Math.max(1, Math.floor(cssW * dpr));
+  const pixelH = Math.max(1, Math.floor(cssH * dpr));
+
+  if (canvas.width !== pixelW || canvas.height !== pixelH) {
+    canvas.width = pixelW;
+    canvas.height = pixelH;
+  }
+
+  return {
+    cssW,
+    cssH,
+    dpr,
+    pixelW,
+    pixelH,
+  };
+}
+
+function resizeGame() {
+  const view = fitCanvasToScreen();
+  if (game && typeof game.resize === "function") {
+    game.resize(view.pixelW, view.pixelH);
+  }
+}
+
+function stopLoop() {
+  running = false;
+  if (rafId) {
+    cancelAnimationFrame(rafId);
+    rafId = 0;
+  }
+}
+
+function tick(now) {
+  if (!running || !game) return;
+
+  if (!lastTime) lastTime = now;
+  let dt = (now - lastTime) / 1000;
+  lastTime = now;
+
+  if (!Number.isFinite(dt) || dt < 0) dt = 0;
+  dt = Math.min(dt, 0.05);
+
+  game.update(dt);
+  game.draw();
+
+  rafId = requestAnimationFrame(tick);
+}
+
+function startLoop() {
+  if (running) return;
+  running = true;
+  lastTime = performance.now();
+  rafId = requestAnimationFrame(tick);
+}
+
+function hardResume() {
+  stopLoop();
+  resizeGame();
+  if (game && game.input && typeof game.input.endFrame === "function") {
+    game.input.endFrame();
+  }
+  startLoop();
+}
+
+function softResumeSoon() {
+  setTimeout(() => {
+    if (!document.hidden) hardResume();
+  }, 60);
+}
+
+function boot() {
+  resizeGame();
+
+  game = new Game(canvas);
+  if (typeof game.resize === "function") {
+    game.resize(canvas.width, canvas.height);
+  }
+
+  canvas.focus();
+  startLoop();
+}
+
+window.addEventListener("resize", () => {
+  resizeGame();
+});
+
+window.addEventListener("orientationchange", () => {
+  softResumeSoon();
+});
+
+window.addEventListener("focus", () => {
+  softResumeSoon();
+});
+
+window.addEventListener("blur", () => {
+  if (game?.input?.endFrame) game.input.endFrame();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    stopLoop();
+  } else {
+    hardResume();
+  }
+});
+
+canvas.addEventListener("mousedown", () => {
+  canvas.focus();
+});
+
+boot();
+===== ./src/save.js =====
+// src/save.js
+// v101.2 SAVE RESTORE
+// - stable save/load
+// - compatibility aliases
+// - sanitizes partial / older saves
+// - prevents bad coords / bad state reloads
+
+export default class Save {
+  constructor(key = "broke-knight-save") {
+    this.key = String(key || "broke-knight-save");
+    this.version = 7;
+  }
+
+  load() {
+    try {
+      const raw = localStorage.getItem(this.key);
+      if (!raw) return null;
+
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return null;
+
+      return this._sanitize(parsed);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  save(data) {
+    try {
+      const clean = this._sanitize(data);
+      clean._meta = {
+        version: this.version,
+        savedAt: Date.now(),
+      };
+
+      localStorage.setItem(this.key, JSON.stringify(clean));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  clear() {
+    try {
+      localStorage.removeItem(this.key);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  hasSave() {
+    try {
+      return !!localStorage.getItem(this.key);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  exportString(data) {
+    try {
+      const clean = this._sanitize(data);
+      clean._meta = {
+        version: this.version,
+        savedAt: Date.now(),
+      };
+      return JSON.stringify(clean);
+    } catch (_) {
+      return "";
+    }
+  }
+
+  importString(text) {
+    try {
+      if (typeof text !== "string" || !text.trim()) return null;
+      const parsed = JSON.parse(text);
+      return this._sanitize(parsed);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // compatibility aliases
+  get() {
+    return this.load();
+  }
+
+  set(data) {
+    return this.save(data);
+  }
+
+  read() {
+    return this.load();
+  }
+
+  write(data) {
+    return this.save(data);
+  }
+
+  _sanitize(data) {
+    const src = data && typeof data === "object" ? data : {};
+
+    const heroSrc = src.hero && typeof src.hero === "object" ? src.hero : {};
+    const progressSrc = src.progress && typeof src.progress === "object" ? src.progress : {};
+    const dungeonSrc = src.dungeon && typeof src.dungeon === "object" ? src.dungeon : {};
+    const menuSrc = src.menu && typeof src.menu === "object" ? src.menu : {};
+    const cooldownsSrc = src.cooldowns && typeof src.cooldowns === "object" ? src.cooldowns : {};
+    const skillProgSrc = src.skillProg && typeof src.skillProg === "object" ? src.skillProg : {};
+
+    const out = {
+      seed: this._num(src.seed, 0),
+
+      hero: {
+        x: this._finiteCoord(heroSrc.x, 0),
+        y: this._finiteCoord(heroSrc.y, 0),
+        vx: this._safeVelocity(heroSrc.vx),
+        vy: this._safeVelocity(heroSrc.vy),
+
+        level: Math.max(1, this._int(heroSrc.level, 1)),
+        xp: Math.max(0, this._int(heroSrc.xp, 0)),
+        nextXp: Math.max(1, this._int(heroSrc.nextXp, 16)),
+
+        maxHp: Math.max(1, this._int(heroSrc.maxHp, 100)),
+        hp: Math.max(1, this._int(heroSrc.hp, 100)),
+
+        maxMana: Math.max(0, this._int(heroSrc.maxMana, 60)),
+        mana: Math.max(0, this._int(heroSrc.mana, 60)),
+
+        gold: Math.max(0, this._int(heroSrc.gold, 0)),
+
+        inventory: this._array(heroSrc.inventory),
+        equip: this._object(heroSrc.equip),
+        potions: {
+          hp: Math.max(0, this._int(heroSrc?.potions?.hp, 2)),
+          mana: Math.max(0, this._int(heroSrc?.potions?.mana, 1)),
+        },
+
+        state: {
+          sailing: false,
+          dashT: 0,
+          hurtT: 0,
+          slowT: 0,
+          poisonT: 0,
+        },
+
+        lastMove: this._vec2(heroSrc.lastMove, { x: 1, y: 0 }),
+        aimDir: this._vec2(heroSrc.aimDir, { x: 1, y: 0 }),
+      },
+
+      progress: {
+        discoveredWaystones: this._stringArray(progressSrc.discoveredWaystones),
+        discoveredDocks: this._stringArray(progressSrc.discoveredDocks),
+        dungeonBest: Math.max(0, this._int(progressSrc.dungeonBest, 0)),
+        visitedCamps: this._stringArray(progressSrc.visitedCamps),
+        eliteKills: Math.max(0, this._int(progressSrc.eliteKills, 0)),
+        campRenown: this._object(progressSrc.campRenown),
+        campRestBonusClaimed: this._object(progressSrc.campRestBonusClaimed),
+      },
+
+      dungeon: {
+        active: false,
+        floor: Math.max(0, this._int(dungeonSrc.floor, 0)),
+        currentRoomIndex: Math.max(0, this._int(dungeonSrc.currentRoomIndex, 0)),
+        seed: this._int(dungeonSrc.seed, 0),
+      },
+
+      menu: {
+        open: this._menuValue(menuSrc.open),
+      },
+
+      cooldowns: {
+        q: Math.max(0, this._num(cooldownsSrc.q, 0)),
+        w: Math.max(0, this._num(cooldownsSrc.w, 0)),
+        e: Math.max(0, this._num(cooldownsSrc.e, 0)),
+        r: Math.max(0, this._num(cooldownsSrc.r, 0)),
+      },
+
+      skillProg: {
+        q: this._skill(skillProgSrc.q),
+        w: this._skill(skillProgSrc.w),
+        e: this._skill(skillProgSrc.e),
+        r: this._skill(skillProgSrc.r),
+      },
+    };
+
+    out.hero.hp = Math.min(out.hero.hp, out.hero.maxHp);
+    out.hero.mana = Math.min(out.hero.mana, out.hero.maxMana);
+
+    return out;
+  }
+
+  _skill(src) {
+    const s = src && typeof src === "object" ? src : {};
+    return {
+      xp: Math.max(0, this._int(s.xp, 0)),
+      level: Math.max(1, this._int(s.level, 1)),
+    };
+  }
+
+  _menuValue(v) {
+    const allowed = new Set([
+      null,
+      "map",
+      "inventory",
+      "skills",
+      "quests",
+      "shop",
+      "options",
+      "god",
+      "menu",
+      "gear",
+    ]);
+    return allowed.has(v ?? null) ? (v ?? null) : null;
+  }
+
+  _safeVelocity(v) {
+    const n = this._num(v, 0);
+    return Math.max(-2000, Math.min(2000, n));
+  }
+
+  _finiteCoord(v, fallback = 0) {
+    const n = this._num(v, fallback);
+    const limit = 100000;
+    return Math.max(-limit, Math.min(limit, n));
+  }
+
+  _vec2(v, fallback = { x: 0, y: 0 }) {
+    const src = v && typeof v === "object" ? v : {};
+    return {
+      x: this._num(src.x, fallback.x),
+      y: this._num(src.y, fallback.y),
+    };
+  }
+
+  _array(v) {
+    return Array.isArray(v) ? v : [];
+  }
+
+  _stringArray(v) {
+    if (!Array.isArray(v)) return [];
+    return v.map((x) => String(x));
+  }
+
+  _object(v) {
+    return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+  }
+
+  _num(v, fallback = 0) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  _int(v, fallback = 0) {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.round(n) : fallback;
+  }
+}
+===== ./src/ui.js =====
+// src/ui.js
+// v103.2 UI PERFORMANCE + FEATURE RESTORE
+// - keeps full HUD / map / inventory / skills / shop
+// - restores quest/options placeholder panels
+// - reduces minimap cost with lightweight caching
+// - keeps prompts / toast / zone text
+// - built for current game.js / world.js / util.js
+
+import { clamp } from "./util.js";
+
+export default class UI {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.w = canvas?.width || 960;
+    this.h = canvas?.height || 540;
+
+    this._mini = null;
+    this._miniT = 0;
+
+    this._open = null;
+    this._msg = "";
+    this._msgT = 0;
+
+    this._miniFrame = document.createElement("canvas");
+    this._miniFrame.width = 172;
+    this._miniFrame.height = 172;
+    this._miniFrameCtx = this._miniFrame.getContext("2d");
+    this._miniFrameDirty = true;
+    this._miniFrameT = 0;
+    this._lastMiniHeroX = 0;
+    this._lastMiniHeroY = 0;
+  }
+
+  setViewSize(w, h) {
+    this.w = w | 0;
+    this.h = h | 0;
+    this._miniFrameDirty = true;
+  }
+
+  open(name) {
+    this._open = name || null;
+  }
+
+  closeAll() {
+    this._open = null;
+  }
+
+  setMsg(text, t = 2) {
+    this._msg = String(text || "");
+    this._msgT = Math.max(0, +t || 0);
+  }
+
+  update(dt, game) {
+    if (this._msgT > 0) {
+      this._msgT = Math.max(0, this._msgT - dt);
+      if (this._msgT <= 0) this._msg = "";
+    }
+
+    this._miniT += dt;
+    if (this._miniT >= 0.28) {
+      this._miniT = 0;
+      this._mini = game?.world?.getMinimapCanvas?.() || null;
+      this._miniFrameDirty = true;
+    }
+
+    this._miniFrameT += dt;
+    const hx = game?.hero?.x || 0;
+    const hy = game?.hero?.y || 0;
+    const heroShift = Math.abs(hx - this._lastMiniHeroX) + Math.abs(hy - this._lastMiniHeroY);
+
+    if (heroShift > 42 || this._miniFrameT >= 0.12) {
+      this._miniFrameT = 0;
+      this._lastMiniHeroX = hx;
+      this._lastMiniHeroY = hy;
+      this._miniFrameDirty = true;
+    }
+  }
+
+  draw(ctx, game) {
+    if (!ctx || !game) return;
+
+    this._syncViewFromCanvas();
+
+    this._drawHUD(ctx, game);
+    this._drawSpellBar(ctx, game);
+    this._drawMinimap(ctx, game);
+    this._drawHelp(ctx);
+    this._drawPrompt(ctx, game);
+    this._drawToast(ctx, game);
+    this._drawZoneText(ctx, game);
+
+    const open = game?.menu?.open || this._open || null;
+    if (!open) return;
+
+    if (open === "map") this._drawMap(ctx, game);
+    else if (open === "inventory") this._drawInventoryPanel(ctx, game);
+    else if (open === "skills") this._drawSkillsPanel(ctx, game);
+    else if (open === "shop") this._drawShopPanel(ctx, game);
+    else if (open === "quests") this._drawSimplePanel(ctx, "Quests", "Quest tracking is not fully restored yet.");
+    else if (open === "options") this._drawSimplePanel(ctx, "Options", "Settings panel placeholder restored.");
+    else if (open === "god" || open === "menu") this._drawSimplePanel(ctx, "Menu", "More menu features can be added next.");
+  }
+
+  _syncViewFromCanvas() {
+    const c = this.canvas;
+    if (!c) return;
+    this.w = c.width | 0;
+    this.h = c.height | 0;
+  }
+
+  _drawHUD(ctx, game) {
+    const hero = game.hero;
+    const stats = hero.getStats?.() || {
+      maxHp: hero.maxHp || 100,
+      maxMana: hero.maxMana || 60,
+      dmg: 8,
+      armor: 0,
+      crit: 0.05,
+    };
+
+    const x = 16;
+    const y = 16;
+    const w = 330;
+    const hpH = 18;
+    const manaH = 12;
+    const xpH = 8;
+
+    const hpMax = Math.max(1, stats.maxHp || hero.maxHp || 100);
+    const manaMax = Math.max(1, stats.maxMana || hero.maxMana || 60);
+    const xpNeed = Math.max(1, hero.nextXp || 1);
+
+    const hpFrac = clamp((hero.hp || 0) / hpMax, 0, 1);
+    const manaFrac = clamp((hero.mana || 0) / manaMax, 0, 1);
+    const xpFrac = clamp((hero.xp || 0) / xpNeed, 0, 1);
+
+    ctx.save();
+
+    ctx.fillStyle = "rgba(8,12,18,0.78)";
+    ctx.fillRect(x - 8, y - 8, w + 16, 108);
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.strokeRect(x - 7.5, y - 7.5, w + 15, 107);
+
+    ctx.fillStyle = "#dfe7f2";
+    ctx.font = "bold 15px Arial";
+    ctx.textAlign = "left";
+    ctx.fillText(`Lv ${hero.level || 1}`, x, y + 2);
+    ctx.fillText(`Gold ${hero.gold || 0}`, x + 92, y + 2);
+
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fillRect(x, y + 12, w, hpH);
+    ctx.fillStyle = "#cf4d5f";
+    ctx.fillRect(x, y + 12, (w * hpFrac) | 0, hpH);
+
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fillRect(x, y + 38, w, manaH);
+    ctx.fillStyle = "#4d87d6";
+    ctx.fillRect(x, y + 38, (w * manaFrac) | 0, manaH);
+
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fillRect(x, y + 58, w, xpH);
+    ctx.fillStyle = "#d2b766";
+    ctx.fillRect(x, y + 58, (w * xpFrac) | 0, xpH);
+
+    ctx.fillStyle = "#f3f6fb";
+    ctx.font = "12px Arial";
+    ctx.fillText(`HP ${Math.round(hero.hp || 0)} / ${hpMax}`, x + 8, y + 26);
+    ctx.fillText(`Mana ${Math.round(hero.mana || 0)} / ${manaMax}`, x + 8, y + 48);
+    ctx.fillText(`XP ${hero.xp || 0} / ${xpNeed}`, x + 8, y + 74);
+
+    const potX = x + w - 112;
+    ctx.fillStyle = "#e2ebf7";
+    ctx.fillText(`1:HP ${hero?.potions?.hp || 0}`, potX, y + 26);
+    ctx.fillText(`2:MP ${hero?.potions?.mana || 0}`, potX, y + 48);
+
+    ctx.fillStyle = "#9fb1c7";
+    ctx.fillText(`DMG ${stats.dmg || 0}`, x + 8, y + 94);
+    ctx.fillText(`ARM ${stats.armor || 0}`, x + 92, y + 94);
+    ctx.fillText(`CRIT ${Math.round((stats.crit || 0) * 100)}%`, x + 168, y + 94);
+
+    ctx.restore();
+  }
+
+  _drawSpellBar(ctx, game) {
+    const defs = game.skillDefs || {};
+    const cds = game.cooldowns || {};
+    const hero = game.hero;
+    const bottomY = this.h - 62;
+    const box = 46;
+    const gap = 10;
+    const total = box * 4 + gap * 3;
+    const startX = ((this.w - total) / 2) | 0;
+    const order = ["q", "w", "e", "r"];
+
+    ctx.save();
+
+    for (let i = 0; i < order.length; i++) {
+      const key = order[i];
+      const def = defs[key];
+      const cd = Math.max(0, cds[key] || 0);
+      const x = startX + i * (box + gap);
+      const y = bottomY;
+
+      ctx.fillStyle = "rgba(10,14,20,0.82)";
+      ctx.fillRect(x, y, box, box);
+      ctx.strokeStyle = "rgba(255,255,255,0.15)";
+      ctx.strokeRect(x + 0.5, y + 0.5, box - 1, box - 1);
+
+      ctx.fillStyle = def?.color || "#a9c3ff";
+      ctx.globalAlpha = 0.22;
+      ctx.fillRect(x + 4, y + 4, box - 8, box - 8);
+      ctx.globalAlpha = 1;
+
+      ctx.fillStyle = "#eef4ff";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = "bold 16px Arial";
+      ctx.fillText((key || "?").toUpperCase(), x + box * 0.5, y + box * 0.5 - 3);
+
+      ctx.font = "10px Arial";
+      ctx.fillStyle = "#9ab2cf";
+      ctx.fillText(`${def?.mana || 0}`, x + box * 0.5, y + box - 8);
+
+      const manaOK = (hero?.mana || 0) >= (def?.mana || 0);
+
+      if (cd > 0) {
+        const frac = clamp(cd / Math.max(0.01, def?.cd || 1), 0, 1);
+        ctx.fillStyle = "rgba(8,10,14,0.64)";
+        ctx.fillRect(x, y, box, box * frac);
+
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 11px Arial";
+        ctx.fillText(cd.toFixed(1), x + box * 0.5, y + box * 0.5 + 9);
+      }
+
+      if (!manaOK) {
+        ctx.fillStyle = "rgba(35,70,120,0.28)";
+        ctx.fillRect(x, y, box, box);
+      }
+    }
+
+    ctx.restore();
+  }
+
+  _drawMinimap(ctx, game) {
+    const world = game?.world;
+    const hero = game?.hero;
+    if (!world || !hero) return;
+
+    const size = 188;
+    const x = this.w - size - 16;
+    const y = 16;
+
+    if (this._miniFrameDirty) {
+      this._rebuildMiniFrame(game);
+      this._miniFrameDirty = false;
+    }
+
+    ctx.save();
+    ctx.fillStyle = "rgba(10,14,20,0.72)";
+    ctx.fillRect(x, y, size, size);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
+
+    ctx.drawImage(this._miniFrame, x + 8, y + 8, size - 16, size - 16);
+
+    ctx.fillStyle = "#d8e1ee";
+    ctx.font = "bold 12px Arial";
+    ctx.textAlign = "left";
+    ctx.fillText("Map", x + 10, y + size - 8);
+    ctx.restore();
+  }
+
+  _rebuildMiniFrame(game) {
+    const c = this._miniFrameCtx;
+    if (!c) return;
+
+    const w = this._miniFrame.width;
+    const h = this._miniFrame.height;
+
+    c.clearRect(0, 0, w, h);
+
+    const info = game?.world?.getMapInfo?.();
+    if (info?.revealed) {
+      this._drawMinimapFromMapInfo(c, game, 0, 0, w, h);
+      return;
+    }
+
+    if (this._mini) {
+      this._drawMinimapFromCanvas(c, game, this._mini, 0, 0, w);
+      return;
+    }
+
+    c.fillStyle = "rgba(255,255,255,0.06)";
+    c.fillRect(0, 0, w, h);
+  }
+
+  _drawMinimapFromCanvas(ctx, game, mini, x, y, size) {
+    const span = (game.world?.mapHalfSize || 5200) * 2;
+    const half = span * 0.5;
+
+    const heroNormX = clamp((game.hero.x + half) / span, 0, 1);
+    const heroNormY = clamp((game.hero.y + half) / span, 0, 1);
+
+    const srcFrac = 0.22;
+    const srcW = Math.max(28, Math.floor(mini.width * srcFrac));
+    const srcH = Math.max(28, Math.floor(mini.height * srcFrac));
+
+    let srcX = Math.floor(heroNormX * mini.width - srcW * 0.5);
+    let srcY = Math.floor(heroNormY * mini.height - srcH * 0.5);
+
+    srcX = clamp(srcX, 0, Math.max(0, mini.width - srcW));
+    srcY = clamp(srcY, 0, Math.max(0, mini.height - srcH));
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, size, size);
+    ctx.clip();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(mini, srcX, srcY, srcW, srcH, x, y, size, size);
+    ctx.imageSmoothingEnabled = true;
+    ctx.restore();
+
+    this._drawHeroCrosshair(ctx, x, y, size, x + size * 0.5, y + size * 0.5);
+  }
+
+  _drawMinimapFromMapInfo(ctx, game, x, y, w, h) {
+    const info = game.world.getMapInfo();
+    const hero = game.hero;
+
+    const worldSpan = 1100;
+    const half = worldSpan * 0.5;
+    const pxPerWorld = w / worldSpan;
+
+    const left = hero.x - half;
+    const top = hero.y - half;
+
+    const revealed = info.revealed;
+    const cols = revealed[0]?.length || 0;
+    const rows = revealed.length || 0;
+    if (!rows || !cols) {
+      ctx.fillStyle = "rgba(255,255,255,0.06)";
+      ctx.fillRect(x, y, w, h);
+      return;
+    }
+
+    const mapHalf = game.world.mapHalfSize || 5200;
+    const worldFull = mapHalf * 2;
+
+    const worldToCellX = (wx) => clamp(Math.floor(((wx + mapHalf) / worldFull) * cols), 0, cols - 1);
+    const worldToCellY = (wy) => clamp(Math.floor(((wy + mapHalf) / worldFull) * rows), 0, rows - 1);
+
+    const cellWorldW = worldFull / cols;
+    const cellWorldH = worldFull / rows;
+
+    const c0 = worldToCellX(left);
+    const c1 = worldToCellX(left + worldSpan);
+    const r0 = worldToCellY(top);
+    const r1 = worldToCellY(top + worldSpan);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        if (!revealed[r]?.[c]) continue;
+
+        const wx = -mapHalf + c * cellWorldW;
+        const wy = -mapHalf + r * cellWorldH;
+        const sx = x + (wx - left) * pxPerWorld;
+        const sy = y + (wy - top) * pxPerWorld;
+        const sw = Math.ceil(cellWorldW * pxPerWorld) + 1;
+        const sh = Math.ceil(cellWorldH * pxPerWorld) + 1;
+
+        const tile =
+          info.tiles?.[r]?.[c] ||
+          info.colors?.[r]?.[c] ||
+          "#4f6b5a";
+
+        ctx.fillStyle = tile;
+        ctx.fillRect(sx, sy, sw, sh);
+      }
+    }
+
+    ctx.restore();
+    this._drawHeroCrosshair(ctx, x, y, w, x + w * 0.5, y + h * 0.5);
+  }
+
+  _drawHeroCrosshair(ctx, x, y, size, hx, hy) {
+    ctx.save();
+
+    ctx.strokeStyle = "rgba(10,20,34,0.95)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(hx - 7, hy);
+    ctx.lineTo(hx + 7, hy);
+    ctx.moveTo(hx, hy - 7);
+    ctx.lineTo(hx, hy + 7);
+    ctx.stroke();
+
+    ctx.strokeStyle = "#f2f7ff";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(hx - 6, hy);
+    ctx.lineTo(hx + 6, hy);
+    ctx.moveTo(hx, hy - 6);
+    ctx.lineTo(hx, hy + 6);
+    ctx.stroke();
+
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
+    ctx.restore();
+  }
+
+  _drawHelp(ctx) {
+    const lines = [
+      "WASD move",
+      "Mouse aim",
+      "Q/W/E/R skills",
+      "1/2 potions",
+      "F interact",
+      "B dock/sail",
+      "M map",
+      "I inventory",
+      "K skills",
+      "Esc close",
+    ];
+
+    const x = 16;
+    const y = this.h - 152;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(8,10,14,0.50)";
+    ctx.fillRect(x - 8, y - 16, 132, 148);
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.strokeRect(x - 7.5, y - 15.5, 131, 147);
+
+    ctx.fillStyle = "#dfe7f2";
+    ctx.font = "bold 13px Arial";
+    ctx.textAlign = "left";
+    ctx.fillText("Controls", x, y);
+
+    ctx.font = "12px Arial";
+    ctx.fillStyle = "#9fb1c7";
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], x, y + 20 + i * 12);
+    }
+    ctx.restore();
+  }
+
+  _drawPrompt(ctx, game) {
+    let text = "";
+
+    if (game?._cachedNearbyCamp) text = "F: Camp shop";
+    else if (game?._cachedNearbyWaystone) text = "F: Use waystone";
+    else if (game?._cachedNearbyDungeon) text = "F: Enter dungeon";
+    else if (game?._cachedNearbyDock) text = game?.hero?.state?.sailing ? "B: Dock" : "B: Sail";
+
+    if (!text) return;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(8,10,14,0.74)";
+    ctx.fillRect((this.w - 170) / 2, this.h - 112, 170, 30);
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.strokeRect((this.w - 170) / 2 + 0.5, this.h - 111.5, 169, 29);
+
+    ctx.fillStyle = "#edf3fb";
+    ctx.font = "bold 14px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(text, this.w * 0.5, this.h - 92);
+    ctx.restore();
+  }
+
+  _drawToast(ctx, game) {
+    const msg = game?.msg || this._msg || "";
+    const msgT = Math.max(game?.msgT || 0, this._msgT || 0);
+    if (!msg || msgT <= 0) return;
+
+    ctx.save();
+    ctx.globalAlpha = clamp(msgT / 0.25, 0, 1);
+
+    const w = Math.min(360, Math.max(170, msg.length * 8 + 30));
+    const x = ((this.w - w) / 2) | 0;
+    const y = 18;
+
+    ctx.fillStyle = "rgba(8,10,14,0.84)";
+    ctx.fillRect(x, y, w, 30);
+    ctx.strokeStyle = "rgba(255,255,255,0.11)";
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, 29);
+
+    ctx.fillStyle = "#eef4fb";
+    ctx.font = "bold 14px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(msg, x + w / 2, y + 20);
+    ctx.restore();
+  }
+
+  _drawZoneText(ctx, game) {
+    const zone = game?.zoneMsg || "";
+    const t = game?.zoneMsgT || 0;
+    if (!zone || t <= 0) return;
+
+    ctx.save();
+    ctx.globalAlpha = clamp(t / 0.25, 0, 1);
+    ctx.fillStyle = "#dbe8f6";
+    ctx.font = "bold 18px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(zone, this.w * 0.5, 72);
+    ctx.restore();
+  }
+
+  _drawMap(ctx, game) {
+    const panelW = Math.min(this.w - 60, 820);
+    const panelH = Math.min(this.h - 60, 820);
+    const x = ((this.w - panelW) / 2) | 0;
+    const y = ((this.h - panelH) / 2) | 0;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(8,10,14,0.92)";
+    ctx.fillRect(x, y, panelW, panelH);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.strokeRect(x + 0.5, y + 0.5, panelW - 1, panelH - 1);
+
+    ctx.fillStyle = "#eef4fb";
+    ctx.font = "bold 20px Arial";
+    ctx.textAlign = "left";
+    ctx.fillText("World Map", x + 18, y + 28);
+
+    const mapX = x + 18;
+    const mapY = y + 42;
+    const mapW = panelW - 36;
+    const mapH = panelH - 72;
+
+    const info = game?.world?.getMapInfo?.();
+    if (info?.revealed) {
+      this._drawBigMapFromMapInfo(ctx, game, info, mapX, mapY, mapW, mapH);
+    } else if (this._mini) {
+      this._drawBigMapFromCanvas(ctx, game, this._mini, mapX, mapY, mapW, mapH);
+    } else {
+      ctx.fillStyle = "rgba(255,255,255,0.05)";
+      ctx.fillRect(mapX, mapY, mapW, mapH);
+    }
+
+    ctx.fillStyle = "#95a7bd";
+    ctx.font = "12px Arial";
+    ctx.fillText("M or Esc to close", x + 18, y + panelH - 12);
+    ctx.restore();
+  }
+
+  _drawBigMapFromCanvas(ctx, game, mini, x, y, w, h) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(mini, x, y, w, h);
+    ctx.imageSmoothingEnabled = true;
+    ctx.restore();
+
+    const span = (game.world?.mapHalfSize || 5200) * 2;
+    const half = span * 0.5;
+    const hx = x + clamp((game.hero.x + half) / span, 0, 1) * w;
+    const hy = y + clamp((game.hero.y + half) / span, 0, 1) * h;
+
+    this._drawHeroCrosshair(ctx, x, y, w, hx, hy);
+  }
+
+  _drawBigMapFromMapInfo(ctx, game, info, x, y, w, h) {
+    const revealed = info.revealed;
+    const rows = revealed.length || 0;
+    const cols = revealed[0]?.length || 0;
+
+    if (!rows || !cols) {
+      ctx.fillStyle = "rgba(255,255,255,0.05)";
+      ctx.fillRect(x, y, w, h);
+      return;
+    }
+
+    const cw = w / cols;
+    const ch = h / rows;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (!revealed[r]?.[c]) continue;
+        ctx.fillStyle =
+          info.tiles?.[r]?.[c] ||
+          info.colors?.[r]?.[c] ||
+          "#526b59";
+        ctx.fillRect(x + c * cw, y + r * ch, Math.ceil(cw) + 1, Math.ceil(ch) + 1);
+      }
+    }
+
+    ctx.restore();
+
+    const mapHalf = game.world?.mapHalfSize || 5200;
+    const span = mapHalf * 2;
+    const hx = x + clamp((game.hero.x + mapHalf) / span, 0, 1) * w;
+    const hy = y + clamp((game.hero.y + mapHalf) / span, 0, 1) * h;
+
+    this._drawHeroCrosshair(ctx, x, y, w, hx, hy);
+  }
+
+  _drawInventoryPanel(ctx, game) {
+    const hero = game.hero;
+    const items = hero.inventory || [];
+    const equip = hero.equip || {};
+
+    const panelW = Math.min(this.w - 90, 860);
+    const panelH = Math.min(this.h - 90, 540);
+    const x = ((this.w - panelW) / 2) | 0;
+    const y = ((this.h - panelH) / 2) | 0;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(8,10,14,0.92)";
+    ctx.fillRect(x, y, panelW, panelH);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.strokeRect(x + 0.5, y + 0.5, panelW - 1, panelH - 1);
+
+    ctx.fillStyle = "#eef4fb";
+    ctx.font = "bold 22px Arial";
+    ctx.fillText("Inventory", x + 18, y + 30);
+
+    ctx.fillStyle = "#95a7bd";
+    ctx.font = "13px Arial";
+    ctx.fillText("I or Esc to close", x + 18, y + 52);
+
+    const leftX = x + 18;
+    const leftY = y + 74;
+    const leftW = 370;
+    const leftH = panelH - 92;
+
+    ctx.fillStyle = "rgba(255,255,255,0.04)";
+    ctx.fillRect(leftX, leftY, leftW, leftH);
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.strokeRect(leftX + 0.5, leftY + 0.5, leftW - 1, leftH - 1);
+
+    ctx.fillStyle = "#dce6f4";
+    ctx.font = "bold 15px Arial";
+    ctx.fillText(`Bag (${items.length})`, leftX + 12, leftY + 22);
+
+    const rowH = 28;
+    const visible = Math.max(1, Math.floor((leftH - 40) / rowH));
+    const selected = clamp(game?.invIndex || 0, 0, Math.max(0, items.length - 1));
+    const scroll = clamp(selected - visible + 1, 0, Math.max(0, items.length - visible));
+
+    for (let i = 0; i < visible; i++) {
+      const idx = scroll + i;
+      if (idx >= items.length) break;
+
+      const item = items[idx];
+      const iy = leftY + 32 + i * rowH;
+      const active = idx === selected;
+
+      if (active) {
+        ctx.fillStyle = "rgba(120,160,220,0.22)";
+        ctx.fillRect(leftX + 8, iy - 16, leftW - 16, rowH - 2);
+        ctx.strokeStyle = "rgba(170,210,255,0.32)";
+        ctx.strokeRect(leftX + 8.5, iy - 15.5, leftW - 17, rowH - 3);
+      }
+
+      ctx.fillStyle = item?.color || "#d9dee8";
+      ctx.font = "bold 13px Arial";
+      ctx.fillText(item?.name || "Unknown Gear", leftX + 16, iy);
+
+      ctx.fillStyle = "#92a3b8";
+      ctx.font = "12px Arial";
+      ctx.fillText(
+        `${(item?.slot || "gear").toUpperCase()}  Lv.${item?.level || 1}  ${(item?.rarity || "common").toUpperCase()}`,
+        leftX + 190,
+        iy
+      );
+    }
+
+    const rightX = x + 408;
+    const rightY = leftY;
+    const rightW = panelW - (rightX - x) - 18;
+    const rightH = leftH;
+
+    ctx.fillStyle = "rgba(255,255,255,0.04)";
+    ctx.fillRect(rightX, rightY, rightW, rightH);
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.strokeRect(rightX + 0.5, rightY + 0.5, rightW - 1, rightH - 1);
+
+    ctx.fillStyle = "#dce6f4";
+    ctx.font = "bold 15px Arial";
+    ctx.fillText("Equipped", rightX + 12, rightY + 22);
+
+    const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+    for (let i = 0; i < slots.length; i++) {
+      const slot = slots[i];
+      const item = equip[slot];
+      const iy = rightY + 46 + i * 34;
+
+      ctx.fillStyle = "#9db0c8";
+      ctx.font = "12px Arial";
+      ctx.fillText(slot.toUpperCase(), rightX + 12, iy);
+
+      ctx.fillStyle = item?.color || "#dce6f4";
+      ctx.font = "bold 13px Arial";
+      ctx.fillText(item?.name || "-", rightX + 110, iy);
+    }
+
+    const picked = items[selected];
+    const statX = rightX + 12;
+    let sy = rightY + 272;
+
+    ctx.fillStyle = "#dce6f4";
+    ctx.font = "bold 15px Arial";
+    ctx.fillText("Selected Item", statX, sy);
+    sy += 22;
+
+    if (picked) {
+      ctx.fillStyle = picked.color || "#eef4fb";
+      ctx.font = "bold 14px Arial";
+      ctx.fillText(picked.name || "Unknown Gear", statX, sy);
+      sy += 20;
+
+      ctx.fillStyle = "#9cb0c9";
+      ctx.font = "12px Arial";
+      ctx.fillText(
+        `${(picked.slot || "gear").toUpperCase()}  Lv.${picked.level || 1}  ${(picked.rarity || "common").toUpperCase()}`,
+        statX,
+        sy
+      );
+      sy += 20;
+
+      const stats = picked.stats || {};
+      const lines = [];
+      if (stats.dmg) lines.push(`Damage +${stats.dmg}`);
+      if (stats.armor) lines.push(`Armor +${stats.armor}`);
+      if (stats.hp) lines.push(`Max HP +${stats.hp}`);
+      if (stats.mana) lines.push(`Max Mana +${stats.mana}`);
+      if (stats.crit) lines.push(`Crit +${Math.round(stats.crit * 100)}%`);
+      if (stats.critMult) lines.push(`Crit Power +${Math.round(stats.critMult * 100)}%`);
+      if (stats.move) lines.push(`Move +${Math.round(stats.move * 100)}%`);
+
+      ctx.fillStyle = "#dfe8f5";
+      for (const line of lines) {
+        ctx.fillText(line, statX, sy);
+        sy += 18;
+      }
+
+      sy += 12;
+      ctx.fillStyle = "#95a7bd";
+      ctx.fillText("Enter/E equip", statX, sy);
+      sy += 16;
+      ctx.fillText("X/Delete salvage", statX, sy);
+    } else {
+      ctx.fillStyle = "#8ea1b8";
+      ctx.font = "12px Arial";
+      ctx.fillText("No item selected.", statX, sy);
+    }
+
+    ctx.restore();
+  }
+
+  _drawSkillsPanel(ctx, game) {
+    const panelW = Math.min(this.w - 110, 620);
+    const panelH = Math.min(this.h - 120, 400);
+    const x = ((this.w - panelW) / 2) | 0;
+    const y = ((this.h - panelH) / 2) | 0;
+
+    const defs = game.skillDefs || {};
+    const prog = game.skillProg || {};
+
+    ctx.save();
+    ctx.fillStyle = "rgba(8,10,14,0.92)";
+    ctx.fillRect(x, y, panelW, panelH);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.strokeRect(x + 0.5, y + 0.5, panelW - 1, panelH - 1);
+
+    ctx.fillStyle = "#eef4fb";
+    ctx.font = "bold 22px Arial";
+    ctx.fillText("Skills", x + 18, y + 30);
+
+    ctx.fillStyle = "#95a7bd";
+    ctx.font = "13px Arial";
+    ctx.fillText("K or Esc to close", x + 18, y + 52);
+
+    const order = ["q", "w", "e", "r"];
+    let sy = y + 90;
+
+    for (const key of order) {
+      const def = defs[key];
+      const s = prog[key] || { xp: 0, level: 1 };
+      const need = 10 + (s.level - 1) * 8;
+      const frac = clamp((s.xp || 0) / Math.max(1, need), 0, 1);
+
+      ctx.fillStyle = "rgba(255,255,255,0.04)";
+      ctx.fillRect(x + 18, sy - 18, panelW - 36, 58);
+      ctx.strokeStyle = "rgba(255,255,255,0.08)";
+      ctx.strokeRect(x + 18.5, sy - 17.5, panelW - 37, 57);
+
+      ctx.fillStyle = def?.color || "#dbe7ff";
+      ctx.font = "bold 16px Arial";
+      ctx.fillText(`${(key || "?").toUpperCase()}  ${def?.name || "Skill"}`, x + 30, sy);
+
+      ctx.fillStyle = "#9bb0c8";
+      ctx.font = "12px Arial";
+      ctx.fillText(`Mana ${def?.mana || 0}`, x + 190, sy);
+      ctx.fillText(`Cooldown ${(def?.cd || 0).toFixed(1)}s`, x + 270, sy);
+      ctx.fillText(`Level ${s.level || 1}`, x + 400, sy);
+
+      ctx.fillStyle = "rgba(255,255,255,0.08)";
+      ctx.fillRect(x + 30, sy + 10, panelW - 120, 10);
+      ctx.fillStyle = def?.color || "#b7ceff";
+      ctx.fillRect(x + 30, sy + 10, ((panelW - 120) * frac) | 0, 10);
+
+      ctx.fillStyle = "#dce6f4";
+      ctx.fillText(`XP ${s.xp || 0} / ${need}`, x + panelW - 120, sy + 19);
+
+      sy += 74;
+    }
+
+    ctx.restore();
+  }
+
+  _drawShopPanel(ctx, game) {
+    const w = 430;
+    const h = 260;
+    const x = ((this.w - w) / 2) | 0;
+    const y = ((this.h - h) / 2) | 0;
+
+    const items = game?.shop?.items || [];
+
+    ctx.save();
+    ctx.fillStyle = "rgba(8,10,14,0.92)";
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+
+    ctx.fillStyle = "#eef4fb";
+    ctx.font = "bold 22px Arial";
+    ctx.fillText("Camp Shop", x + 18, y + 30);
+
+    ctx.fillStyle = "#95a7bd";
+    ctx.font = "12px Arial";
+    ctx.fillText("1-4 buy • Esc close", x + 18, y + 48);
+
+    ctx.fillStyle = "#d7dfeb";
+    ctx.font = "bold 13px Arial";
+    ctx.fillText(`Gold: ${game?.hero?.gold || 0}`, x + w - 110, y + 30);
+
+    for (let i = 0; i < 4; i++) {
+      const item = items[i];
+      const yy = y + 70 + i * 42;
+
+      ctx.fillStyle = "rgba(255,255,255,0.04)";
+      ctx.fillRect(x + 16, yy - 16, w - 32, 32);
+
+      ctx.fillStyle = "#dfe8f5";
+      ctx.font = "13px Arial";
+      if (item) {
+        ctx.fillText(`${i + 1}. ${item.name}`, x + 24, yy + 4);
+        ctx.fillStyle = "#ffd98a";
+        ctx.fillText(`${item.price}g`, x + w - 80, yy + 4);
+      } else {
+        ctx.fillStyle = "#7d899a";
+        ctx.fillText(`${i + 1}. Sold out`, x + 24, yy + 4);
+      }
+    }
+
+    ctx.restore();
+  }
+
+  _drawSimplePanel(ctx, title, body = "") {
+    const panelW = Math.min(this.w - 140, 520);
+    const panelH = Math.min(this.h - 160, 260);
+    const x = ((this.w - panelW) / 2) | 0;
+    const y = ((this.h - panelH) / 2) | 0;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(8,10,14,0.92)";
+    ctx.fillRect(x, y, panelW, panelH);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.strokeRect(x + 0.5, y + 0.5, panelW - 1, panelH - 1);
+
+    ctx.fillStyle = "#eef4fb";
+    ctx.font = "bold 22px Arial";
+    ctx.textAlign = "left";
+    ctx.fillText(title, x + 20, y + 34);
+
+    if (body) {
+      ctx.fillStyle = "#a7b8cc";
+      ctx.font = "14px Arial";
+      this._drawWrappedText(ctx, body, x + 20, y + 74, panelW - 40, 20);
+    }
+
+    ctx.fillStyle = "#95a7bd";
+    ctx.font = "12px Arial";
+    ctx.fillText("Esc to close", x + 20, y + panelH - 14);
+
+    ctx.restore();
+  }
+
+  _drawWrappedText(ctx, text, x, y, maxWidth, lineHeight) {
+    const words = String(text || "").split(/\s+/);
+    let line = "";
+    let yy = y;
+
+    for (let i = 0; i < words.length; i++) {
+      const test = line ? line + " " + words[i] : words[i];
+      if (ctx.measureText(test).width > maxWidth && line) {
+        ctx.fillText(line, x, yy);
+        line = words[i];
+        yy += lineHeight;
+      } else {
+        line = test;
+      }
+    }
+
+    if (line) {
+      ctx.fillText(line, x, yy);
+    }
+  }
+}
+===== ./src/util.js =====
+// src/util.js
+// v102.4 FULL UTIL RESTORE
+// - math helpers
+// - seeded RNG
+// - hash helpers
+// - value noise + fbm
+// - geometry helpers
+// - random helpers
+// - built to support current game.js / world.js / entities.js / ui.js
+
+export function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+export function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+export function smoothstep(edge0, edge1, x) {
+  const t = clamp((x - edge0) / Math.max(1e-9, edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+export function dist2(x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  return dx * dx + dy * dy;
+}
+
+export function dist(x1, y1, x2, y2) {
+  return Math.sqrt(dist2(x1, y1, x2, y2));
+}
+
+export function norm(x, y) {
+  const d = Math.sqrt(x * x + y * y) || 1;
+  return { x: x / d, y: y / d };
+}
+
+export function angleTo(x1, y1, x2, y2) {
+  return Math.atan2(y2 - y1, x2 - x1);
+}
+
+export function rotateVec(x, y, a) {
+  const ca = Math.cos(a);
+  const sa = Math.sin(a);
+  return {
+    x: x * ca - y * sa,
+    y: x * sa + y * ca,
+  };
+}
+
+export function randRange(min, max) {
+  return Math.random() * (max - min) + min;
+}
+
+export function randInt(min, max) {
+  return (Math.random() * (max - min + 1) | 0) + min;
+}
+
+export function chance(p) {
+  return Math.random() < p;
+}
+
+export function pick(arr) {
+  if (!arr || !arr.length) return null;
+  return arr[(Math.random() * arr.length) | 0];
+}
+
+export function shuffleInPlace(arr) {
+  if (!Array.isArray(arr)) return arr;
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = (Math.random() * (i + 1)) | 0;
+    const t = arr[i];
+    arr[i] = arr[j];
+    arr[j] = t;
+  }
+  return arr;
+}
+
+export class RNG {
+  constructor(seed = 123456789) {
+    this.seed = seed >>> 0;
+    if (this.seed === 0) this.seed = 123456789;
+  }
+
+  next() {
+    let x = this.seed;
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    this.seed = x >>> 0;
+    return this.seed;
+  }
+
+  float() {
+    return this.next() / 0xffffffff;
+  }
+
+  int(min, max) {
+    return (this.float() * (max - min + 1) | 0) + min;
+  }
+
+  range(min, max) {
+    return min + this.float() * (max - min);
+  }
+
+  chance(p) {
+    return this.float() < p;
+  }
+
+  pick(arr) {
+    if (!arr || !arr.length) return null;
+    return arr[this.int(0, arr.length - 1)];
+  }
+
+  sign() {
+    return this.float() < 0.5 ? -1 : 1;
+  }
+}
+
+export function hash2(x, y, seed = 0) {
+  let h = (x | 0) * 374761393 + (y | 0) * 668265263 + (seed | 0) * 1446647;
+  h = (h ^ (h >> 13)) * 1274126177;
+  return (h ^ (h >> 16)) >>> 0;
+}
+
+export function hash3(x, y, z, seed = 0) {
+  let h =
+    (x | 0) * 374761393 +
+    (y | 0) * 668265263 +
+    (z | 0) * 2147483647 +
+    (seed | 0) * 1446647;
+  h = (h ^ (h >> 13)) * 1274126177;
+  return (h ^ (h >> 16)) >>> 0;
+}
+
+function fade(t) {
+  return t * t * (3 - 2 * t);
+}
+
+function noise2D(x, y, seed = 0) {
+  const xi = Math.floor(x);
+  const yi = Math.floor(y);
+
+  const xf = x - xi;
+  const yf = y - yi;
+
+  const h00 = hash2(xi, yi, seed) / 0xffffffff;
+  const h10 = hash2(xi + 1, yi, seed) / 0xffffffff;
+  const h01 = hash2(xi, yi + 1, seed) / 0xffffffff;
+  const h11 = hash2(xi + 1, yi + 1, seed) / 0xffffffff;
+
+  const u = fade(xf);
+  const v = fade(yf);
+
+  const nx0 = lerp(h00, h10, u);
+  const nx1 = lerp(h01, h11, u);
+
+  return lerp(nx0, nx1, v);
+}
+
+export function fbm(x, y, seed = 0, octaves = 4) {
+  let value = 0;
+  let amp = 0.5;
+  let freq = 1;
+  let normFactor = 0;
+
+  for (let i = 0; i < octaves; i++) {
+    value += noise2D(x * freq, y * freq, seed + i * 101) * amp;
+    normFactor += amp;
+    freq *= 2;
+    amp *= 0.5;
+  }
+
+  if (normFactor <= 0) return 0;
+  return value / normFactor;
+}
+
+export function ridge(x, y, seed = 0, octaves = 4) {
+  let value = 0;
+  let amp = 0.5;
+  let freq = 1;
+  let normFactor = 0;
+
+  for (let i = 0; i < octaves; i++) {
+    const n = noise2D(x * freq, y * freq, seed + i * 131);
+    value += (1 - Math.abs(n * 2 - 1)) * amp;
+    normFactor += amp;
+    freq *= 2;
+    amp *= 0.5;
+  }
+
+  if (normFactor <= 0) return 0;
+  return value / normFactor;
+}
+
+export function distancePointToSegment(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+
+  if (dx === 0 && dy === 0) {
+    return dist(px, py, x1, y1);
+  }
+
+  const t = clamp(
+    ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy),
+    0,
+    1
+  );
+
+  const lx = x1 + t * dx;
+  const ly = y1 + t * dy;
+
+  return dist(px, py, lx, ly);
+}
+
+export function pointInRect(px, py, x, y, w, h) {
+  return px >= x && px <= x + w && py >= y && py <= y + h;
+}
+
+export function circleIntersectsCircle(x1, y1, r1, x2, y2, r2) {
+  const rr = r1 + r2;
+  return dist2(x1, y1, x2, y2) <= rr * rr;
+}
+
+export function rectIntersectsRect(ax, ay, aw, ah, bx, by, bw, bh) {
+  return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+}
+===== ./src/world.js =====
+// src/world.js
+// v103.4 WORLD RESTORE (natural terrain + rivers + POIs)
+
+import { fbm, ridge, clamp, RNG } from "./util.js";
+
+export default class World {
+  constructor(seed = 1) {
+    this.seed = seed;
+    this.rng = new RNG(seed);
+
+    this.mapHalfSize = 5200;
+
+    this.spawn = { x: 0, y: 0 };
+
+    this.camps = [];
+    this.waystones = [];
+    this.dungeons = [];
+    this.docks = [];
+
+    this._initWorld();
+  }
+
+  /* =========================
+     WORLD GEN
+  ========================= */
+
+  _initWorld() {
+    this._generatePOIs();
+    this._findSafeSpawn();
+  }
+
+  _findSafeSpawn() {
+    // try multiple positions until we find safe land
+    for (let i = 0; i < 1000; i++) {
+      const x = this.rng.range(-500, 500);
+      const y = this.rng.range(-500, 500);
+
+      if (!this._isWater(x, y)) {
+        this.spawn.x = x;
+        this.spawn.y = y;
+        return;
+      }
+    }
+
+    this.spawn = { x: 0, y: 0 };
+  }
+
+  /* =========================
+     TERRAIN
+  ========================= */
+
+  _height(x, y) {
+    return fbm(x * 0.0006, y * 0.0006, this.seed, 5);
+  }
+
+  _moisture(x, y) {
+    return fbm(x * 0.0008, y * 0.0008, this.seed + 200, 4);
+  }
+
+  _isWater(x, y) {
+    const h = this._height(x, y);
+
+    // river carve
+    const river = this._riverField(x, y);
+
+    return h < 0.42 || river < 0.08;
+  }
+
+  _riverField(x, y) {
+    // curved rivers using noise distortion
+    const nx = x * 0.0015;
+    const ny = y * 0.0015;
+
+    const warpX = fbm(nx + 5, ny + 5, this.seed + 100) * 2;
+    const warpY = fbm(nx - 5, ny - 5, this.seed + 200) * 2;
+
+    const v = Math.abs(Math.sin(nx + warpX) + Math.cos(ny + warpY));
+
+    return v;
+  }
+
+  _tileColor(x, y) {
+    if (this._isWater(x, y)) {
+      return "#2a6fa8"; // blue water
+    }
+
+    const h = this._height(x, y);
+    const m = this._moisture(x, y);
+
+    if (h > 0.75) return "#bfc5c9"; // mountains
+    if (h > 0.6) return "#8c8f93";  // rocky
+    if (m > 0.6) return "#2e7d32";  // lush
+    if (m < 0.3) return "#a89b6a";  // dry
+    return "#4f7d45";               // grass
+  }
+
+  /* =========================
+     WALKING
+  ========================= */
+
+  canWalk(x, y) {
+    return !this._isWater(x, y);
+  }
+
+  /* =========================
+     POIs
+  ========================= */
+
+  _generatePOIs() {
+    for (let i = 0; i < 20; i++) {
+      const x = this.rng.range(-3000, 3000);
+      const y = this.rng.range(-3000, 3000);
+
+      if (!this._isWater(x, y)) {
+        this.camps.push({ x, y });
+      }
+    }
+
+    for (let i = 0; i < 6; i++) {
+      this.waystones.push({
+        x: this.rng.range(-4000, 4000),
+        y: this.rng.range(-4000, 4000),
+      });
+    }
+
+    for (let i = 0; i < 10; i++) {
+      this.dungeons.push({
+        x: this.rng.range(-4500, 4500),
+        y: this.rng.range(-4500, 4500),
+      });
+    }
+
+    // docks near water edges
+    for (let i = 0; i < 20; i++) {
+      const x = this.rng.range(-4000, 4000);
+      const y = this.rng.range(-4000, 4000);
+
+      if (!this._isWater(x, y) && this._isWater(x + 30, y)) {
+        this.docks.push({ x, y });
+      }
+    }
+  }
+
+  /* =========================
+     DRAW
+  ========================= */
+
+  draw(ctx, camera, hero) {
+    const size = 40;
+
+    const startX = Math.floor((camera.x - 200) / size) * size;
+    const startY = Math.floor((camera.y - 200) / size) * size;
+
+    const endX = camera.x + ctx.canvas.width + 200;
+    const endY = camera.y + ctx.canvas.height + 200;
+
+    for (let x = startX; x < endX; x += size) {
+      for (let y = startY; y < endY; y += size) {
+        ctx.fillStyle = this._tileColor(x, y);
+        ctx.fillRect(x, y, size + 1, size + 1);
+      }
+    }
+
+    this._drawPOIs(ctx);
+  }
+
+  _drawPOIs(ctx) {
+    ctx.fillStyle = "#ff0";
+    for (const c of this.camps) {
+      ctx.fillRect(c.x - 5, c.y - 5, 10, 10);
+    }
+
+    ctx.fillStyle = "#0ff";
+    for (const w of this.waystones) {
+      ctx.fillRect(w.x - 5, w.y - 5, 10, 10);
+    }
+
+    ctx.fillStyle = "#f0f";
+    for (const d of this.dungeons) {
+      ctx.fillRect(d.x - 5, d.y - 5, 10, 10);
+    }
+
+    ctx.fillStyle = "#fff";
+    for (const d of this.docks) {
+      ctx.fillRect(d.x - 4, d.y - 4, 8, 8);
+    }
+  }
+}

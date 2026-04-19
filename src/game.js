@@ -1,11 +1,9 @@
 // src/game.js
-// v101 FULLER GAMEPLAY RESTORE
-// - restores fuller gameplay loop on top of current stable build
-// - inventory / equip / salvage
-// - skills / cooldowns / mouse aim
-// - camp shop / waystones / docks / dungeon entry marker
-// - zone messages / autosave / loot pickup / enemy spawning
-// - works with current main.js, ui.js, world.js, entities.js, util.js, save.js
+// v104 GAME RECOVERY RESTORE
+// - full file
+// - fixes truncated _spawnWorldEnemies block
+// - keeps current fuller gameplay systems
+// - compatible with current world.js / entities.js / ui.js / util.js / save.js
 
 import World from "./world.js";
 import { clamp, dist2, norm, RNG, hash2 } from "./util.js";
@@ -594,6 +592,17 @@ export default class Game {
     }
   }
 
+  _pickEnemyKind(zone) {
+    const z = String(zone || "").toLowerCase();
+    if (z.includes("wild")) return Math.random() < 0.5 ? "wolf" : "stalker";
+    if (z.includes("stone")) return Math.random() < 0.5 ? "brute" : "blob";
+    if (z.includes("ash")) return Math.random() < 0.5 ? "ashling" : "brute";
+    if (z.includes("shore")) return Math.random() < 0.5 ? "scout" : "caster";
+
+    const pool = ["blob", "wolf", "stalker", "scout", "caster", "brute"];
+    return pool[(Math.random() * pool.length) | 0];
+  }
+
   _spawnWorldEnemies(dt) {
     this._spawnTimer -= dt;
     if (this._spawnTimer > 0) return;
@@ -619,7 +628,16 @@ export default class Game {
       const kind = this._pickEnemyKind(zone);
       const elite = Math.random() < 0.08;
 
-      const e = new Enemy(x, y, Math.max(1, this.hero.level), kind, hash2(x | 0, y | 0, this.seed), elite, false);
+      const e = new Enemy(
+        x,
+        y,
+        Math.max(1, this.hero.level),
+        kind,
+        hash2(x | 0, y | 0, this.seed),
+        elite,
+        false
+      );
+
       this.enemies.push(e);
       break;
     }
@@ -652,17 +670,6 @@ export default class Game {
         new Enemy(x, y, Math.max(1, this.hero.level), kind, hash2(x | 0, y | 0, this.seed), false, false)
       );
     }
-  }
-
-  _pickEnemyKind(zone) {
-    const z = String(zone || "").toLowerCase();
-    if (z.includes("wild")) return Math.random() < 0.5 ? "wolf" : "stalker";
-    if (z.includes("stone")) return Math.random() < 0.5 ? "brute" : "blob";
-    if (z.includes("ash")) return Math.random() < 0.5 ? "ashling" : "brute";
-    if (z.includes("shore")) return Math.random() < 0.5 ? "scout" : "caster";
-
-    const pool = ["blob", "wolf", "stalker", "scout", "caster", "brute"];
-    return pool[(Math.random() * pool.length) | 0];
   }
 
   _updateEnemies(dt) {
@@ -726,7 +733,10 @@ export default class Game {
     if (Math.random() < (e.elite ? 0.26 : 0.10)) {
       const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
       const slot = slots[(Math.random() * slots.length) | 0];
-      const rarity = e.elite ? (Math.random() < 0.45 ? "rare" : "uncommon") : (Math.random() < 0.18 ? "rare" : "uncommon");
+      const rarity = e.elite
+        ? (Math.random() < 0.45 ? "rare" : "uncommon")
+        : (Math.random() < 0.18 ? "rare" : "uncommon");
+
       const item = makeGear(slot, Math.max(1, e.level || 1), rarity, hash2(e.x | 0, e.y | 0, this.time | 0));
       this.loot.push(new Loot(e.x - 8, e.y, "gear", item));
     }
@@ -852,7 +862,13 @@ export default class Game {
         rarityRoll > 0.56 ? "uncommon" :
         "common";
 
-      const gear = makeGear(slot, Math.max(1, this.hero.level), rarity, hash2(camp.x | 0, camp.y | 0, i + (this.time | 0)));
+      const gear = makeGear(
+        slot,
+        Math.max(1, this.hero.level),
+        rarity,
+        hash2(camp.x | 0, camp.y | 0, i + (this.time | 0))
+      );
+
       items.push({
         kind: "gear",
         name: gear.name,
@@ -965,7 +981,11 @@ export default class Game {
       }
       return false;
     };
-    return check(this.world.camps) || check(this.world.docks) || check(this.world.waystones) || check(this.world.dungeons);
+
+    return check(this.world.camps) ||
+      check(this.world.docks) ||
+      check(this.world.waystones) ||
+      check(this.world.dungeons);
   }
 
   _cleanupFarEntities() {
