@@ -1,9 +1,10 @@
 // src/world.js
-// v104.1 WORLD FIXED FULL FILE
-// - syntactically complete
-// - safe spawn handling
-// - compatible with current game.js / ui.js
+// v104.2 WORLD LAND BALANCE FIX
+// - much more land
+// - narrower rivers
+// - safer spawn meadow
 // - keeps camps / waystones / dungeons / docks / minimap support
+// - compatible with current game.js / ui.js / util.js
 
 import { fbm, clamp, RNG } from "./util.js";
 
@@ -45,56 +46,74 @@ export default class World {
   }
 
   _initWorld() {
-    this._generatePOIs();
     this._findSafeSpawn();
+    this._generatePOIs();
     this._mapDirty = true;
   }
 
   _height(x, y) {
-    return fbm(x * 0.0006, y * 0.0006, this.seed, 5);
+    const base = fbm(x * 0.00042, y * 0.00042, this.seed, 5);
+    const detail = fbm(x * 0.0012, y * 0.0012, this.seed + 77, 3);
+    return base * 0.82 + detail * 0.18;
   }
 
   _moisture(x, y) {
-    return fbm(x * 0.0008, y * 0.0008, this.seed + 200, 4);
+    const a = fbm(x * 0.0007, y * 0.0007, this.seed + 200, 4);
+    const b = fbm(x * 0.0015, y * 0.0015, this.seed + 311, 2);
+    return a * 0.8 + b * 0.2;
   }
 
   _riverField(x, y) {
-    const nx = x * 0.0014;
-    const ny = y * 0.0014;
+    const nx = x * 0.00105;
+    const ny = y * 0.00105;
 
-    const warpX = fbm(nx + 7, ny - 5, this.seed + 100, 3) * 1.8;
-    const warpY = fbm(nx - 6, ny + 4, this.seed + 200, 3) * 1.8;
+    const warpX = (fbm(nx + 7.3, ny - 5.1, this.seed + 100, 3) - 0.5) * 2.1;
+    const warpY = (fbm(nx - 6.2, ny + 4.4, this.seed + 200, 3) - 0.5) * 2.1;
 
-    const v1 = Math.abs(Math.sin(nx * 1.15 + warpX) + Math.cos(ny * 0.82 + warpY));
-    const v2 = Math.abs(Math.sin((nx + ny) * 0.55 + warpX * 0.7));
-    return Math.min(v1, v2 + 0.28);
+    const r1 = Math.abs(Math.sin(nx * 0.95 + warpX * 1.3) + Math.cos(ny * 0.62 + warpY * 1.1));
+    const r2 = Math.abs(Math.sin((nx * 0.55 + ny * 0.32) + warpX * 0.85));
+    return Math.min(r1, r2 + 0.42);
+  }
+
+  _isRiverWater(x, y) {
+    const river = this._riverField(x, y);
+    return river < 0.03;
+  }
+
+  _isLowlandWater(x, y) {
+    const h = this._height(x, y);
+
+    // Much less flooding than before.
+    // Only very low terrain becomes water.
+    return h < 0.255;
   }
 
   _isWater(x, y) {
-    const h = this._height(x, y);
-    const river = this._riverField(x, y);
+    const dx = x - this.spawn.x;
+    const dy = y - this.spawn.y;
+    const spawnD2 = dx * dx + dy * dy;
 
-    const spawnDx = x - this.spawn.x;
-    const spawnDy = y - this.spawn.y;
-    const spawnD2 = spawnDx * spawnDx + spawnDy * spawnDy;
+    // Keep starting area clearly walkable.
+    if (spawnD2 < 320 * 320) return false;
 
-    if (spawnD2 < 220 * 220) return false;
-    return h < 0.42 || river < 0.08;
+    return this._isLowlandWater(x, y) || this._isRiverWater(x, y);
   }
 
   _tileColor(x, y) {
     if (this._isWater(x, y)) {
-      return "#2a6fa8";
+      const river = this._riverField(x, y);
+      return river < 0.03 ? "#2f7fb8" : "#2c6a9a";
     }
 
     const h = this._height(x, y);
     const m = this._moisture(x, y);
 
-    if (h > 0.78) return "#bcc4c9";
-    if (h > 0.66) return "#8b8f93";
-    if (m > 0.66) return "#2f7e35";
-    if (m < 0.28) return "#a79a69";
-    return "#4f7d45";
+    if (h > 0.82) return "#c3c9ce";
+    if (h > 0.70) return "#8f938f";
+    if (m > 0.72) return "#2f7f39";
+    if (m > 0.56) return "#4f8a46";
+    if (m < 0.24) return "#a79a69";
+    return "#6aa04f";
   }
 
   canWalk(x, y, actor = null) {
@@ -114,19 +133,21 @@ export default class World {
   getMoveModifier(x, y) {
     if (this._isWater(x, y)) return 0.92;
     const h = this._height(x, y);
-    if (h > 0.7) return 0.94;
+    if (h > 0.74) return 0.95;
     return 1;
   }
 
   getZoneName(x, y) {
     if (this._isWater(x, y)) return "river";
+
     const h = this._height(x, y);
     const m = this._moisture(x, y);
 
-    if (h > 0.78) return "mountain";
-    if (h > 0.66) return "stone flats";
-    if (m > 0.66) return "deep wilds";
-    if (m < 0.28) return "ashlands";
+    if (h > 0.82) return "mountain";
+    if (h > 0.70) return "stone flats";
+    if (m > 0.72) return "deep wilds";
+    if (m < 0.24) return "ashlands";
+    if (m > 0.56) return "forest";
     return "meadow";
   }
 
@@ -147,20 +168,22 @@ export default class World {
       { x: 140, y: -110 },
       { x: 220, y: 170 },
       { x: -240, y: -180 },
+      { x: 310, y: 60 },
+      { x: -320, y: 40 },
     ];
 
     for (const p of tries) {
-      const safe = this._findSafeLandPatchNear(p.x, p.y, 360);
+      const safe = this._findSafeLandPatchNear(p.x, p.y, 420);
       if (safe) {
         this.spawn = safe;
         return;
       }
     }
 
-    for (let i = 0; i < 1600; i++) {
-      const x = this.rng.range(-900, 900);
-      const y = this.rng.range(-900, 900);
-      if (!this._isWater(x, y)) {
+    for (let i = 0; i < 1800; i++) {
+      const x = this.rng.range(-1200, 1200);
+      const y = this.rng.range(-1200, 1200);
+      if (!this._isLowlandWater(x, y) && !this._isRiverWater(x, y)) {
         this.spawn = { x, y };
         return;
       }
@@ -169,12 +192,12 @@ export default class World {
     this.spawn = { x: 0, y: 0 };
   }
 
-  _findSafeLandPatchNear(x, y, radius = 180) {
-    for (let r = 0; r <= radius; r += 20) {
-      for (let a = 0; a < Math.PI * 2; a += Math.PI / 10) {
+  _findSafeLandPatchNear(x, y, radius = 200) {
+    for (let r = 0; r <= radius; r += 18) {
+      for (let a = 0; a < Math.PI * 2; a += Math.PI / 12) {
         const px = x + Math.cos(a) * r;
         const py = y + Math.sin(a) * r;
-        if (!this._isWater(px, py)) {
+        if (!this._isLowlandWater(px, py) && !this._isRiverWater(px, py)) {
           return { x: px, y: py };
         }
       }
@@ -202,7 +225,7 @@ export default class World {
       const p = this._findSafeLandPatchNear(
         this.rng.range(-3000, 3000),
         this.rng.range(-3000, 3000),
-        220
+        260
       );
       if (p) this.camps.push({ x: p.x, y: p.y, id: `camp-${i}` });
     }
@@ -211,7 +234,7 @@ export default class World {
       const p = this._findSafeLandPatchNear(
         this.rng.range(-4000, 4000),
         this.rng.range(-4000, 4000),
-        260
+        280
       );
       if (p) this.waystones.push({ x: p.x, y: p.y, id: `way-${i}` });
     }
@@ -220,22 +243,22 @@ export default class World {
       const p = this._findSafeLandPatchNear(
         this.rng.range(-4500, 4500),
         this.rng.range(-4500, 4500),
-        260
+        280
       );
       if (p) this.dungeons.push({ x: p.x, y: p.y, id: `dng-${i}` });
     }
 
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 70; i++) {
       const x = this.rng.range(-4200, 4200);
       const y = this.rng.range(-4200, 4200);
 
-      if (!this._isWater(x, y) && this._isWater(x + 28, y)) {
-        this.docks.push({ x, y, id: `dock-${this.docks.length}` });
-      } else if (!this._isWater(x, y) && this._isWater(x - 28, y)) {
-        this.docks.push({ x, y, id: `dock-${this.docks.length}` });
-      } else if (!this._isWater(x, y) && this._isWater(x, y + 28)) {
-        this.docks.push({ x, y, id: `dock-${this.docks.length}` });
-      } else if (!this._isWater(x, y) && this._isWater(x, y - 28)) {
+      const land = !this._isWater(x, y);
+      const waterR = this._isWater(x + 30, y);
+      const waterL = this._isWater(x - 30, y);
+      const waterD = this._isWater(x, y + 30);
+      const waterU = this._isWater(x, y - 30);
+
+      if (land && (waterR || waterL || waterD || waterU)) {
         this.docks.push({ x, y, id: `dock-${this.docks.length}` });
       }
 
@@ -261,9 +284,12 @@ export default class World {
 
         if (!this._isWater(x, y)) {
           const m = this._moisture(x, y);
-          if (m > 0.62 && ((x + y) / size) % 5 === 0) {
-            ctx.fillStyle = "rgba(255,255,255,0.04)";
-            ctx.fillRect(x + 6, y + 8, 8, 12);
+          if (m > 0.66 && (((x / size) | 0) + ((y / size) | 0)) % 5 === 0) {
+            ctx.fillStyle = "rgba(255,255,255,0.035)";
+            ctx.fillRect(x + 7, y + 8, 8, 12);
+          } else if (m > 0.48 && (((x / size) | 0) + ((y / size) | 0)) % 7 === 0) {
+            ctx.fillStyle = "rgba(20,60,18,0.18)";
+            ctx.fillRect(x + 12, y + 10, 5, 9);
           }
         } else {
           ctx.fillStyle = "rgba(255,255,255,0.05)";
