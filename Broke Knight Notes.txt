@@ -1,0 +1,48 @@
+BROKE KNIGHT NOTES
+
+Project copy:
+C:\Users\Jimmy\Documents\Codex\2026-04-21-files-mentioned-by-the-user-all\Broke Knight
+
+Game file:
+C:\Users\Jimmy\Documents\Codex\2026-04-21-files-mentioned-by-the-user-all\Broke Knight\index.html
+
+Important:
+Opening index.html directly as a file may not load the JavaScript modules correctly in some browsers.
+Use the local server below when possible.
+
+How to run:
+1. Open PowerShell.
+2. Run:
+   cd "C:\Users\Jimmy\Documents\Codex\2026-04-21-files-mentioned-by-the-user-all\Broke Knight"
+3. Run:
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\serve-broke-knight.ps1
+4. Open this URL in a browser:
+   http://localhost:8000/
+
+Controls:
+Arrow keys - move
+Mouse - aim
+Click or Q - Spark attack
+W - Nova
+E - Dash
+R - Orb
+1 - Health potion
+2 - Mana potion
+I - Inventory
+M - Map
+K - Skills
+F - Interact
+B - Dock or sail
+Esc - Close menus or leave dungeon
+
+What Codex did:
+- Reconstructed the project from:
+  C:\Users\Jimmy\Desktop\Broke Knight\all-project.txt
+- Created a working copy in the Codex workspace.
+- Added serve-broke-knight.ps1, a small local static server for the browser game.
+- Verified the server can return the game HTML with HTTP 200.
+- Left the Desktop copy untouched.
+
+Notes:
+Node.js was blocked in the Codex environment, so JavaScript syntax checks could not be run with node --check.
+The local server script works when launched from PowerShell.

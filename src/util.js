@@ -27,7 +27,7 @@ export function norm(x, y) {
 }
 
 // ======================
-// 🔥 NEW: REQUIRED FOR ROADS / RIVERS / BRIDGES
+// REQUIRED FOR ROADS / RIVERS / BRIDGES
 // ======================
 
 export function distancePointToSegment(px, py, ax, ay, bx, by) {

@@ -83,6 +83,7 @@ export default class UI {
     this._drawHUD(ctx, game);
     this._drawSpellBar(ctx, game);
     this._drawMinimap(ctx, game);
+    this._drawObjective(ctx, game);
     this._drawHelp(ctx);
     this._drawPrompt(ctx, game);
     this._drawToast(ctx, game);
@@ -95,7 +96,8 @@ export default class UI {
     else if (open === "inventory") this._drawInventoryPanel(ctx, game);
     else if (open === "skills") this._drawSkillsPanel(ctx, game);
     else if (open === "shop") this._drawShopPanel(ctx, game);
-    else if (open === "quests") this._drawSimplePanel(ctx, "Quests", "Quest tracking panel restored. Hook quest data next.");
+    else if (open === "quests") this._drawQuestPanel(ctx, game);
+    else if (open === "dev") this._drawDevPanel(ctx, game);
     else if (open === "options") this._drawSimplePanel(ctx, "Options", "Options panel restored. Hook settings/actions next.");
     else if (open === "god" || open === "menu" || open === "gear") this._drawSimplePanel(ctx, "Menu", "Menu panel restored.");
   }
@@ -103,8 +105,9 @@ export default class UI {
   _syncViewFromCanvas() {
     const c = this.canvas;
     if (!c) return;
-    this.w = c.width | 0;
-    this.h = c.height | 0;
+    const rect = c.getBoundingClientRect?.();
+    this.w = Math.max(1, Math.round(rect?.width || c.clientWidth || c.width || this.w));
+    this.h = Math.max(1, Math.round(rect?.height || c.clientHeight || c.height || this.h));
   }
 
   _drawHUD(ctx, game) {
@@ -144,6 +147,10 @@ export default class UI {
     ctx.textAlign = "left";
     ctx.fillText(`Lv ${hero.level || 1}`, x, y + 2);
     ctx.fillText(`Gold ${hero.gold || 0}`, x + 92, y + 2);
+    if (game?.dev?.godMode) {
+      ctx.fillStyle = "#8fd8ff";
+      ctx.fillText("GOD", x + 176, y + 2);
+    }
 
     ctx.fillStyle = "rgba(255,255,255,0.08)";
     ctx.fillRect(x, y + 12, w, hpH);
@@ -423,17 +430,19 @@ export default class UI {
       "M map",
       "I inventory",
       "K skills",
+      "J quests",
+      "G dev",
       "Esc close",
     ];
 
     const x = 16;
-    const y = this.h - 152;
+    const y = this.h - 164;
 
     ctx.save();
     ctx.fillStyle = "rgba(8,10,14,0.50)";
-    ctx.fillRect(x - 8, y - 16, 150, 148);
+    ctx.fillRect(x - 8, y - 16, 150, 172);
     ctx.strokeStyle = "rgba(255,255,255,0.08)";
-    ctx.strokeRect(x - 7.5, y - 15.5, 149, 147);
+    ctx.strokeRect(x - 7.5, y - 15.5, 149, 171);
 
     ctx.fillStyle = "#dfe7f2";
     ctx.font = "bold 13px Arial";
@@ -448,11 +457,73 @@ export default class UI {
     ctx.restore();
   }
 
+  _drawObjective(ctx, game) {
+    const objective = game?.getObjective?.();
+    if (!objective) return;
+
+    const x = 16;
+    const y = 134;
+    const w = Math.min(360, Math.max(260, this.w - 32));
+    const h = 70;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(8,12,18,0.72)";
+    ctx.fillRect(x - 8, y - 8, w, h);
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.strokeRect(x - 7.5, y - 7.5, w - 1, h - 1);
+
+    ctx.fillStyle = objective.color || "#ffd36e";
+    ctx.font = "bold 13px Arial";
+    ctx.textAlign = "left";
+    ctx.fillText("Objective", x, y + 2);
+
+    ctx.fillStyle = "#eef4fb";
+    ctx.font = "bold 14px Arial";
+    ctx.fillText(objective.title || "Explore", x, y + 22);
+
+    ctx.fillStyle = "#9fb1c7";
+    ctx.font = "12px Arial";
+    ctx.fillText(objective.detail || "", x, y + 42);
+
+    if (objective.target && game?.hero) {
+      const dx = objective.target.x - game.hero.x;
+      const dy = objective.target.y - game.hero.y;
+      const angle = Math.atan2(dy, dx);
+      const cx = x + w - 38;
+      const cy = y + 26;
+
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(angle);
+      ctx.fillStyle = objective.color || "#ffd36e";
+      ctx.beginPath();
+      ctx.moveTo(13, 0);
+      ctx.lineTo(-8, -8);
+      ctx.lineTo(-4, 0);
+      ctx.lineTo(-8, 8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+
+      const dist = Math.max(0, Math.round(Math.hypot(dx, dy) / 10) * 10);
+      ctx.fillStyle = "#c7d4e6";
+      ctx.font = "11px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(`${dist}`, cx, y + 56);
+    }
+
+    ctx.restore();
+  }
+
   _drawPrompt(ctx, game) {
     let text = "";
 
-    if (game?._cachedNearbyCamp) text = "F: Camp shop";
+    if (game?.dungeon?.active) text = "F: Descend deeper";
+    else if (game?._cachedNearbyCamp) text = "F: Camp shop";
     else if (game?._cachedNearbyWaystone) text = "F: Use waystone";
+    else if (game?._cachedNearbyShrine) text = "F: Claim shrine";
+    else if (game?._cachedNearbyCache) text = "F: Open cache";
+    else if (game?._cachedNearbyDragonLair) text = "F: Wake dragon";
     else if (game?._cachedNearbyDungeon) text = "F: Enter dungeon";
     else if (game?._cachedNearbyDock) text = game?.hero?.state?.sailing ? "B: Dock" : "B: Sail";
 
@@ -510,8 +581,8 @@ export default class UI {
   }
 
   _drawMap(ctx, game) {
-    const panelW = Math.min(this.w - 60, 820);
-    const panelH = Math.min(this.h - 60, 820);
+    const panelW = Math.min(Math.max(this.w - 60, 280), 820);
+    const panelH = Math.min(Math.max(this.h - 60, 220), 820);
     const x = ((this.w - panelW) / 2) | 0;
     const y = ((this.h - panelH) / 2) | 0;
 
@@ -530,6 +601,9 @@ export default class UI {
     const mapY = y + 42;
     const mapW = panelW - 36;
     const mapH = panelH - 72;
+
+    ctx.fillStyle = "rgba(2,4,8,0.95)";
+    ctx.fillRect(mapX, mapY, mapW, mapH);
 
     const info = game?.world?.getMapInfo?.();
     if (info?.revealed) {
@@ -584,6 +658,9 @@ export default class UI {
     ctx.rect(x, y, w, h);
     ctx.clip();
 
+    ctx.fillStyle = "rgba(2,4,8,0.95)";
+    ctx.fillRect(x, y, w, h);
+
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         if (!revealed[r]?.[c]) continue;
@@ -610,8 +687,8 @@ export default class UI {
     const items = hero.inventory || [];
     const equip = hero.equip || {};
 
-    const panelW = Math.min(this.w - 90, 860);
-    const panelH = Math.min(this.h - 90, 540);
+    const panelW = Math.min(Math.max(this.w - 90, 700), 860);
+    const panelH = Math.min(Math.max(this.h - 90, 430), 540);
     const x = ((this.w - panelW) / 2) | 0;
     const y = ((this.h - panelH) / 2) | 0;
 
@@ -760,8 +837,8 @@ export default class UI {
   }
 
   _drawSkillsPanel(ctx, game) {
-    const panelW = Math.min(this.w - 110, 620);
-    const panelH = Math.min(this.h - 120, 400);
+    const panelW = Math.min(Math.max(this.w - 110, 520), 620);
+    const panelH = Math.min(Math.max(this.h - 120, 360), 400);
     const x = ((this.w - panelW) / 2) | 0;
     const y = ((this.h - panelH) / 2) | 0;
 
@@ -846,6 +923,13 @@ export default class UI {
     ctx.font = "bold 13px Arial";
     ctx.fillText(`Gold: ${game?.hero?.gold || 0}`, x + w - 110, y + 30);
 
+    const discount = Math.round((game?.shop?.discount || 0) * 100);
+    if (discount > 0) {
+      ctx.fillStyle = "#94e48d";
+      ctx.font = "12px Arial";
+      ctx.fillText(`Renown discount: ${discount}%`, x + w - 170, y + 48);
+    }
+
     for (let i = 0; i < 4; i++) {
       const item = items[i];
       const yy = y + 70 + i * 42;
@@ -868,9 +952,143 @@ export default class UI {
     ctx.restore();
   }
 
+  _drawQuestPanel(ctx, game) {
+    const w = Math.min(Math.max(this.w - 120, 430), 560);
+    const h = 380;
+    const x = ((this.w - w) / 2) | 0;
+    const y = ((this.h - h) / 2) | 0;
+    const q = game?.quest || {};
+    const count = q.count || 0;
+    const needed = Math.max(1, q.needed || 1);
+    const frac = clamp(count / needed, 0, 1);
+    const target = this._titleCase(q.target || "monster");
+
+    ctx.save();
+    ctx.fillStyle = "rgba(8,10,14,0.93)";
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+
+    ctx.fillStyle = "#eef4fb";
+    ctx.font = "bold 22px Arial";
+    ctx.fillText("Quests", x + 18, y + 32);
+
+    ctx.fillStyle = "#95a7bd";
+    ctx.font = "13px Arial";
+    ctx.fillText("J or Esc to close", x + 18, y + 54);
+
+    const shards = game?.progress?.relicShards || 0;
+    const next = shards < 3 ? 3 : shards < 7 ? 7 : shards < 12 ? 12 : shards < 20 ? 20 : 20;
+    const storyFrac = clamp(shards / Math.max(1, next), 0, 1);
+
+    ctx.fillStyle = "rgba(201,167,255,0.08)";
+    ctx.fillRect(x + 18, y + 78, w - 36, 88);
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.strokeRect(x + 18.5, y + 78.5, w - 37, 87);
+
+    ctx.fillStyle = "#c9a7ff";
+    ctx.font = "bold 16px Arial";
+    ctx.fillText("Restore the Ash Crown", x + 34, y + 106);
+
+    ctx.fillStyle = "#b7c6da";
+    ctx.font = "13px Arial";
+    ctx.fillText(`Relic shards: ${shards} / ${next}`, x + 34, y + 130);
+
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fillRect(x + 34, y + 142, w - 68, 10);
+    ctx.fillStyle = "#c9a7ff";
+    ctx.fillRect(x + 34, y + 142, ((w - 68) * storyFrac) | 0, 10);
+
+    ctx.fillStyle = "rgba(255,255,255,0.05)";
+    ctx.fillRect(x + 18, y + 184, w - 36, 112);
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.strokeRect(x + 18.5, y + 184.5, w - 37, 111);
+
+    ctx.fillStyle = "#ffd86e";
+    ctx.font = "bold 17px Arial";
+    ctx.fillText(`Bounty: Cull ${target}s`, x + 34, y + 214);
+
+    ctx.fillStyle = "#b7c6da";
+    ctx.font = "13px Arial";
+    ctx.fillText(`${count} / ${needed} defeated`, x + 34, y + 238);
+
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fillRect(x + 34, y + 254, w - 68, 12);
+    ctx.fillStyle = "#ffd86e";
+    ctx.fillRect(x + 34, y + 254, ((w - 68) * frac) | 0, 12);
+
+    ctx.fillStyle = "#dfe8f5";
+    ctx.font = "13px Arial";
+    ctx.fillText(`Reward: ${q.rewardGold || 0}g, ${q.rewardXp || 0} XP, and gear`, x + 34, y + 286);
+
+    const completed = game?.progress?.bountyCompletions || 0;
+    const elites = game?.progress?.eliteKills || 0;
+    ctx.fillStyle = "rgba(255,255,255,0.05)";
+    ctx.fillRect(x + 18, y + 316, w - 36, 42);
+
+    ctx.fillStyle = "#dce6f4";
+    ctx.font = "bold 13px Arial";
+    ctx.fillText("Renown", x + 34, y + 340);
+
+    ctx.fillStyle = "#9fb1c7";
+    ctx.font = "13px Arial";
+    ctx.fillText(`Bounties completed: ${completed}`, x + 34, y + 354);
+    ctx.fillText(`Elites defeated: ${elites}`, x + 250, y + 354);
+
+    ctx.restore();
+  }
+
+  _titleCase(text) {
+    const s = String(text || "");
+    return s ? s.charAt(0).toUpperCase() + s.slice(1) : "";
+  }
+
+  _drawDevPanel(ctx, game) {
+    const w = Math.min(Math.max(this.w - 120, 430), 560);
+    const h = 290;
+    const x = ((this.w - w) / 2) | 0;
+    const y = ((this.h - h) / 2) | 0;
+    const world = game?.world;
+    const explored = world?.exportDiscovery?.()?.length || 0;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(8,10,14,0.93)";
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+
+    ctx.fillStyle = "#eef4fb";
+    ctx.font = "bold 21px Arial";
+    ctx.fillText("Dev Tools", x + 18, y + 32);
+
+    ctx.fillStyle = "#9fb1c7";
+    ctx.font = "12px Arial";
+    ctx.fillText("G or Esc to close", x + 18, y + 52);
+
+    const lines = [
+      "1 heal HP and mana",
+      "2 add 250 gold",
+      "3 grant one level worth of XP",
+      "4 reveal entire world map",
+      "5 spawn a dragon nearby",
+      "6 teleport near closest dragon lair",
+      `7 god mode ${game?.dev?.godMode ? "ON" : "OFF"}`,
+      `Explored cells: ${explored}`,
+      `World span: ${((world?.mapHalfSize || 0) * 2).toLocaleString()} units`,
+    ];
+
+    ctx.font = "14px Arial";
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillStyle = i < 7 ? "#dfe8f5" : "#8ea1b8";
+      ctx.fillText(lines[i], x + 28, y + 86 + i * 24);
+    }
+
+    ctx.restore();
+  }
+
   _drawSimplePanel(ctx, title, body = "") {
-    const panelW = Math.min(this.w - 140, 520);
-    const panelH = Math.min(this.h - 160, 260);
+    const panelW = Math.min(Math.max(this.w - 140, 320), 520);
+    const panelH = Math.min(Math.max(this.h - 160, 220), 260);
     const x = ((this.w - panelW) / 2) | 0;
     const y = ((this.h - panelH) / 2) | 0;
 

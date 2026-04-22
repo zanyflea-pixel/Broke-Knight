@@ -579,6 +579,14 @@ export class Enemy {
       this.touchDps *= 1.08;
       this.colorA = "#8a7c67";
       this.colorB = "#564d41";
+    } else if (this.kind === "dragon") {
+      this.radius = 30;
+      this.hp *= 4.8;
+      this.moveSpeed *= 0.72;
+      this.touchDps *= 2.15;
+      this.rangedCd = 1.3;
+      this.colorA = "#b73535";
+      this.colorB = "#5d1721";
     }
 
     if (this.elite) {
@@ -617,6 +625,11 @@ export class Enemy {
       this.aggroRadius = 200;
       this.forgetRadius = 300;
       this.returnSpeedMul = 0.82;
+    } else if (this.kind === "dragon") {
+      this.leashRadius = 520;
+      this.aggroRadius = 420;
+      this.forgetRadius = 700;
+      this.returnSpeedMul = 0.72;
     } else {
       this.leashRadius = 200;
       this.aggroRadius = 190;
@@ -730,7 +743,7 @@ export class Enemy {
       return;
     }
 
-    if (this.kind === "caster") {
+    if (this.kind === "caster" || this.kind === "dragon") {
       if (d > 170) {
         this.vx = dir.x * this.moveSpeed;
         this.vy = dir.y * this.moveSpeed;
@@ -742,10 +755,11 @@ export class Enemy {
         this.vy = dir.x * this.moveSpeed * 0.65;
       }
 
-      if (this.rangedCd <= 0 && d < 260 && game?.projectiles) {
+      const range = this.kind === "dragon" ? 520 : 260;
+      if (this.rangedCd <= 0 && d < range && game?.projectiles) {
         const shotDir = norm(dx, dy);
-        const shotSpeed = 155;
-        const dmg = Math.max(5, Math.round(this.level * 0.60));
+        const shotSpeed = this.kind === "dragon" ? 245 : 155;
+        const dmg = this.kind === "dragon" ? Math.max(14, Math.round(this.level * 1.15)) : Math.max(5, Math.round(this.level * 0.60));
 
         game.projectiles.push(
           new Projectile(
@@ -758,13 +772,13 @@ export class Enemy {
             this.level,
             {
               friendly: false,
-              color: "rgba(115,176,255,0.92)",
-              radius: 4,
-              hitRadius: 10,
+              color: this.kind === "dragon" ? "rgba(255,105,50,0.94)" : "rgba(115,176,255,0.92)",
+              radius: this.kind === "dragon" ? 7 : 4,
+              hitRadius: this.kind === "dragon" ? 18 : 10,
             }
           )
         );
-        this.rangedCd = 2.2;
+        this.rangedCd = this.kind === "dragon" ? 1.55 : 2.2;
       }
     } else {
       this.vx = dir.x * this.moveSpeed;
@@ -797,6 +811,7 @@ export class Enemy {
     else if (this.kind === "scout") this._drawScout(ctx);
     else if (this.kind === "stalker") this._drawStalker(ctx);
     else if (this.kind === "ashling") this._drawAshling(ctx, t);
+    else if (this.kind === "dragon") this._drawDragon(ctx, t);
     else this._drawBlob(ctx, t);
 
     if (this.elite || this.boss) {
@@ -805,6 +820,31 @@ export class Enemy {
       ctx.beginPath();
       ctx.arc(0, 0, r + 4, 0, Math.PI * 2);
       ctx.stroke();
+
+      if (this.affix) {
+        ctx.fillStyle = "rgba(8,10,14,0.68)";
+        const labelW = Math.max(48, this.affix.length * 6 + 14);
+        ctx.fillRect(-labelW * 0.5, -r - 27, labelW, 15);
+        ctx.fillStyle = "#ffe69a";
+        ctx.font = "bold 10px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText(this.affix, 0, -r - 16);
+      }
+    }
+
+    if ((this.hp || 0) < (this.maxHp || 1) || this.boss) {
+      const bw = this.boss ? 54 : 34;
+      const bh = this.boss ? 6 : 4;
+      const y = r + 12;
+      const frac = Math.max(0, Math.min(1, (this.hp || 0) / Math.max(1, this.maxHp || 1)));
+
+      ctx.fillStyle = "rgba(0,0,0,0.46)";
+      ctx.fillRect(-bw * 0.5, y, bw, bh);
+      ctx.fillStyle = this.boss ? "#ff8a5c" : "#cf4d5f";
+      ctx.fillRect(-bw * 0.5, y, bw * frac, bh);
+      ctx.strokeStyle = "rgba(255,255,255,0.24)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(-bw * 0.5 + 0.5, y + 0.5, bw - 1, bh - 1);
     }
 
     ctx.restore();
@@ -816,6 +856,50 @@ export class Enemy {
     ctx.arc(-3, y, 1.2, 0, Math.PI * 2);
     ctx.arc(3, y, 1.2, 0, Math.PI * 2);
     ctx.fill();
+  }
+
+  _drawDragon(ctx, t) {
+    const flap = Math.sin(t * 5 + this.seed) * 4;
+
+    ctx.fillStyle = "rgba(40,8,12,0.28)";
+    ctx.beginPath();
+    ctx.ellipse(-20, 1, 25, 13 + flap * 0.2, -0.45, 0, Math.PI * 2);
+    ctx.ellipse(20, 1, 25, 13 - flap * 0.2, 0.45, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = this.colorB;
+    ctx.beginPath();
+    ctx.moveTo(-10, -5);
+    ctx.lineTo(-38, -22 + flap);
+    ctx.lineTo(-26, 10);
+    ctx.closePath();
+    ctx.moveTo(10, -5);
+    ctx.lineTo(38, -22 - flap);
+    ctx.lineTo(26, 10);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = this.colorB;
+    ctx.beginPath();
+    ctx.ellipse(0, 4, this.radius * 0.78, this.radius * 0.58, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = this.colorA;
+    ctx.beginPath();
+    ctx.ellipse(0, -8, this.radius * 0.58, this.radius * 0.42, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#ffb06e";
+    ctx.beginPath();
+    ctx.moveTo(-7, -20);
+    ctx.lineTo(-2, -31);
+    ctx.lineTo(1, -20);
+    ctx.moveTo(7, -20);
+    ctx.lineTo(12, -30);
+    ctx.lineTo(11, -18);
+    ctx.fill();
+
+    this._drawEyes(ctx, -10, "#ffd36e");
   }
 
   _drawBlob(ctx, t) {

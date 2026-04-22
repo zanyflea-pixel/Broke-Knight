@@ -236,5 +236,3 @@ window.addEventListener("pageshow", () => {
 canvas.addEventListener("mousedown", () => {
   focusCanvas();
 });
-
-boot();

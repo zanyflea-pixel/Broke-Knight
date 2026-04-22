@@ -105,9 +105,11 @@ export default class Save {
     const menuSrc = this._object(src.menu);
     const cooldownsSrc = this._object(src.cooldowns);
     const skillProgSrc = this._object(src.skillProg);
+    const questSrc = this._object(src.quest);
 
     const out = {
       seed: this._num(src.seed, 0, -2147483648, 2147483647),
+      worldBuild: typeof src.worldBuild === "string" ? src.worldBuild.slice(0, 40) : "",
 
       hero: {
         x: this._finiteCoord(heroSrc.x, 0),
@@ -120,7 +122,7 @@ export default class Save {
         nextXp: this._int(heroSrc.nextXp, 16, 1, 999999999),
 
         maxHp: this._int(heroSrc.maxHp, 100, 1, 999999),
-        hp: this._int(heroSrc.hp, 100, 1, 999999),
+        hp: this._int(heroSrc.hp, 100, 0, 999999),
 
         maxMana: this._int(heroSrc.maxMana, 60, 0, 999999),
         mana: this._int(heroSrc.mana, 60, 0, 999999),
@@ -153,8 +155,15 @@ export default class Save {
         dungeonBest: this._int(progressSrc.dungeonBest, 0, 0, 9999),
         visitedCamps: this._stringArray(progressSrc.visitedCamps),
         eliteKills: this._int(progressSrc.eliteKills, 0, 0, 999999),
+        bountyCompletions: this._int(progressSrc.bountyCompletions, 0, 0, 999999),
         campRenown: this._object(progressSrc.campRenown),
         campRestBonusClaimed: this._object(progressSrc.campRestBonusClaimed),
+        claimedShrines: this._stringArray(progressSrc.claimedShrines),
+        openedCaches: this._stringArray(progressSrc.openedCaches),
+        defeatedDragons: this._stringArray(progressSrc.defeatedDragons),
+        relicShards: this._int(progressSrc.relicShards, 0, 0, 999999),
+        storyMilestones: this._object(progressSrc.storyMilestones),
+        exploredCells: this._stringArray(progressSrc.exploredCells).slice(0, 120000),
       },
 
       dungeon: {
@@ -182,6 +191,8 @@ export default class Save {
         e: this._skill(skillProgSrc.e),
         r: this._skill(skillProgSrc.r),
       },
+
+      quest: this._quest(questSrc),
     };
 
     out.hero.hp = Math.min(out.hero.hp, out.hero.maxHp);
@@ -251,6 +262,20 @@ export default class Save {
     };
   }
 
+  _quest(src) {
+    const q = this._object(src);
+    const allowedTargets = new Set(["blob", "wolf", "stalker", "scout", "caster", "brute", "ashling"]);
+    const needed = this._int(q.needed, 4, 1, 9999);
+    return {
+      type: "bounty",
+      target: allowedTargets.has(q.target) ? q.target : "blob",
+      needed,
+      count: this._int(q.count, 0, 0, needed),
+      rewardGold: this._int(q.rewardGold, 20, 0, 999999),
+      rewardXp: this._int(q.rewardXp, 10, 0, 999999),
+    };
+  }
+
   _menuValue(v) {
     return this._allowedMenus().has(v ?? null) ? (v ?? null) : null;
   }
@@ -262,7 +287,6 @@ export default class Save {
       "inventory",
       "skills",
       "quests",
-      "shop",
       "options",
       "god",
       "menu",

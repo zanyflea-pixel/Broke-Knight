@@ -87,11 +87,15 @@ export default class Game {
     this._interactCd = 0;
     this._lastZoneName = "";
     this._killFlashT = 0;
+    this._deathCd = 0;
 
     this._cachedNearbyCamp = null;
     this._cachedNearbyDock = null;
     this._cachedNearbyWaystone = null;
     this._cachedNearbyDungeon = null;
+    this._cachedNearbyShrine = null;
+    this._cachedNearbyCache = null;
+    this._cachedNearbyDragonLair = null;
 
     this._rng = new RNG(hash2(this.seed, 9001));
 
@@ -125,13 +129,20 @@ export default class Game {
       dungeonBest: 0,
       visitedCamps: new Set(),
       eliteKills: 0,
+      bountyCompletions: 0,
       campRenown: {},
       campRestBonusClaimed: {},
+      claimedShrines: new Set(),
+      openedCaches: new Set(),
+      defeatedDragons: new Set(),
+      relicShards: 0,
+      storyMilestones: {},
     };
 
     this.shop = {
       campId: null,
       items: [],
+      discount: 0,
     };
 
     this.dungeon = {
@@ -139,6 +150,12 @@ export default class Game {
       floor: 0,
       origin: null,
     };
+
+    this.dev = {
+      godMode: false,
+    };
+
+    this.quest = this._makeBountyQuest();
 
     this._bindMouse();
     this._loadGame();
@@ -166,6 +183,8 @@ export default class Game {
 
     this._spawnInitialEnemies();
     this._ensureHeroSafe(true);
+    this.world?.revealAround?.(this.hero.x, this.hero.y, 900);
+    if (this._worldBuildMigrated) this._saveGame();
   }
 
   resize(w, h) {
@@ -182,6 +201,7 @@ export default class Game {
     this._tickMessages(dt);
     this._tickCooldowns(dt);
     this._updateMouseWorld();
+    this.world?.revealAround?.(this.hero.x, this.hero.y, this.dungeon.active ? 460 : 720);
     this._updateNearbyPOIs(dt);
 
     this._handleMenus();
@@ -190,6 +210,8 @@ export default class Game {
       this._handleInventoryInput();
     } else if (this.menu.open === "shop") {
       this._handleShopInput();
+    } else if (this.menu.open === "dev") {
+      // Dev keys are handled in _handleMenus.
     } else {
       this._handleMovement(dt);
       this._handleSkills();
@@ -200,12 +222,14 @@ export default class Game {
     this.hero.update?.(dt);
     this._updateEnemies(dt);
     this._updateProjectiles(dt);
+    this._handleHeroDeath(dt);
     this._updateLoot(dt);
     this._updateZoneMessage(dt);
     this._updateCamera(dt);
+    this.ui.update?.(dt, this);
     this._spawnWorldEnemies(dt);
     this._respawnCampEnemies(dt);
-    this._cleanupFarEntities();
+    this._cleanupFarEntities(dt);
 
     this._safetyCheckT -= dt;
     if (this._safetyCheckT <= 0) {
@@ -259,8 +283,26 @@ export default class Game {
 
     ctx.restore();
 
-    this.ui.update?.(0, this);
+    this._drawScreenEffects(ctx);
     this.ui.draw(ctx, this);
+  }
+
+  _drawScreenEffects(ctx) {
+    ctx.save();
+
+    const hpFrac = clamp((this.hero.hp || 0) / Math.max(1, this.hero.maxHp || 100), 0, 1);
+    if (hpFrac < 0.32 && !this.dev?.godMode) {
+      ctx.fillStyle = `rgba(120, 10, 24, ${(0.32 - hpFrac) * 0.34})`;
+      ctx.fillRect(0, 0, this.w, this.h);
+    }
+
+    const grd = ctx.createRadialGradient(this.w * 0.5, this.h * 0.48, Math.min(this.w, this.h) * 0.18, this.w * 0.5, this.h * 0.5, Math.max(this.w, this.h) * 0.62);
+    grd.addColorStop(0, "rgba(255,255,255,0)");
+    grd.addColorStop(1, this.dev?.godMode ? "rgba(120,190,255,0.12)" : "rgba(0,0,0,0.22)");
+    ctx.fillStyle = grd;
+    ctx.fillRect(0, 0, this.w, this.h);
+
+    ctx.restore();
   }
 
   _bindMouse() {
@@ -321,12 +363,64 @@ export default class Game {
       this.menu.open = this.menu.open === "skills" ? null : "skills";
     }
 
+    if (this.input.wasPressed("j") || this.input.wasPressed("J")) {
+      this.menu.open = this.menu.open === "quests" ? null : "quests";
+    }
+
+    if (this.input.wasPressed("g") || this.input.wasPressed("G")) {
+      this.menu.open = this.menu.open === "dev" ? null : "dev";
+    }
+
     if (this.input.wasPressed("Escape")) {
       if (this.menu.open) {
         this.menu.open = null;
       } else if (this.dungeon.active) {
         this._leaveDungeon();
       }
+    }
+
+    if (this.menu.open === "dev") this._handleDevToolsInput();
+  }
+
+  _handleDevToolsInput() {
+    if (this.input.wasPressed("1")) {
+      this.hero.hp = this.hero.maxHp || 100;
+      this.hero.mana = this.hero.maxMana || 60;
+      this._msg("Dev: healed", 0.9);
+    }
+    if (this.input.wasPressed("2")) {
+      this.hero.gold += 250;
+      this._msg("Dev: +250 gold", 0.9);
+    }
+    if (this.input.wasPressed("3")) {
+      this.hero.giveXP?.(this.hero.nextXp || 25);
+      this._msg("Dev: level boost", 0.9);
+    }
+    if (this.input.wasPressed("4")) {
+      this.world.revealAll?.();
+      this._msg("Dev: map revealed", 0.9);
+    }
+    if (this.input.wasPressed("5")) {
+      this._spawnDragonBoss(this.hero.x + 220, this.hero.y, Math.max(6, (this.hero.level || 1) + 4), "Dev Dragon");
+      this._msg("Dev: dragon spawned", 0.9);
+    }
+    if (this.input.wasPressed("6")) {
+      const lair = this._nearest(this.world.dragonLairs);
+      if (lair) {
+        this.hero.x = lair.x - 120;
+        this.hero.y = lair.y;
+        this.camera.x = this.hero.x;
+        this.camera.y = this.hero.y;
+        this._msg("Dev: nearest dragon lair", 0.9);
+      }
+    }
+    if (this.input.wasPressed("7")) {
+      this.dev.godMode = !this.dev.godMode;
+      if (this.dev.godMode) {
+        this.hero.hp = this.hero.maxHp || 100;
+        this.hero.mana = this.hero.maxMana || 60;
+      }
+      this._msg(this.dev.godMode ? "Dev: god mode ON" : "Dev: god mode OFF", 1.1);
     }
   }
 
@@ -475,7 +569,7 @@ export default class Game {
     this.cooldowns.q = def.cd;
 
     const dir = norm(this.hero.aimDir?.x || 1, this.hero.aimDir?.y || 0);
-    const dmg = Math.round((this.hero.getStats?.().dmg || 8) * 0.95);
+    const hit = this._rollHeroDamage(0.95);
 
     this.projectiles.push(
       new Projectile(
@@ -483,12 +577,13 @@ export default class Game {
         this.hero.y + dir.y * 18,
         dir.x * 270,
         dir.y * 270,
-        dmg,
+        hit.dmg,
         1.25,
         this.hero.level,
         { friendly: true, color: "rgba(148,225,255,0.95)", radius: 4, hitRadius: 15 }
       )
     );
+    this.projectiles[this.projectiles.length - 1].crit = hit.crit;
 
     this.skillProg.q.xp += 1;
     this._checkSkillLevel("q");
@@ -501,7 +596,7 @@ export default class Game {
 
     this.cooldowns.w = def.cd;
 
-    const dmg = Math.round((this.hero.getStats?.().dmg || 8) * 1.1);
+    const hit = this._rollHeroDamage(1.1);
 
     this.projectiles.push(
       new Projectile(
@@ -509,7 +604,7 @@ export default class Game {
         this.hero.y,
         0,
         0,
-        dmg,
+        hit.dmg,
         0.45,
         this.hero.level,
         {
@@ -522,6 +617,7 @@ export default class Game {
         }
       )
     );
+    this.projectiles[this.projectiles.length - 1].crit = hit.crit;
 
     this.skillProg.w.xp += 2;
     this._checkSkillLevel("w");
@@ -561,7 +657,7 @@ export default class Game {
     this.cooldowns.r = def.cd;
 
     const dir = norm(this.hero.aimDir?.x || 1, this.hero.aimDir?.y || 0);
-    const dmg = Math.round((this.hero.getStats?.().dmg || 8) * 1.65);
+    const hit = this._rollHeroDamage(1.65);
 
     this.projectiles.push(
       new Projectile(
@@ -569,15 +665,26 @@ export default class Game {
         this.hero.y + dir.y * 22,
         dir.x * 175,
         dir.y * 175,
-        dmg,
+        hit.dmg,
         1.7,
         this.hero.level,
         { friendly: true, color: "rgba(198,140,255,0.95)", radius: 8, hitRadius: 20 }
       )
     );
+    this.projectiles[this.projectiles.length - 1].crit = hit.crit;
 
     this.skillProg.r.xp += 3;
     this._checkSkillLevel("r");
+  }
+
+  _rollHeroDamage(mult = 1) {
+    const stats = this.hero.getStats?.() || {};
+    const crit = Math.random() < clamp(stats.crit || 0.05, 0, 0.85);
+    const critMult = crit ? Math.max(1.1, stats.critMult || 1.6) : 1;
+    return {
+      dmg: Math.max(1, Math.round((stats.dmg || 8) * mult * critMult)),
+      crit,
+    };
   }
 
   _checkSkillLevel(key) {
@@ -609,6 +716,10 @@ export default class Game {
 
   _pickEnemyKind(zone) {
     const z = String(zone || "").toLowerCase();
+    if (z.includes("dungeon")) {
+      const pool = ["stalker", "caster", "brute", "ashling", "wolf"];
+      return pool[Math.floor(Math.random() * pool.length)] || "stalker";
+    }
     if (z.includes("wild")) return Math.random() < 0.5 ? "wolf" : "stalker";
     if (z.includes("stone")) return Math.random() < 0.5 ? "brute" : "blob";
     if (z.includes("ash")) return Math.random() < 0.5 ? "ashling" : "brute";
@@ -640,19 +751,22 @@ export default class Game {
       if (dist2(x, y, this.world.spawn?.x || 0, this.world.spawn?.y || 0) < this.perf.worldSpawnSafeRadius ** 2) continue;
       if (this._nearPointOfInterest(x, y, this.perf.campSafeRadius)) continue;
 
-      const zone = this.world.getZoneName?.(x, y) || "meadow";
+      const zone = this.dungeon.active ? "dungeon" : (this.world.getZoneName?.(x, y) || "meadow");
       const kind = this._pickEnemyKind(zone);
-      const elite = Math.random() < 0.08;
+      const elite = Math.random() < (this.dungeon.active ? 0.16 : 0.08);
+      const areaLevel = this.world.getDangerLevel?.(x, y) || 1;
+      const level = Math.max(1, this.hero.level + areaLevel - 1 + (this.dungeon.active ? Math.max(0, this.dungeon.floor - 1) : 0));
 
       const e = new Enemy(
         x,
         y,
-        Math.max(1, this.hero.level),
+        level,
         kind,
         hash2(x | 0, y | 0, this.seed),
         elite,
         false
       );
+      this._applyEnemyAffix(e);
 
       this.enemies.push(e);
       break;
@@ -688,6 +802,28 @@ export default class Game {
     }
   }
 
+  _applyEnemyAffix(e) {
+    if (!e?.elite && !e?.boss) return e;
+
+    const affixes = [
+      { name: "Ironhide", color: "#d6c48a", hp: 1.22, speed: 0.92, touch: 1.08 },
+      { name: "Bloodbound", color: "#ff6f86", hp: 1.10, speed: 1.08, touch: 1.18 },
+      { name: "Stormmarked", color: "#87d8ff", hp: 1.04, speed: 1.20, touch: 1.04 },
+      { name: "Gilded", color: "#ffd76a", hp: 1.14, speed: 1.00, touch: 1.10, loot: 6 },
+    ];
+    const affix = affixes[Math.abs(e.seed || 0) % affixes.length];
+
+    e.affix = affix.name;
+    e.colorA = affix.color;
+    e.hp = Math.round(e.hp * affix.hp);
+    e.maxHp = e.hp;
+    e.moveSpeed = Math.max(16, Math.round(e.moveSpeed * affix.speed));
+    e.speed = e.moveSpeed;
+    e.touchDps = Math.max(1, Math.round(e.touchDps * affix.touch));
+    e.extraLoot = affix.loot || 0;
+    return e;
+  }
+
   _updateEnemies(dt) {
     this._touchDamageCd = Math.max(0, this._touchDamageCd - dt);
 
@@ -698,13 +834,46 @@ export default class Game {
       const rr = (this.hero.radius || this.hero.r || 12) + (e.radius || e.r || 12);
       if (dist2(this.hero.x, this.hero.y, e.x, e.y) <= rr * rr) {
         if (this._touchDamageCd <= 0) {
-          this.hero.takeDamage?.(e.touchDps || 1);
+          this._damageHero(e.touchDps || 1);
           this._touchDamageCd = this.perf.touchDamageTick;
         }
       }
     }
 
     this.enemies = this.enemies.filter((e) => e.alive);
+  }
+
+  _handleHeroDeath(dt) {
+    this._deathCd = Math.max(0, (this._deathCd || 0) - dt);
+    if (this.dev?.godMode && (this.hero.hp || 0) <= 0) {
+      this.hero.hp = this.hero.maxHp || 100;
+      this.hero.mana = this.hero.maxMana || 60;
+      return;
+    }
+    if ((this.hero.hp || 0) > 0 || this._deathCd > 0) return;
+
+    this._deathCd = 2.5;
+    const lostGold = Math.min(this.hero.gold || 0, Math.max(0, Math.floor((this.hero.gold || 0) * 0.12)));
+    this.hero.gold -= lostGold;
+
+    const safe = this.world._findSafeLandPatchNear?.(this.world.spawn?.x || 0, this.world.spawn?.y || 0, 340) ||
+      this.world.spawn ||
+      { x: 0, y: 0 };
+
+    this.hero.x = safe.x;
+    this.hero.y = safe.y;
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+    this.hero.hp = Math.max(1, Math.round((this.hero.maxHp || 100) * 0.55));
+    this.hero.mana = Math.round((this.hero.maxMana || 60) * 0.55);
+    this.hero.state.sailing = false;
+    this.hero.state.dashT = 0;
+    this.hero.state.hurtT = 0.6;
+    this.dungeon.active = false;
+    this.camera.x = this.hero.x;
+    this.camera.y = this.hero.y;
+
+    this._msg(lostGold > 0 ? `Recovered at camp -${lostGold}g` : "Recovered at camp", 1.8);
   }
 
   _updateProjectiles(dt) {
@@ -715,27 +884,39 @@ export default class Game {
       if (!p.alive) continue;
 
       if (p.friendly) {
+        if (p.nova && !p._hitEnemies) p._hitEnemies = new Set();
+
         for (const e of this.enemies) {
           if (!e?.alive) continue;
+          if (p.nova && p._hitEnemies.has(e)) continue;
 
           const rr = (p.hitRadius || p.radius || 4) + (e.radius || e.r || 12);
           if (dist2(p.x, p.y, e.x, e.y) <= rr * rr) {
+            if (p.nova) p._hitEnemies.add(e);
             e.takeDamage?.(p.dmg || 1);
-            this._spawnFloatingText(e.x, e.y - 12, `${p.dmg || 1}`, "#ffffff");
-            p.alive = false;
+            this._spawnFloatingText(e.x, e.y - 12, p.crit ? `CRIT ${p.dmg || 1}` : `${p.dmg || 1}`, p.crit ? "#ffd86e" : "#ffffff");
+            if (!p.nova) p.alive = false;
 
             if (!e.alive) {
               this.hero.giveXP?.(e.xpValue?.() || 4);
+              if (e.kind === "dragon" && e.progressId) {
+                this.progress.defeatedDragons.add(e.progressId);
+                this.hero.gold += 150 + (e.level || 1) * 12;
+                this._awardRelicShards(4, "dragon");
+                this._spawnFloatingText(e.x, e.y - 36, "Dragon slain", "#ffb06e");
+                this._msg("Dragon slain: legend grows", 2.2);
+              }
+              this._advanceBounty(e);
               this._dropEnemyLoot(e);
               this._killFlashT = 0.22;
             }
-            break;
+            if (!p.nova) break;
           }
         }
       } else {
         const rr = (p.hitRadius || p.radius || 4) + (this.hero.radius || this.hero.r || 12);
         if (dist2(p.x, p.y, this.hero.x, this.hero.y) <= rr * rr) {
-          this.hero.takeDamage?.(p.dmg || 1);
+          this._damageHero(p.dmg || 1);
           p.alive = false;
         }
       }
@@ -745,23 +926,35 @@ export default class Game {
   }
 
   _dropEnemyLoot(e) {
-    const goldAmt = Math.max(2, 3 + Math.round((e.level || 1) * 0.8) + (e.lootBonus?.() || 0));
+    const goldAmt = Math.max(2, 3 + Math.round((e.level || 1) * 0.8) + (e.lootBonus?.() || 0) + (e.extraLoot || 0));
     this.loot.push(new Loot(e.x, e.y, "gold", { amount: goldAmt }));
 
-    if (Math.random() < 0.14) {
+    if (e.boss || Math.random() < (e.elite ? 0.24 : 0.14)) {
       this.loot.push(new Loot(e.x + 8, e.y, "potion", { potionType: Math.random() < 0.35 ? "mana" : "hp" }));
     }
 
-    if (Math.random() < (e.elite ? 0.26 : 0.10)) {
+    if (e.boss || Math.random() < (e.elite ? 0.34 : 0.10)) {
       const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
       const slot = slots[(Math.random() * slots.length) | 0];
-      const rarity = e.elite
-        ? (Math.random() < 0.45 ? "rare" : "uncommon")
+      const rarity = e.boss
+        ? (Math.random() < 0.45 ? "epic" : "rare")
+        : e.elite
+        ? (Math.random() < 0.12 ? "epic" : Math.random() < 0.52 ? "rare" : "uncommon")
         : (Math.random() < 0.18 ? "rare" : "uncommon");
 
       const item = makeGear(slot, Math.max(1, e.level || 1), rarity, hash2(e.x | 0, e.y | 0, this.time | 0));
       this.loot.push(new Loot(e.x - 8, e.y, "gear", item));
     }
+  }
+
+  _damageHero(amount) {
+    if (this.dev?.godMode) {
+      this.hero.hp = this.hero.maxHp || 100;
+      this.hero.mana = Math.max(this.hero.mana || 0, Math.min(this.hero.maxMana || 60, this.hero.mana || 0));
+      return false;
+    }
+    this.hero.takeDamage?.(amount || 1);
+    return true;
   }
 
   _updateLoot(dt) {
@@ -782,12 +975,14 @@ export default class Game {
   _pickupLoot(l) {
     if (l.kind === "gold") {
       this.hero.gold += l.data?.amount || 1;
+      this._spawnFloatingText(this.hero.x, this.hero.y - 28, `+${l.data?.amount || 1}g`, "#ffd86e");
       return;
     }
 
     if (l.kind === "potion") {
       const pt = l.data?.potionType === "mana" ? "mana" : "hp";
       this.hero.potions[pt] = (this.hero.potions[pt] || 0) + 1;
+      this._spawnFloatingText(this.hero.x, this.hero.y - 28, pt === "mana" ? "+Mana potion" : "+Health potion", pt === "mana" ? "#88cfff" : "#ff8fa0");
       return;
     }
 
@@ -812,6 +1007,8 @@ export default class Game {
     this._cachedNearbyDock = null;
     this._cachedNearbyWaystone = null;
     this._cachedNearbyDungeon = null;
+    this._cachedNearbyShrine = null;
+    this._cachedNearbyCache = null;
 
     const check = (arr, r) => {
       const r2 = r * r;
@@ -825,6 +1022,9 @@ export default class Game {
     this._cachedNearbyDock = check(this.world.docks, 64);
     this._cachedNearbyWaystone = check(this.world.waystones, 70);
     this._cachedNearbyDungeon = check(this.world.dungeons, 74);
+    this._cachedNearbyShrine = check(this.world.shrines, 72);
+    this._cachedNearbyCache = check(this.world.caches, 58);
+    this._cachedNearbyDragonLair = check(this.world.dragonLairs, 110);
   }
 
   _toggleDockingOrSailing() {
@@ -832,10 +1032,16 @@ export default class Game {
     if (!dock) return;
 
     this.hero.state.sailing = !this.hero.state.sailing;
+    this._rememberProgressId(this.progress.discoveredDocks, dock);
     this._msg(this.hero.state.sailing ? "Sailing" : "Docked", 0.9);
   }
 
   _interact() {
+    if (this.dungeon.active) {
+      this._descendDungeon();
+      return;
+    }
+
     if (this._cachedNearbyCamp) {
       this._openShop(this._cachedNearbyCamp);
       return;
@@ -846,6 +1052,21 @@ export default class Game {
       return;
     }
 
+    if (this._cachedNearbyShrine) {
+      this._claimShrine(this._cachedNearbyShrine);
+      return;
+    }
+
+    if (this._cachedNearbyCache) {
+      this._openCache(this._cachedNearbyCache);
+      return;
+    }
+
+    if (this._cachedNearbyDragonLair) {
+      this._challengeDragon(this._cachedNearbyDragonLair);
+      return;
+    }
+
     if (this._cachedNearbyDungeon) {
       this._enterDungeon(this._cachedNearbyDungeon);
     }
@@ -853,25 +1074,41 @@ export default class Game {
 
   _openShop(camp) {
     this.shop.campId = camp.id;
+    this._rememberProgressId(this.progress.visitedCamps, camp);
+    this._claimCampRestBonus(camp);
+    this.shop.discount = this._shopDiscount(camp);
     this.shop.items = this._buildShopForCamp(camp);
     this.menu.open = "shop";
+  }
+
+  _claimCampRestBonus(camp) {
+    const id = this._progressId(camp);
+    if (this.progress.campRestBonusClaimed[id]) return;
+
+    this.progress.campRestBonusClaimed[id] = true;
+    this.progress.campRenown[id] = (this.progress.campRenown[id] || 0) + 1;
+    this.hero.hp = Math.min(this.hero.maxHp || 100, (this.hero.hp || 0) + Math.round((this.hero.maxHp || 100) * 0.35));
+    this.hero.mana = Math.min(this.hero.maxMana || 60, (this.hero.mana || 0) + Math.round((this.hero.maxMana || 60) * 0.45));
+    this.hero.potions.hp = (this.hero.potions.hp || 0) + 1;
+    this._msg("Camp rest: refreshed", 1.4);
   }
 
   _buildShopForCamp(camp) {
     const rng = new RNG(hash2(camp.x | 0, camp.y | 0, this.seed));
     const items = [];
+    const discount = this._shopDiscount(camp);
 
     items.push({
       kind: "potion",
       name: "Health Potion",
-      price: 12,
+      price: this._shopPrice(12, discount),
       data: { potionType: "hp" },
     });
 
     items.push({
       kind: "potion",
       name: "Mana Potion",
-      price: 13,
+      price: this._shopPrice(13, discount),
       data: { potionType: "mana" },
     });
 
@@ -894,12 +1131,22 @@ export default class Game {
       items.push({
         kind: "gear",
         name: gear.name,
-        price: rarity === "rare" ? 80 : rarity === "uncommon" ? 42 : 24,
+        price: this._shopPrice(rarity === "rare" ? 80 : rarity === "uncommon" ? 42 : 24, discount),
         data: gear,
       });
     }
 
     return items.slice(0, 4);
+  }
+
+  _shopDiscount(camp) {
+    const id = this._progressId(camp);
+    const renown = this.progress.campRenown[id] || 0;
+    return clamp((this.progress.bountyCompletions || 0) * 0.01 + renown * 0.03, 0, 0.18);
+  }
+
+  _shopPrice(base, discount) {
+    return Math.max(1, Math.round(base * (1 - discount)));
   }
 
   _buyShopItem(index) {
@@ -925,7 +1172,7 @@ export default class Game {
   }
 
   _discoverWaystone(w) {
-    const id = w.id || `${w.x},${w.y}`;
+    const id = this._progressId(w);
     if (this.progress.discoveredWaystones.has(id)) {
       this._msg("Waystone already known", 0.8);
       return;
@@ -935,14 +1182,140 @@ export default class Game {
     this._msg("Waystone discovered", 1.0);
   }
 
+  _claimShrine(shrine) {
+    const id = this._progressId(shrine);
+    if (this.progress.claimedShrines.has(id)) {
+      this._msg("Shrine already claimed", 0.9);
+      return;
+    }
+
+    this.progress.claimedShrines.add(id);
+    const roll = hash2(shrine.x | 0, shrine.y | 0, this.seed) % 3;
+
+    if (roll === 0) {
+      this.hero.maxHp = (this.hero.maxHp || 100) + 8;
+      this.hero.hp = Math.min(this.hero.maxHp, (this.hero.hp || 0) + 24);
+      this._spawnFloatingText(shrine.x, shrine.y - 22, "+Max HP", "#ff8fa0");
+      this._msg("Shrine of Vitality claimed", 1.5);
+    } else if (roll === 1) {
+      this.hero.maxMana = (this.hero.maxMana || 60) + 6;
+      this.hero.mana = Math.min(this.hero.maxMana, (this.hero.mana || 0) + 22);
+      this._spawnFloatingText(shrine.x, shrine.y - 22, "+Max Mana", "#88cfff");
+      this._msg("Shrine of Focus claimed", 1.5);
+    } else {
+      this.hero.giveXP?.(18 + Math.max(0, (this.hero.level || 1) - 1) * 5);
+      this.hero.gold += 14 + (this.hero.level || 1) * 3;
+      this._spawnFloatingText(shrine.x, shrine.y - 22, "+XP +Gold", "#ffd86e");
+      this._msg("Shrine of Fortune claimed", 1.5);
+    }
+
+    for (const key of ["q", "w", "e", "r"]) {
+      if (this.skillProg[key]) this.skillProg[key].xp += 1;
+      this._checkSkillLevel(key);
+    }
+    this._awardRelicShards(1, "shrine");
+  }
+
+  _openCache(cache) {
+    const id = this._progressId(cache);
+    if (this.progress.openedCaches.has(id)) {
+      this._msg("Cache already opened", 0.8);
+      return;
+    }
+
+    this.progress.openedCaches.add(id);
+    const level = Math.max(1, this.world.getDangerLevel?.(cache.x, cache.y) || this.hero.level || 1);
+    const gold = 18 + level * 7 + (hash2(cache.x | 0, cache.y | 0, this.seed) % 14);
+
+    this.loot.push(new Loot(cache.x - 10, cache.y, "gold", { amount: gold }));
+    this.loot.push(new Loot(cache.x + 10, cache.y + 2, "potion", { potionType: level >= 3 ? "mana" : "hp" }));
+
+    if (level >= 2) {
+      const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+      const slot = slots[Math.abs(hash2(cache.x | 0, cache.y | 0, level)) % slots.length];
+      const rarity = level >= 5 ? "rare" : "uncommon";
+      this.loot.push(new Loot(cache.x, cache.y - 12, "gear", makeGear(slot, Math.max(level, this.hero.level || 1), rarity, hash2(this.seed, cache.x | 0, cache.y | 0))));
+    }
+
+    this._spawnFloatingText(cache.x, cache.y - 22, "Cache opened", "#ffe19a");
+    this._msg("Treasure cache opened", 1.4);
+    this._awardRelicShards(level >= 4 ? 2 : 1, "cache");
+  }
+
+  _challengeDragon(lair) {
+    const id = this._progressId(lair);
+    if (this.progress.defeatedDragons.has(id)) {
+      this._msg("This dragon is already defeated", 1.0);
+      return;
+    }
+
+    const nearby = this.enemies.some((e) => e?.alive && e.boss && e.kind === "dragon" && dist2(e.x, e.y, lair.x, lair.y) < 700 * 700);
+    if (nearby) {
+      this._msg("The dragon is awake", 1.0);
+      return;
+    }
+
+    const level = Math.max(8, (this.hero.level || 1) + (this.world.getDangerLevel?.(lair.x, lair.y) || 5) + 3);
+    this._spawnDragonBoss(lair.x, lair.y, level, "Ancient Dragon", id);
+    this._msg("Ancient Dragon awakened", 2.0);
+  }
+
+  _spawnDragonBoss(x, y, level, name = "Dragon", progressId = null) {
+    const dragon = new Enemy(x, y, level, "dragon", hash2(x | 0, y | 0, this.seed), false, true);
+    dragon.name = name;
+    dragon.progressId = progressId;
+    dragon.affix = name;
+    dragon.extraLoot = 18;
+    this.enemies.push(dragon);
+    return dragon;
+  }
+
   _enterDungeon(dungeonPoi) {
     if (this.dungeon.active) return;
 
     this.dungeon.active = true;
     this.dungeon.floor = Math.max(1, (this.progress.dungeonBest || 0) + 1);
     this.dungeon.origin = { x: dungeonPoi.x, y: dungeonPoi.y };
+    this.enemies = [];
+    this.projectiles = [];
+    this.loot = [];
 
     this._msg(`Dungeon Floor ${this.dungeon.floor}`, 1.2);
+    this._spawnDungeonWave();
+  }
+
+  _descendDungeon() {
+    if (!this.dungeon.active) return;
+    this.progress.dungeonBest = Math.max(this.progress.dungeonBest || 0, this.dungeon.floor || 0);
+    this.dungeon.floor = Math.max(1, (this.dungeon.floor || 1) + 1);
+    this.enemies = [];
+    this.projectiles = [];
+    this.loot = [];
+    this.hero.hp = Math.min(this.hero.maxHp || 100, (this.hero.hp || 0) + 12);
+    this.hero.mana = Math.min(this.hero.maxMana || 60, (this.hero.mana || 0) + 10);
+    if (this.dungeon.floor % 3 === 0) this._awardRelicShards(1, "depths");
+    this._spawnDungeonWave();
+    this._msg(`Descended to Floor ${this.dungeon.floor}`, 1.4);
+  }
+
+  _spawnDungeonWave() {
+    const floor = Math.max(1, this.dungeon.floor || 1);
+    const count = Math.min(12, 4 + floor);
+    const bossFloor = floor % 3 === 0;
+
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2 + floor * 0.31;
+      const r = 220 + (i % 3) * 65;
+      const x = this.hero.x + Math.cos(a) * r;
+      const y = this.hero.y + Math.sin(a) * r;
+      const kind = bossFloor && i === 0 ? "brute" : this._pickEnemyKind("dungeon");
+      const enemy = new Enemy(x, y, Math.max(1, (this.hero.level || 1) + floor - 1), kind, hash2(x | 0, y | 0, this.seed + floor), i % 4 === 0, bossFloor && i === 0);
+      this.enemies.push(this._applyEnemyAffix(enemy));
+    }
+
+    if (floor % 5 === 0) {
+      this._spawnDragonBoss(this.hero.x + 280, this.hero.y - 40, Math.max(8, (this.hero.level || 1) + floor), `Depth Dragon F${floor}`);
+    }
   }
 
   _leaveDungeon() {
@@ -956,6 +1329,7 @@ export default class Game {
     this.hero.vx = 0;
     this.hero.vy = 0;
     this.hero.state.sailing = false;
+    this.progress.dungeonBest = Math.max(this.progress.dungeonBest || 0, this.dungeon.floor || 0);
     this.dungeon.active = false;
 
     this.camera.x = this.hero.x;
@@ -978,6 +1352,242 @@ export default class Game {
       this.zoneMsg = zone;
       this.zoneMsgT = 1.1;
     }
+  }
+
+  _makeBountyQuest(seedOffset = 0) {
+    const targets = ["blob", "wolf", "stalker", "scout", "caster", "brute"];
+    const target = targets[Math.abs(hash2(this.seed, this.hero.level + seedOffset)) % targets.length];
+    const needed = 4 + Math.min(5, Math.floor((this.hero.level || 1) / 2));
+    return {
+      type: "bounty",
+      target,
+      needed,
+      count: 0,
+      rewardGold: 18 + (this.hero.level || 1) * 6,
+      rewardXp: 10 + (this.hero.level || 1) * 4,
+    };
+  }
+
+  _awardRelicShards(amount = 1, source = "relic") {
+    const gain = Math.max(0, amount | 0);
+    if (!gain) return;
+
+    this.progress.relicShards = Math.max(0, (this.progress.relicShards || 0) + gain);
+    this._spawnFloatingText(this.hero.x, this.hero.y - 44, `+${gain} relic`, "#c9a7ff");
+    this._checkStoryMilestones(source);
+  }
+
+  _checkStoryMilestones(source = "") {
+    const shards = this.progress.relicShards || 0;
+    const done = this.progress.storyMilestones || (this.progress.storyMilestones = {});
+    const milestones = [
+      { at: 3, id: "spark", text: "Story: the Ash Crown stirs", hp: 6, mana: 4, gold: 40 },
+      { at: 7, id: "ember", text: "Story: ember oath awakened", hp: 8, mana: 6, xp: 45 },
+      { at: 12, id: "crown", text: "Story: crown shard restored", hp: 10, mana: 8, gold: 90, xp: 80 },
+      { at: 20, id: "dragon", text: "Story: dragon paths revealed", hp: 14, mana: 10, gold: 150, xp: 130 },
+    ];
+
+    for (const m of milestones) {
+      if (shards < m.at || done[m.id]) continue;
+      done[m.id] = true;
+      this.hero.maxHp = (this.hero.maxHp || 100) + (m.hp || 0);
+      this.hero.maxMana = (this.hero.maxMana || 60) + (m.mana || 0);
+      this.hero.hp = this.hero.maxHp;
+      this.hero.mana = this.hero.maxMana;
+      this.hero.gold += m.gold || 0;
+      if (m.xp) this.hero.giveXP?.(m.xp);
+      this._msg(m.text, 2.0);
+      this._spawnFloatingText(this.hero.x, this.hero.y - 60, "Milestone", "#c9a7ff");
+    }
+  }
+
+  _advanceBounty(enemy) {
+    if (enemy?.elite) this.progress.eliteKills = (this.progress.eliteKills || 0) + 1;
+    if (!this.quest || this.quest.type !== "bounty") this.quest = this._makeBountyQuest();
+    if (this.quest.target !== enemy?.kind) return;
+
+    this.quest.count = Math.min(this.quest.needed, (this.quest.count || 0) + 1);
+    if (this.quest.count < this.quest.needed) return;
+
+    this._completeBounty();
+  }
+
+  _completeBounty() {
+    const q = this.quest || this._makeBountyQuest();
+    this.progress.bountyCompletions = (this.progress.bountyCompletions || 0) + 1;
+    this.hero.gold += q.rewardGold || 0;
+    this.hero.giveXP?.(q.rewardXp || 0);
+
+    const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+    const slot = slots[this.progress.bountyCompletions % slots.length];
+    const rarity = this.progress.bountyCompletions % 4 === 0 ? "rare" : "uncommon";
+    this.hero.inventory.push(makeGear(slot, Math.max(1, this.hero.level), rarity, hash2(this.seed, this.progress.bountyCompletions)));
+
+    this._msg(`Bounty complete: +${q.rewardGold}g`, 1.8);
+    this.quest = this._makeBountyQuest(this.progress.bountyCompletions + 7);
+  }
+
+  getObjective() {
+    if (this.dungeon.active) {
+      return this._objective(
+        `Dungeon Floor ${this.dungeon.floor || 1}`,
+        "Fight, loot, and press Esc when you need air.",
+        null,
+        "#dc7cff"
+      );
+    }
+
+    const story = this._getStoryObjective();
+    if (story) return story;
+
+    if (this.quest?.type === "bounty" && (this.quest.count || 0) < (this.quest.needed || 1)) {
+      return this._objective(
+        `Bounty: ${this._titleCase(this.quest.target)}`,
+        `${this.quest.count || 0}/${this.quest.needed || 1} defeated - press J for details.`,
+        this._nearest(this.enemies, (e) => e.alive && e.kind === this.quest.target),
+        "#ffd86e"
+      );
+    }
+
+    if ((this.hero.inventory?.length || 0) > 0) {
+      return this._objective(
+        "Check your gear",
+        "Press I, then Enter to equip or X to salvage.",
+        null,
+        "#88cfff"
+      );
+    }
+
+    const unvisitedCamp = this._nearest(
+      this.world.camps,
+      (camp) => !this.progress.visitedCamps.has(this._progressId(camp))
+    );
+    if (unvisitedCamp) {
+      return this._objective(
+        "Find a camp",
+        "Follow the marker, then press F for the shop.",
+        unvisitedCamp,
+        "#ffdc63"
+      );
+    }
+
+    const unknownWaystone = this._nearest(
+      this.world.waystones,
+      (waystone) => !this.progress.discoveredWaystones.has(this._progressId(waystone))
+    );
+    if (unknownWaystone) {
+      return this._objective(
+        "Discover a waystone",
+        "Press F near the blue marker to unlock it.",
+        unknownWaystone,
+        "#7fe8ff"
+      );
+    }
+
+    const unclaimedShrine = this._nearest(
+      this.world.shrines,
+      (shrine) => !this.progress.claimedShrines.has(this._progressId(shrine))
+    );
+    if (unclaimedShrine) {
+      return this._objective(
+        "Claim a shrine",
+        "Find the violet marker and press F.",
+        unclaimedShrine,
+        "#b77eff"
+      );
+    }
+
+    const unopenedCache = this._nearest(
+      this.world.caches,
+      (cache) => !this.progress.openedCaches.has(this._progressId(cache))
+    );
+    if (unopenedCache) {
+      return this._objective(
+        "Open a treasure cache",
+        "Look for the gold chest marker.",
+        unopenedCache,
+        "#ffe19a"
+      );
+    }
+
+    const dragonLair = this._nearest(
+      this.world.dragonLairs,
+      (lair) => !this.progress.defeatedDragons.has(this._progressId(lair))
+    );
+    if (dragonLair && (this.hero.level || 1) >= 5) {
+      return this._objective(
+        "Hunt an ancient dragon",
+        "Far lairs hold the hardest bosses.",
+        dragonLair,
+        "#ff8a5c"
+      );
+    }
+
+    const dungeon = this._nearest(this.world.dungeons);
+    if (dungeon) {
+      return this._objective(
+        "Enter a dungeon",
+        "Find the purple marker and press F.",
+        dungeon,
+        "#dc7cff"
+      );
+    }
+
+    const enemy = this._nearest(this.enemies, (e) => e.alive);
+    return this._objective(
+      "Hunt monsters",
+      "Use Q/W/E/R and collect dropped loot.",
+      enemy,
+      "#cf4d5f"
+    );
+  }
+
+  _objective(title, detail, target, color) {
+    return { title, detail, target, color };
+  }
+
+  _getStoryObjective() {
+    const shards = this.progress.relicShards || 0;
+    const next = shards < 3 ? 3 : shards < 7 ? 7 : shards < 12 ? 12 : shards < 20 ? 20 : 0;
+    if (!next) {
+      const dragonLair = this._nearest(
+        this.world.dragonLairs,
+        (lair) => !this.progress.defeatedDragons.has(this._progressId(lair))
+      );
+      if (!dragonLair) return null;
+      return this._objective("Break the dragon seals", "Hunt ancient dragons for legendary loot.", dragonLair, "#ff8a5c");
+    }
+
+    const target =
+      this._nearest(this.world.shrines, (p) => !this.progress.claimedShrines.has(this._progressId(p))) ||
+      this._nearest(this.world.caches, (p) => !this.progress.openedCaches.has(this._progressId(p))) ||
+      this._nearest(this.world.dungeons);
+
+    return this._objective(
+      "Restore the Ash Crown",
+      `Collect relic shards: ${shards}/${next}`,
+      target,
+      "#c9a7ff"
+    );
+  }
+
+  _titleCase(text) {
+    const s = String(text || "");
+    return s ? s.charAt(0).toUpperCase() + s.slice(1) : "";
+  }
+
+  _nearest(arr, predicate = () => true) {
+    let best = null;
+    let bestD2 = Infinity;
+    for (const p of arr || []) {
+      if (!p || !predicate(p)) continue;
+      const d = dist2(this.hero.x, this.hero.y, p.x, p.y);
+      if (d < bestD2) {
+        best = p;
+        bestD2 = d;
+      }
+    }
+    return best;
   }
 
   _drawFloatingTexts(ctx) {
@@ -1013,11 +1623,22 @@ export default class Game {
     return check(this.world.camps) ||
       check(this.world.docks) ||
       check(this.world.waystones) ||
-      check(this.world.dungeons);
+      check(this.world.dungeons) ||
+      check(this.world.shrines) ||
+      check(this.world.caches) ||
+      check(this.world.dragonLairs);
   }
 
-  _cleanupFarEntities() {
-    this.perf.cleanupTimer += 0.016;
+  _progressId(p) {
+    return p?.id != null ? String(p.id) : `${p?.x ?? 0},${p?.y ?? 0}`;
+  }
+
+  _rememberProgressId(set, p) {
+    if (set?.add && p) set.add(this._progressId(p));
+  }
+
+  _cleanupFarEntities(dt = 0.016) {
+    this.perf.cleanupTimer += dt;
     if (this.perf.cleanupTimer < this.perf.cleanupEvery) return;
     this.perf.cleanupTimer = 0;
 
@@ -1069,6 +1690,7 @@ export default class Game {
     try {
       this.save.save({
         seed: this.seed,
+        worldBuild: this.world?.buildId || "rpg-v107",
         hero: {
           x: this.hero.x,
           y: this.hero.y,
@@ -1093,9 +1715,17 @@ export default class Game {
           dungeonBest: this.progress.dungeonBest || 0,
           visitedCamps: Array.from(this.progress.visitedCamps || []),
           eliteKills: this.progress.eliteKills || 0,
+          bountyCompletions: this.progress.bountyCompletions || 0,
           campRenown: this.progress.campRenown || {},
           campRestBonusClaimed: this.progress.campRestBonusClaimed || {},
+          claimedShrines: Array.from(this.progress.claimedShrines || []),
+          openedCaches: Array.from(this.progress.openedCaches || []),
+          defeatedDragons: Array.from(this.progress.defeatedDragons || []),
+          relicShards: this.progress.relicShards || 0,
+          storyMilestones: this.progress.storyMilestones || {},
+          exploredCells: this.world?.exportDiscovery?.() || [],
         },
+        quest: this.quest,
         skillProg: this.skillProg,
         menu: this.menu,
         cooldowns: this.cooldowns,
@@ -1111,18 +1741,27 @@ export default class Game {
       const data = this.save.load?.() || this.save.read?.() || this.save.get?.();
       if (!data) return;
 
+      const currentWorldBuild = this.world?.buildId || "rpg-v107";
+      const needsWorldMigration = data.worldBuild !== currentWorldBuild;
+
+      if (Number.isFinite(+data.seed) && (data.seed | 0) !== this.seed) {
+        this.seed = data.seed | 0;
+        this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
+        this._rng = new RNG(hash2(this.seed, 9001));
+      }
+
       if (data.hero) {
         const h = data.hero;
-        this.hero.x = Number.isFinite(+h.x) ? +h.x : this.hero.x;
-        this.hero.y = Number.isFinite(+h.y) ? +h.y : this.hero.y;
-        this.hero.level = Math.max(1, h.level || this.hero.level);
-        this.hero.xp = h.xp || 0;
-        this.hero.nextXp = h.nextXp || this.hero.nextXp;
-        this.hero.maxHp = h.maxHp || this.hero.maxHp;
-        this.hero.hp = h.hp || this.hero.hp;
-        this.hero.maxMana = h.maxMana || this.hero.maxMana;
-        this.hero.mana = h.mana || this.hero.mana;
-        this.hero.gold = h.gold || 0;
+        this.hero.x = this._finiteOr(h.x, this.hero.x);
+        this.hero.y = this._finiteOr(h.y, this.hero.y);
+        this.hero.level = Math.max(1, this._finiteOr(h.level, this.hero.level));
+        this.hero.xp = Math.max(0, this._finiteOr(h.xp, 0));
+        this.hero.nextXp = Math.max(1, this._finiteOr(h.nextXp, this.hero.nextXp));
+        this.hero.maxHp = Math.max(1, this._finiteOr(h.maxHp, this.hero.maxHp));
+        this.hero.hp = clamp(this._finiteOr(h.hp, this.hero.hp), 0, this.hero.maxHp);
+        this.hero.maxMana = Math.max(0, this._finiteOr(h.maxMana, this.hero.maxMana));
+        this.hero.mana = clamp(this._finiteOr(h.mana, this.hero.mana), 0, this.hero.maxMana);
+        this.hero.gold = Math.max(0, this._finiteOr(h.gold, 0));
         this.hero.inventory = Array.isArray(h.inventory) ? h.inventory : [];
         this.hero.equip = h.equip || this.hero.equip;
         this.hero.potions = h.potions || this.hero.potions;
@@ -1139,14 +1778,45 @@ export default class Game {
       this.hero.state.slowT = 0;
       this.hero.state.poisonT = 0;
 
+      if (needsWorldMigration) {
+        const start = this.world.getStarterPoint?.() || this.world.spawn || { x: 0, y: 0 };
+        this.hero.x = start.x;
+        this.hero.y = start.y;
+        this.dungeon.active = false;
+        this.dungeon.floor = 0;
+        this.dungeon.origin = null;
+        this._worldBuildMigrated = true;
+        this._msg("New roads charted. Returned to the starter road.", 2.2);
+      }
+
       if (data.progress) {
         this.progress.discoveredWaystones = new Set(data.progress.discoveredWaystones || []);
         this.progress.discoveredDocks = new Set(data.progress.discoveredDocks || []);
         this.progress.dungeonBest = data.progress.dungeonBest || 0;
         this.progress.visitedCamps = new Set(data.progress.visitedCamps || []);
         this.progress.eliteKills = data.progress.eliteKills || 0;
+        this.progress.bountyCompletions = data.progress.bountyCompletions || 0;
         this.progress.campRenown = data.progress.campRenown || {};
         this.progress.campRestBonusClaimed = data.progress.campRestBonusClaimed || {};
+        this.progress.claimedShrines = new Set(data.progress.claimedShrines || []);
+        this.progress.openedCaches = new Set(data.progress.openedCaches || []);
+        this.progress.defeatedDragons = new Set(data.progress.defeatedDragons || []);
+        this.progress.relicShards = data.progress.relicShards || 0;
+        this.progress.storyMilestones = data.progress.storyMilestones || {};
+        this.world?.importDiscovery?.(data.progress.exploredCells || []);
+      }
+
+      if (data.quest?.type === "bounty") {
+        this.quest = {
+          type: "bounty",
+          target: data.quest.target || "blob",
+          needed: Math.max(1, data.quest.needed || 4),
+          count: clamp(data.quest.count || 0, 0, Math.max(1, data.quest.needed || 4)),
+          rewardGold: Math.max(0, data.quest.rewardGold || 20),
+          rewardXp: Math.max(0, data.quest.rewardXp || 10),
+        };
+      } else {
+        this.quest = this._makeBountyQuest(this.progress.bountyCompletions || 0);
       }
 
       if (data.skillProg) {
@@ -1174,6 +1844,11 @@ export default class Game {
     } catch (err) {
       console.warn("Load failed", err);
     }
+  }
+
+  _finiteOr(value, fallback) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
   }
 
   _msg(text, t = 1.0) {
