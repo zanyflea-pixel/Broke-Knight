@@ -1,9 +1,8 @@
 // src/ui.js
-// v103.2 UI PERFORMANCE + FEATURE RESTORE
-// - keeps full HUD / map / inventory / skills / shop
-// - restores quest/options placeholder panels
-// - reduces minimap cost with lightweight caching
-// - keeps prompts / toast / zone text
+// v106.2 FULL UI FILE
+// - full HUD / map / inventory / skills / shop
+// - prompts / toast / zone text
+// - minimap support
 // - built for current game.js / world.js / util.js
 
 import { clamp } from "./util.js";
@@ -96,9 +95,9 @@ export default class UI {
     else if (open === "inventory") this._drawInventoryPanel(ctx, game);
     else if (open === "skills") this._drawSkillsPanel(ctx, game);
     else if (open === "shop") this._drawShopPanel(ctx, game);
-    else if (open === "quests") this._drawSimplePanel(ctx, "Quests", "Quest tracking is not fully restored yet.");
-    else if (open === "options") this._drawSimplePanel(ctx, "Options", "Settings panel placeholder restored.");
-    else if (open === "god" || open === "menu") this._drawSimplePanel(ctx, "Menu", "More menu features can be added next.");
+    else if (open === "quests") this._drawSimplePanel(ctx, "Quests", "Quest tracking panel restored. Hook quest data next.");
+    else if (open === "options") this._drawSimplePanel(ctx, "Options", "Options panel restored. Hook settings/actions next.");
+    else if (open === "god" || open === "menu" || open === "gear") this._drawSimplePanel(ctx, "Menu", "Menu panel restored.");
   }
 
   _syncViewFromCanvas() {
@@ -415,7 +414,7 @@ export default class UI {
 
   _drawHelp(ctx) {
     const lines = [
-      "WASD move",
+      "Arrow Keys move",
       "Mouse aim",
       "Q/W/E/R skills",
       "1/2 potions",
@@ -432,9 +431,9 @@ export default class UI {
 
     ctx.save();
     ctx.fillStyle = "rgba(8,10,14,0.50)";
-    ctx.fillRect(x - 8, y - 16, 132, 148);
+    ctx.fillRect(x - 8, y - 16, 150, 148);
     ctx.strokeStyle = "rgba(255,255,255,0.08)";
-    ctx.strokeRect(x - 7.5, y - 15.5, 131, 147);
+    ctx.strokeRect(x - 7.5, y - 15.5, 149, 147);
 
     ctx.fillStyle = "#dfe7f2";
     ctx.font = "bold 13px Arial";

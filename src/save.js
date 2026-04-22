@@ -1,14 +1,14 @@
 // src/save.js
-// v104 SAVE RECOVERY FIX
-// - protects against broken saved positions
-// - never reloads unsafe transient states
-// - keeps current game.js compatibility
+// v105.4 FULL SAVE FILE
 // - safer sanitizing for partial / older saves
+// - preserves hero / progress / cooldown / menu / skills
+// - avoids unsafe temporary reload states
+// - compatible with current game.js
 
 export default class Save {
   constructor(key = "broke-knight-save") {
     this.key = String(key || "broke-knight-save");
-    this.version = 8;
+    this.version = 10;
   }
 
   load() {
@@ -80,7 +80,6 @@ export default class Save {
     }
   }
 
-  // compatibility aliases
   get() {
     return this.load();
   }
@@ -100,12 +99,12 @@ export default class Save {
   _sanitize(data) {
     const src = data && typeof data === "object" ? data : {};
 
-    const heroSrc = src.hero && typeof src.hero === "object" ? src.hero : {};
-    const progressSrc = src.progress && typeof src.progress === "object" ? src.progress : {};
-    const dungeonSrc = src.dungeon && typeof src.dungeon === "object" ? src.dungeon : {};
-    const menuSrc = src.menu && typeof src.menu === "object" ? src.menu : {};
-    const cooldownsSrc = src.cooldowns && typeof src.cooldowns === "object" ? src.cooldowns : {};
-    const skillProgSrc = src.skillProg && typeof src.skillProg === "object" ? src.skillProg : {};
+    const heroSrc = this._object(src.hero);
+    const progressSrc = this._object(src.progress);
+    const dungeonSrc = this._object(src.dungeon);
+    const menuSrc = this._object(src.menu);
+    const cooldownsSrc = this._object(src.cooldowns);
+    const skillProgSrc = this._object(src.skillProg);
 
     const out = {
       seed: this._num(src.seed, 0, -2147483648, 2147483647),
@@ -137,7 +136,6 @@ export default class Save {
         },
 
         state: {
-          // never restore into sailing/hurt/dash states from disk
           sailing: false,
           dashT: 0,
           hurtT: 0,
@@ -160,11 +158,11 @@ export default class Save {
       },
 
       dungeon: {
-        // never restore active dungeon state blindly
         active: false,
         floor: this._int(dungeonSrc.floor, 0, 0, 9999),
         currentRoomIndex: this._int(dungeonSrc.currentRoomIndex, 0, 0, 9999),
         seed: this._int(dungeonSrc.seed, 0, -2147483648, 2147483647),
+        origin: this._point(dungeonSrc.origin, null),
       },
 
       menu: {
@@ -188,6 +186,16 @@ export default class Save {
 
     out.hero.hp = Math.min(out.hero.hp, out.hero.maxHp);
     out.hero.mana = Math.min(out.hero.mana, out.hero.maxMana);
+
+    out.hero.vx = 0;
+    out.hero.vy = 0;
+    out.hero.state.sailing = false;
+    out.hero.state.dashT = 0;
+    out.hero.state.hurtT = 0;
+    out.hero.state.slowT = 0;
+    out.hero.state.poisonT = 0;
+
+    out.dungeon.active = false;
 
     return out;
   }
@@ -236,7 +244,7 @@ export default class Save {
   }
 
   _skill(src) {
-    const s = src && typeof src === "object" ? src : {};
+    const s = this._object(src);
     return {
       xp: this._int(s.xp, 0, 0, 99999999),
       level: this._int(s.level, 1, 1, 9999),
@@ -244,7 +252,11 @@ export default class Save {
   }
 
   _menuValue(v) {
-    const allowed = new Set([
+    return this._allowedMenus().has(v ?? null) ? (v ?? null) : null;
+  }
+
+  _allowedMenus() {
+    return new Set([
       null,
       "map",
       "inventory",
@@ -256,11 +268,10 @@ export default class Save {
       "menu",
       "gear",
     ]);
-    return allowed.has(v ?? null) ? (v ?? null) : null;
   }
 
   _vec2(v, fallback = { x: 0, y: 0 }) {
-    const src = v && typeof v === "object" ? v : {};
+    const src = this._object(v);
     let x = this._num(src.x, fallback.x, -1, 1);
     let y = this._num(src.y, fallback.y, -1, 1);
 
@@ -272,12 +283,16 @@ export default class Save {
     return { x, y };
   }
 
-  _finiteCoord(v, fallback = 0) {
-    return this._num(v, fallback, -100000, 100000);
+  _point(v, fallback = null) {
+    if (!v || typeof v !== "object") return fallback;
+    return {
+      x: this._finiteCoord(v.x, 0),
+      y: this._finiteCoord(v.y, 0),
+    };
   }
 
-  _array(v) {
-    return Array.isArray(v) ? v : [];
+  _finiteCoord(v, fallback = 0) {
+    return this._num(v, fallback, -100000, 100000);
   }
 
   _stringArray(v) {

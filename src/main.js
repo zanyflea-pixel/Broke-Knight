@@ -1,29 +1,66 @@
 // src/main.js
-// v103 MAIN GLUE RESTORE
-// - matches current fuller game.js API
-// - keeps all existing game features
-// - proper canvas sizing for #overworld
-// - stable boot / tick loop / pause-resume handling
+// v105.5 FULL MAIN FILE
+// - fixed-step loop
+// - resize / focus / hidden-tab recovery
+// - keeps current Game(canvas) API
+// - stable canvas sizing for #overworld
 
 import Game from "./game.js";
 
 const canvas = document.getElementById("overworld");
 if (!canvas) {
-  throw new Error("Missing #overworld canvas");
+  throw new Error('Missing <canvas id="overworld"> in index.html');
+}
+
+const ctx = canvas.getContext("2d", { alpha: false });
+if (!ctx) {
+  throw new Error("Could not get 2D canvas context");
 }
 
 let game = null;
 let rafId = 0;
-let lastTime = 0;
 let running = false;
+let booted = false;
+let lastTime = performance.now();
+let accumulator = 0;
+let resumeTimer = 0;
+let resizeQueued = false;
 
-function fitCanvasToScreen() {
-  const dpr = Math.max(1, window.devicePixelRatio || 1);
-  const cssW = Math.max(960, Math.floor(window.innerWidth));
-  const cssH = Math.max(540, Math.floor(window.innerHeight));
+const STEP = 1 / 60;
+const MAX_FRAME = 0.05;
+const MAX_STEPS = 4;
 
-  canvas.style.width = cssW + "px";
-  canvas.style.height = cssH + "px";
+setupCanvasElement();
+boot();
+
+function setupCanvasElement() {
+  if (!canvas.hasAttribute("tabindex")) {
+    canvas.tabIndex = 0;
+  }
+
+  canvas.setAttribute("role", "application");
+  canvas.setAttribute("aria-label", "Broke Knight game canvas");
+
+  canvas.style.display = "block";
+  canvas.style.outline = "none";
+  canvas.style.userSelect = "none";
+  canvas.style.webkitUserSelect = "none";
+  canvas.style.touchAction = "none";
+}
+
+function getDPR() {
+  return Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+}
+
+function getCssSize() {
+  const w = Math.max(320, window.innerWidth | 0);
+  const h = Math.max(240, window.innerHeight | 0);
+  return { w, h };
+}
+
+function applyCanvasSize(cssW, cssH, dpr) {
+  canvas.style.width = `${cssW}px`;
+  canvas.style.height = `${cssH}px`;
 
   const pixelW = Math.max(1, Math.floor(cssW * dpr));
   const pixelH = Math.max(1, Math.floor(cssH * dpr));
@@ -33,85 +70,142 @@ function fitCanvasToScreen() {
     canvas.height = pixelH;
   }
 
-  return {
-    cssW,
-    cssH,
-    dpr,
-    pixelW,
-    pixelH,
-  };
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = true;
 }
 
-function resizeGame() {
-  const view = fitCanvasToScreen();
-  if (game && typeof game.resize === "function") {
-    game.resize(view.pixelW, view.pixelH);
+function resizeCanvas() {
+  const { w, h } = getCssSize();
+  const dpr = getDPR();
+
+  applyCanvasSize(w, h, dpr);
+
+  if (game?.resize) {
+    game.resize(w, h);
+  } else if (game) {
+    game.w = w;
+    game.h = h;
   }
 }
 
-function stopLoop() {
-  running = false;
+function queueResize() {
+  if (resizeQueued) return;
+  resizeQueued = true;
+
+  requestAnimationFrame(() => {
+    resizeQueued = false;
+    resizeCanvas();
+  });
+}
+
+function focusCanvas() {
+  try {
+    canvas.focus({ preventScroll: true });
+  } catch (_) {
+    try {
+      canvas.focus();
+    } catch (_) {}
+  }
+}
+
+function cancelLoop() {
   if (rafId) {
     cancelAnimationFrame(rafId);
     rafId = 0;
   }
+  running = false;
+}
+
+function render() {
+  if (!game) return;
+  game.draw?.();
 }
 
 function tick(now) {
-  if (!running || !game) return;
-
-  if (!lastTime) lastTime = now;
-  let dt = (now - lastTime) / 1000;
-  lastTime = now;
-
-  if (!Number.isFinite(dt) || dt < 0) dt = 0;
-  dt = Math.min(dt, 0.05);
-
-  game.update(dt);
-  game.draw();
+  if (!running) return;
 
   rafId = requestAnimationFrame(tick);
+
+  let frame = (now - lastTime) / 1000;
+  lastTime = now;
+
+  if (!Number.isFinite(frame) || frame < 0) {
+    frame = STEP;
+  }
+
+  frame = Math.min(MAX_FRAME, frame);
+  accumulator += frame;
+
+  let steps = 0;
+  while (accumulator >= STEP && steps < MAX_STEPS) {
+    game?.update?.(STEP);
+    accumulator -= STEP;
+    steps++;
+  }
+
+  if (steps >= MAX_STEPS) {
+    accumulator = 0;
+  }
+
+  render();
 }
 
 function startLoop() {
   if (running) return;
   running = true;
   lastTime = performance.now();
+  accumulator = 0;
   rafId = requestAnimationFrame(tick);
 }
 
 function hardResume() {
-  stopLoop();
-  resizeGame();
-  if (game && game.input && typeof game.input.endFrame === "function") {
+  cancelLoop();
+  resizeCanvas();
+
+  if (game?.input?.clearAll) {
+    game.input.clearAll();
+  } else if (game?.input?.endFrame) {
     game.input.endFrame();
   }
+
+  focusCanvas();
   startLoop();
 }
 
 function softResumeSoon() {
-  setTimeout(() => {
-    if (!document.hidden) hardResume();
+  if (resumeTimer) return;
+
+  resumeTimer = setTimeout(() => {
+    resumeTimer = 0;
+    if (!document.hidden) {
+      hardResume();
+    }
   }, 60);
 }
 
 function boot() {
-  resizeGame();
+  if (booted) return;
+  booted = true;
+
+  resizeCanvas();
 
   game = new Game(canvas);
-  if (typeof game.resize === "function") {
-    game.resize(canvas.width, canvas.height);
+
+  if (game?.resize) {
+    const { w, h } = getCssSize();
+    game.resize(w, h);
   }
 
-  canvas.focus();
+  focusCanvas();
   startLoop();
 }
 
 window.addEventListener("resize", () => {
-  resizeGame();
+  queueResize();
 });
 
 window.addEventListener("orientationchange", () => {
+  queueResize();
   softResumeSoon();
 });
 
@@ -120,19 +214,27 @@ window.addEventListener("focus", () => {
 });
 
 window.addEventListener("blur", () => {
-  if (game?.input?.endFrame) game.input.endFrame();
+  if (game?.input?.clearAll) {
+    game.input.clearAll();
+  } else if (game?.input?.endFrame) {
+    game.input.endFrame();
+  }
 });
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
-    stopLoop();
+    cancelLoop();
   } else {
-    hardResume();
+    softResumeSoon();
   }
 });
 
+window.addEventListener("pageshow", () => {
+  softResumeSoon();
+});
+
 canvas.addEventListener("mousedown", () => {
-  canvas.focus();
+  focusCanvas();
 });
 
 boot();

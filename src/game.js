@@ -1,9 +1,13 @@
 // src/game.js
-// v104 GAME RECOVERY RESTORE
-// - full file
-// - fixes truncated _spawnWorldEnemies block
-// - keeps current fuller gameplay systems
-// - compatible with current world.js / entities.js / ui.js / util.js / save.js
+// v106.3 FULL GAME FILE
+// - arrow-only movement
+// - fuller gameplay loop
+// - inventory / equip / salvage
+// - skills / cooldowns / mouse aim
+// - shop / waystone / dock / dungeon interactions
+// - zone messages / autosave / loot pickup / enemy spawning
+// - safe-ground recovery
+// - built to work with current world.js / entities.js / ui.js / util.js / save.js
 
 import World from "./world.js";
 import { clamp, dist2, norm, RNG, hash2 } from "./util.js";
@@ -26,7 +30,7 @@ export default class Game {
 
     this.input = new Input(window);
     this.ui = new UI(canvas);
-    this.save = new Save("broke-knight-save-v101");
+    this.save = new Save("broke-knight-save-v106");
 
     this.world = new World(this.seed, { viewW: this.w, viewH: this.h });
     this.hero = new Hero(this.world.spawn?.x ?? 0, this.world.spawn?.y ?? 0);
@@ -34,7 +38,6 @@ export default class Game {
     this.enemies = [];
     this.projectiles = [];
     this.loot = [];
-
     this.hitSparks = [];
     this.floatingTexts = [];
 
@@ -52,7 +55,7 @@ export default class Game {
       enemyUpdateRadius: 1040,
       lootUpdateRadius: 760,
       projectileUpdateRadius: 1320,
-      maxEnemies: 42,
+      maxEnemies: 46,
       cleanupTimer: 0,
       cleanupEvery: 0.55,
       touchDamageTick: 0.18,
@@ -65,11 +68,11 @@ export default class Game {
     this.time = 0;
     this._dtClamp = 0.05;
     this._autosaveT = 8;
-
     this._spawnTimer = 0;
     this._campRespawnT = 0;
-    this._dragonCheckT = 0;
-    this._rng = new RNG(hash2(this.seed, 9001));
+    this._nearbyPoiTimer = 0;
+    this._zoneSampleT = 0;
+    this._safetyCheckT = 0;
 
     this.menu = { open: null };
     this.invIndex = 0;
@@ -82,7 +85,6 @@ export default class Game {
     this._touchDamageCd = 0;
     this._dockToggleCd = 0;
     this._interactCd = 0;
-    this._zoneSampleT = 0;
     this._lastZoneName = "";
     this._killFlashT = 0;
 
@@ -90,7 +92,8 @@ export default class Game {
     this._cachedNearbyDock = null;
     this._cachedNearbyWaystone = null;
     this._cachedNearbyDungeon = null;
-    this._nearbyPoiTimer = 0;
+
+    this._rng = new RNG(hash2(this.seed, 9001));
 
     this.mouse = {
       x: this.w * 0.5,
@@ -155,8 +158,14 @@ export default class Game {
       };
     }
 
+    this.hero.state.sailing = false;
+    this.hero.state.dashT = 0;
+    this.hero.state.hurtT = 0;
+    this.hero.state.slowT = 0;
+    this.hero.state.poisonT = 0;
+
     this._spawnInitialEnemies();
-    this._ensureHeroSafe();
+    this._ensureHeroSafe(true);
   }
 
   resize(w, h) {
@@ -197,6 +206,12 @@ export default class Game {
     this._spawnWorldEnemies(dt);
     this._respawnCampEnemies(dt);
     this._cleanupFarEntities();
+
+    this._safetyCheckT -= dt;
+    if (this._safetyCheckT <= 0) {
+      this._safetyCheckT = 0.4;
+      this._ensureHeroSafe(false);
+    }
 
     this._autosaveT -= dt;
     if (this._autosaveT <= 0) {
@@ -293,16 +308,16 @@ export default class Game {
   }
 
   _handleMenus() {
-    if (this.input.wasPressed("m")) {
+    if (this.input.wasPressed("m") || this.input.wasPressed("M")) {
       this.menu.open = this.menu.open === "map" ? null : "map";
     }
 
-    if (this.input.wasPressed("i")) {
+    if (this.input.wasPressed("i") || this.input.wasPressed("I")) {
       this.menu.open = this.menu.open === "inventory" ? null : "inventory";
       this.invIndex = clamp(this.invIndex || 0, 0, Math.max(0, (this.hero.inventory?.length || 1) - 1));
     }
 
-    if (this.input.wasPressed("k")) {
+    if (this.input.wasPressed("k") || this.input.wasPressed("K")) {
       this.menu.open = this.menu.open === "skills" ? null : "skills";
     }
 
@@ -319,10 +334,10 @@ export default class Game {
     let mx = 0;
     let my = 0;
 
-    if (this.input.isDown("w") || this.input.isDown("ArrowUp")) my -= 1;
-    if (this.input.isDown("s") || this.input.isDown("ArrowDown")) my += 1;
-    if (this.input.isDown("a") || this.input.isDown("ArrowLeft")) mx -= 1;
-    if (this.input.isDown("d") || this.input.isDown("ArrowRight")) mx += 1;
+    if (this.input.isDown("ArrowUp")) my -= 1;
+    if (this.input.isDown("ArrowDown")) my += 1;
+    if (this.input.isDown("ArrowLeft")) mx -= 1;
+    if (this.input.isDown("ArrowRight")) mx += 1;
 
     const move = norm(mx, my);
     const speed = this.hero.getMoveSpeed(this);
@@ -341,10 +356,10 @@ export default class Game {
     if (this.input.wasPressed("1")) this._usePotion("hp");
     if (this.input.wasPressed("2")) this._usePotion("mana");
 
-    if (this.input.wasPressed("q")) this._castSpark();
-    if (this.input.wasPressed("w")) this._castNova();
-    if (this.input.wasPressed("e")) this._castDash();
-    if (this.input.wasPressed("r")) this._castOrb();
+    if (this.input.wasPressed("q") || this.input.wasPressed("Q")) this._castSpark();
+    if (this.input.wasPressed("w") || this.input.wasPressed("W")) this._castNova();
+    if (this.input.wasPressed("e") || this.input.wasPressed("E")) this._castDash();
+    if (this.input.wasPressed("r") || this.input.wasPressed("R")) this._castOrb();
 
     if (this.mouse.down) this._castSpark();
   }
@@ -353,12 +368,12 @@ export default class Game {
     this._dockToggleCd = Math.max(0, this._dockToggleCd - dt);
     this._interactCd = Math.max(0, this._interactCd - dt);
 
-    if (this.input.wasPressed("b") && this._dockToggleCd <= 0 && !this.menu.open) {
+    if ((this.input.wasPressed("b") || this.input.wasPressed("B")) && this._dockToggleCd <= 0 && !this.menu.open) {
       this._dockToggleCd = 0.18;
       this._toggleDockingOrSailing();
     }
 
-    if (this.input.wasPressed("f") && this._interactCd <= 0 && !this.menu.open) {
+    if ((this.input.wasPressed("f") || this.input.wasPressed("F")) && this._interactCd <= 0 && !this.menu.open) {
       this._interactCd = 0.18;
       this._interact();
     }
@@ -371,21 +386,21 @@ export default class Game {
       return;
     }
 
-    if (this.input.wasPressed("ArrowDown") || this.input.wasPressed("s")) {
+    if (this.input.wasPressed("ArrowDown")) {
       this.invIndex = Math.min(inv.length - 1, (this.invIndex || 0) + 1);
     }
 
-    if (this.input.wasPressed("ArrowUp") || this.input.wasPressed("w")) {
+    if (this.input.wasPressed("ArrowUp")) {
       this.invIndex = Math.max(0, (this.invIndex || 0) - 1);
     }
 
     const item = inv[this.invIndex];
 
-    if ((this.input.wasPressed("Enter") || this.input.wasPressed("e")) && item) {
+    if ((this.input.wasPressed("Enter") || this.input.wasPressed("e") || this.input.wasPressed("E")) && item) {
       this._equipInventoryItem(this.invIndex);
     }
 
-    if ((this.input.wasPressed("x") || this.input.wasPressed("Backspace") || this.input.wasPressed("Delete")) && item) {
+    if ((this.input.wasPressed("x") || this.input.wasPressed("X") || this.input.wasPressed("Backspace") || this.input.wasPressed("Delete")) && item) {
       this._salvageInventoryItem(this.invIndex);
     }
   }
@@ -598,6 +613,7 @@ export default class Game {
     if (z.includes("stone")) return Math.random() < 0.5 ? "brute" : "blob";
     if (z.includes("ash")) return Math.random() < 0.5 ? "ashling" : "brute";
     if (z.includes("shore")) return Math.random() < 0.5 ? "scout" : "caster";
+    if (z.includes("forest")) return Math.random() < 0.5 ? "wolf" : "scout";
 
     const pool = ["blob", "wolf", "stalker", "scout", "caster", "brute"];
     return pool[(Math.random() * pool.length) | 0];
@@ -715,6 +731,12 @@ export default class Game {
             }
             break;
           }
+        }
+      } else {
+        const rr = (p.hitRadius || p.radius || 4) + (this.hero.radius || this.hero.r || 12);
+        if (dist2(p.x, p.y, this.hero.x, this.hero.y) <= rr * rr) {
+          this.hero.takeDamage?.(p.dmg || 1);
+          p.alive = false;
         }
       }
     }
@@ -927,11 +949,17 @@ export default class Game {
     if (!this.dungeon.active) return;
 
     const out = this.dungeon.origin || this.world.spawn || { x: 0, y: 0 };
-    const safe = this.world._findSafeLandPatchNear?.(out.x, out.y, 100) || out;
+    const safe = this.world._findSafeLandPatchNear?.(out.x, out.y, 140) || this.world.spawn || out;
 
     this.hero.x = safe.x;
     this.hero.y = safe.y;
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+    this.hero.state.sailing = false;
     this.dungeon.active = false;
+
+    this.camera.x = this.hero.x;
+    this.camera.y = this.hero.y;
 
     this._msg("Left dungeon", 1.0);
   }
@@ -1002,12 +1030,38 @@ export default class Game {
     this.projectiles = this.projectiles.filter((p) => p?.alive && dist2(p.x, p.y, this.hero.x, this.hero.y) < maxProjD2);
   }
 
-  _ensureHeroSafe() {
-    if (this.world.canWalk?.(this.hero.x, this.hero.y, this.hero)) return;
-    const p = this.world._findSafeLandPatchNear?.(this.hero.x, this.hero.y, 180);
-    if (p) {
-      this.hero.x = p.x;
-      this.hero.y = p.y;
+  _ensureHeroSafe(showMsg = false) {
+    const onSafeGround = this.world.canWalk?.(this.hero.x, this.hero.y, { state: { sailing: false } });
+    if (onSafeGround) {
+      return;
+    }
+
+    let safe = this.world._findSafeLandPatchNear?.(this.hero.x, this.hero.y, 260);
+    if (!safe && this.world.spawn) {
+      safe = this.world._findSafeLandPatchNear?.(this.world.spawn.x, this.world.spawn.y, 320);
+    }
+    if (!safe && this.world.spawn) {
+      safe = { x: this.world.spawn.x, y: this.world.spawn.y };
+    }
+    if (!safe) {
+      safe = { x: 0, y: 0 };
+    }
+
+    this.hero.x = safe.x;
+    this.hero.y = safe.y;
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+    this.hero.state.sailing = false;
+    this.hero.state.dashT = 0;
+    this.hero.state.hurtT = 0;
+    this.hero.state.slowT = 0;
+    this.hero.state.poisonT = 0;
+
+    this.camera.x = this.hero.x;
+    this.camera.y = this.hero.y;
+
+    if (showMsg) {
+      this._msg("Recovered to safe ground", 1.0);
     }
   }
 
@@ -1043,6 +1097,9 @@ export default class Game {
           campRestBonusClaimed: this.progress.campRestBonusClaimed || {},
         },
         skillProg: this.skillProg,
+        menu: this.menu,
+        cooldowns: this.cooldowns,
+        dungeon: this.dungeon,
       });
     } catch (err) {
       console.warn("Save failed", err);
@@ -1056,8 +1113,8 @@ export default class Game {
 
       if (data.hero) {
         const h = data.hero;
-        this.hero.x = +h.x || this.hero.x;
-        this.hero.y = +h.y || this.hero.y;
+        this.hero.x = Number.isFinite(+h.x) ? +h.x : this.hero.x;
+        this.hero.y = Number.isFinite(+h.y) ? +h.y : this.hero.y;
         this.hero.level = Math.max(1, h.level || this.hero.level);
         this.hero.xp = h.xp || 0;
         this.hero.nextXp = h.nextXp || this.hero.nextXp;
@@ -1073,6 +1130,14 @@ export default class Game {
         this.hero.lastMove = h.lastMove || this.hero.lastMove;
         this.hero.aimDir = h.aimDir || this.hero.aimDir;
       }
+
+      this.hero.vx = 0;
+      this.hero.vy = 0;
+      this.hero.state.sailing = false;
+      this.hero.state.dashT = 0;
+      this.hero.state.hurtT = 0;
+      this.hero.state.slowT = 0;
+      this.hero.state.poisonT = 0;
 
       if (data.progress) {
         this.progress.discoveredWaystones = new Set(data.progress.discoveredWaystones || []);
@@ -1091,6 +1156,17 @@ export default class Game {
             this.skillProg[k].level = Math.max(1, data.skillProg[k].level || 1);
           }
         }
+      }
+
+      if (data.menu) {
+        this.menu.open = data.menu.open || null;
+      }
+
+      if (data.cooldowns) {
+        this.cooldowns.q = data.cooldowns.q || 0;
+        this.cooldowns.w = data.cooldowns.w || 0;
+        this.cooldowns.e = data.cooldowns.e || 0;
+        this.cooldowns.r = data.cooldowns.r || 0;
       }
 
       this.camera.x = this.hero.x;
