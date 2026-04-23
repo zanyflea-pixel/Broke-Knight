@@ -31,7 +31,18 @@ const MAX_FRAME = 0.05;
 const MAX_STEPS = 4;
 
 setupCanvasElement();
-boot();
+window.addEventListener("error", (event) => {
+  showFatalError(event.error || event.message || "Unknown browser error");
+});
+window.addEventListener("unhandledrejection", (event) => {
+  showFatalError(event.reason || "Unhandled promise rejection");
+});
+
+try {
+  boot();
+} catch (err) {
+  showFatalError(err);
+}
 
 function setupCanvasElement() {
   if (!canvas.hasAttribute("tabindex")) {
@@ -121,6 +132,22 @@ function render() {
   game.draw?.();
 }
 
+function showFatalError(err) {
+  cancelLoop();
+
+  const message = err?.stack || err?.message || String(err || "Unknown error");
+  console.error("Broke Knight crashed:", err);
+
+  let panel = document.getElementById("fatal-error");
+  if (!panel) {
+    panel = document.createElement("pre");
+    panel.id = "fatal-error";
+    document.body.appendChild(panel);
+  }
+
+  panel.textContent = `Broke Knight hit an error.\n\n${message}`;
+}
+
 function tick(now) {
   if (!running) return;
 
@@ -136,18 +163,22 @@ function tick(now) {
   frame = Math.min(MAX_FRAME, frame);
   accumulator += frame;
 
-  let steps = 0;
-  while (accumulator >= STEP && steps < MAX_STEPS) {
-    game?.update?.(STEP);
-    accumulator -= STEP;
-    steps++;
-  }
+  try {
+    let steps = 0;
+    while (accumulator >= STEP && steps < MAX_STEPS) {
+      game?.update?.(STEP);
+      accumulator -= STEP;
+      steps++;
+    }
 
-  if (steps >= MAX_STEPS) {
-    accumulator = 0;
-  }
+    if (steps >= MAX_STEPS) {
+      accumulator = 0;
+    }
 
-  render();
+    render();
+  } catch (err) {
+    showFatalError(err);
+  }
 }
 
 function startLoop() {
@@ -170,6 +201,14 @@ function hardResume() {
 
   focusCanvas();
   startLoop();
+}
+
+function flushSave() {
+  try {
+    game?.flushSave?.();
+  } catch (err) {
+    console.warn("Final save failed", err);
+  }
 }
 
 function softResumeSoon() {
@@ -214,6 +253,7 @@ window.addEventListener("focus", () => {
 });
 
 window.addEventListener("blur", () => {
+  flushSave();
   if (game?.input?.clearAll) {
     game.input.clearAll();
   } else if (game?.input?.endFrame) {
@@ -223,6 +263,7 @@ window.addEventListener("blur", () => {
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
+    flushSave();
     cancelLoop();
   } else {
     softResumeSoon();
@@ -231,6 +272,14 @@ document.addEventListener("visibilitychange", () => {
 
 window.addEventListener("pageshow", () => {
   softResumeSoon();
+});
+
+window.addEventListener("pagehide", () => {
+  flushSave();
+});
+
+window.addEventListener("beforeunload", () => {
+  flushSave();
 });
 
 canvas.addEventListener("mousedown", () => {

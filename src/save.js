@@ -8,7 +8,7 @@
 export default class Save {
   constructor(key = "broke-knight-save") {
     this.key = String(key || "broke-knight-save");
-    this.version = 10;
+    this.version = 11;
   }
 
   load() {
@@ -110,6 +110,7 @@ export default class Save {
     const out = {
       seed: this._num(src.seed, 0, -2147483648, 2147483647),
       worldBuild: typeof src.worldBuild === "string" ? src.worldBuild.slice(0, 40) : "",
+      trackedObjective: this._trackValue(src.trackedObjective),
 
       hero: {
         x: this._finiteCoord(heroSrc.x, 0),
@@ -128,6 +129,7 @@ export default class Save {
         mana: this._int(heroSrc.mana, 60, 0, 999999),
 
         gold: this._int(heroSrc.gold, 0, 0, 999999999),
+        classId: this._classValue(heroSrc.classId),
 
         inventory: this._sanitizeInventory(heroSrc.inventory),
         equip: this._sanitizeEquip(heroSrc.equip),
@@ -136,6 +138,7 @@ export default class Save {
           hp: this._int(heroSrc?.potions?.hp, 2, 0, 9999),
           mana: this._int(heroSrc?.potions?.mana, 1, 0, 9999),
         },
+        bonusStats: this._bonusStats(heroSrc.bonusStats),
 
         state: {
           sailing: false,
@@ -160,9 +163,12 @@ export default class Save {
         campRestBonusClaimed: this._object(progressSrc.campRestBonusClaimed),
         claimedShrines: this._stringArray(progressSrc.claimedShrines),
         openedCaches: this._stringArray(progressSrc.openedCaches),
+        discoveredSecrets: this._stringArray(progressSrc.discoveredSecrets),
         defeatedDragons: this._stringArray(progressSrc.defeatedDragons),
         relicShards: this._int(progressSrc.relicShards, 0, 0, 999999),
         storyMilestones: this._object(progressSrc.storyMilestones),
+        visitedTowns: this._stringArray(progressSrc.visitedTowns),
+        crossedBridges: this._stringArray(progressSrc.crossedBridges),
         exploredCells: this._stringArray(progressSrc.exploredCells).slice(0, 120000),
       },
 
@@ -176,6 +182,7 @@ export default class Save {
 
       menu: {
         open: this._menuValue(menuSrc.open),
+        mapZoom: this._num(menuSrc.mapZoom, 1, 1, 8),
       },
 
       cooldowns: {
@@ -241,6 +248,8 @@ export default class Save {
       level: this._int(src.level, 1, 1, 999),
       rarity: allowedRarities.has(src.rarity) ? src.rarity : "common",
       name: String(src.name || "Gear"),
+      affix: String(src.affix || ""),
+      score: this._int(src.score, 0, 0, 999999),
       color: typeof src.color === "string" ? src.color : "#d9dee8",
       stats: {
         dmg: this._int(statsSrc.dmg, 0, 0, 99999),
@@ -264,7 +273,7 @@ export default class Save {
 
   _quest(src) {
     const q = this._object(src);
-    const allowedTargets = new Set(["blob", "wolf", "stalker", "scout", "caster", "brute", "ashling"]);
+    const allowedTargets = new Set(["blob", "wolf", "stalker", "scout", "caster", "brute", "ashling", "wisp", "sentinel", "thorn", "duelist", "mender"]);
     const needed = this._int(q.needed, 4, 1, 9999);
     return {
       type: "bounty",
@@ -287,11 +296,34 @@ export default class Save {
       "inventory",
       "skills",
       "quests",
+      "shop",
+      "town",
+      "dev",
       "options",
       "god",
       "menu",
       "gear",
     ]);
+  }
+
+  _trackValue(v) {
+    const s = typeof v === "string" ? v : "story";
+    const allowed = new Set(["story", "bounty", "town", "dungeon", "dragon", "treasure", "secret"]);
+    return allowed.has(s) ? s : "story";
+  }
+
+  _classValue(v) {
+    const s = typeof v === "string" ? v.toLowerCase() : "knight";
+    const allowed = new Set(["knight", "ranger", "arcanist", "raider"]);
+    return allowed.has(s) ? s : "knight";
+  }
+
+  _bonusStats(v) {
+    const src = this._object(v);
+    return {
+      hp: this._int(src.hp, 0, 0, 999999),
+      mana: this._int(src.mana, 0, 0, 999999),
+    };
   }
 
   _vec2(v, fallback = { x: 0, y: 0 }) {

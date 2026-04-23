@@ -19,8 +19,11 @@
       width: 100%;
       height: 100%;
       overflow: hidden;
-      background: #070b12;
-      font-family: Arial, Helvetica, sans-serif;
+      background: #05070b;
+      font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
     }
 
     body {
@@ -34,8 +37,8 @@
       height: 100vh;
       overflow: hidden;
       background:
-        radial-gradient(circle at 50% 16%, rgba(42, 74, 114, 0.28), rgba(0, 0, 0, 0) 42%),
-        linear-gradient(180deg, #0b1220 0%, #091019 100%);
+        radial-gradient(circle at 50% 12%, rgba(82, 116, 150, 0.20), rgba(0, 0, 0, 0) 34%),
+        linear-gradient(180deg, #060a10 0%, #080c12 58%, #05070b 100%);
     }
 
     #overworld {
@@ -45,6 +48,7 @@
       outline: none;
       cursor: crosshair;
       image-rendering: auto;
+      touch-action: none;
     }
 
     #noscript-msg {
@@ -64,6 +68,25 @@
 
     .js-ready #noscript-msg {
       display: none;
+    }
+
+    #fatal-error {
+      position: fixed;
+      inset: 16px;
+      z-index: 20;
+      margin: 0;
+      padding: 16px;
+      overflow: auto;
+      white-space: pre-wrap;
+      border: 1px solid rgba(255, 120, 120, 0.45);
+      border-radius: 8px;
+      background: rgba(12, 5, 7, 0.94);
+      color: #ffd7d7;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+      font: 13px/1.45 Consolas, "SFMono-Regular", monospace;
+      user-select: text;
+      -webkit-user-select: text;
+      touch-action: auto;
     }
   </style>
 </head>

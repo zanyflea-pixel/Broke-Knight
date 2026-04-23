@@ -66,6 +66,7 @@ export function makeGear(slot, level = 1, rarity = "common", seed = 1) {
   const lvl = Math.max(1, level | 0);
   const rollA = ((seed * 17) % 1000) / 1000;
   const rollB = ((seed * 31) % 1000) / 1000;
+  const rollC = ((seed * 47) % 1000) / 1000;
 
   const stats = {};
 
@@ -90,11 +91,32 @@ export function makeGear(slot, level = 1, rarity = "common", seed = 1) {
     if (rollB > 0.55) stats.hp = Math.max(4, Math.round((5 + lvl * 1.4) * 0.8));
   }
 
+  const affixPool = [
+    { name: "Vanguard", min: 0.18, stat: "armor", amount: Math.max(1, Math.round(1 + lvl * 0.32 * scale)) },
+    { name: "Ember", min: 0.32, stat: "dmg", amount: Math.max(1, Math.round(1 + lvl * 0.36 * scale)) },
+    { name: "Fleet", min: 0.46, stat: "move", amount: +(0.012 + rollC * 0.024).toFixed(3) },
+    { name: "Sage", min: 0.60, stat: "mana", amount: Math.max(3, Math.round(3 + lvl * 0.7 * scale)) },
+    { name: "Vital", min: 0.74, stat: "hp", amount: Math.max(4, Math.round(5 + lvl * 0.9 * scale)) },
+    { name: "Keen", min: 0.86, stat: "crit", amount: +(0.012 + rollC * 0.032).toFixed(3) },
+  ];
+  const affix = affixPool.find((a) => rollC < a.min) || affixPool[affixPool.length - 1];
+  if (rarity !== "common" || rollC > 0.68) {
+    const nextValue = (stats[affix.stat] || 0) + affix.amount;
+    stats[affix.stat] = Number.isInteger(nextValue) ? nextValue : +nextValue.toFixed(3);
+  }
+
+  const score = Object.entries(stats).reduce((sum, [key, value]) => {
+    const weight = key === "crit" ? 120 : key === "critMult" ? 70 : key === "move" ? 140 : 1;
+    return sum + Number(value || 0) * weight;
+  }, lvl * 2 + scale * 8);
+
   return {
     slot,
     level: lvl,
     rarity,
-    name: makeName(slot, rarity, seed % 97),
+    name: `${affix.name} ${makeName(slot, rarity, seed % 97)}`,
+    affix: affix.name,
+    score: Math.round(score),
     stats,
     color: rarityColor(rarity),
   };
@@ -120,9 +142,11 @@ export class Hero {
     this.mana = this.maxMana;
 
     this.gold = 0;
+    this.classId = "knight";
     this.inventory = [];
     this.equip = {};
     this.potions = { hp: 2, mana: 1 };
+    this.bonusStats = { hp: 0, mana: 0 };
 
     this.lastMove = { x: 1, y: 0 };
     this.aimDir = { x: 1, y: 0 };
@@ -137,14 +161,22 @@ export class Hero {
   }
 
   getStats() {
+    const classId = this.classId || "knight";
+    const classBonus = {
+      knight: { hp: 24, mana: 0, dmg: 1, armor: 2, crit: 0, move: 0 },
+      ranger: { hp: 4, mana: 8, dmg: 2, armor: 0, crit: 0.05, move: 0.05 },
+      arcanist: { hp: -8, mana: 28, dmg: 3, armor: 0, crit: 0.02, move: 0 },
+      raider: { hp: 8, mana: -6, dmg: 2, armor: 1, crit: 0.03, move: 0.07 },
+    }[classId] || {};
+
     const out = {
-      maxHp: 100 + (this.level - 1) * 10,
-      maxMana: 60 + (this.level - 1) * 5,
-      dmg: 8 + (this.level - 1) * 2,
-      armor: 0,
-      crit: 0.05,
+      maxHp: 100 + (this.level - 1) * 10 + (classBonus.hp || 0) + (this.bonusStats?.hp || 0),
+      maxMana: 60 + (this.level - 1) * 5 + (classBonus.mana || 0) + (this.bonusStats?.mana || 0),
+      dmg: 8 + (this.level - 1) * 2 + (classBonus.dmg || 0),
+      armor: classBonus.armor || 0,
+      crit: 0.05 + (classBonus.crit || 0),
       critMult: 1.6,
-      move: 0,
+      move: classBonus.move || 0,
     };
 
     for (const key of Object.keys(this.equip || {})) {
@@ -325,12 +357,33 @@ export class Hero {
     ctx.ellipse(0, 14, 14, 6, 0, 0, Math.PI * 2);
     ctx.fill();
 
+    const gearGlow =
+      (this.equip?.weapon?.rarity === "epic" || this.equip?.armor?.rarity === "epic" || this.equip?.helm?.rarity === "epic") ? "rgba(201,149,255,0.18)" :
+      (this.equip?.weapon?.rarity === "rare" || this.equip?.armor?.rarity === "rare" || this.equip?.helm?.rarity === "rare") ? "rgba(136,207,255,0.15)" :
+      "";
+
+    if (gearGlow) {
+      ctx.fillStyle = gearGlow;
+      ctx.beginPath();
+      ctx.arc(0, -1, 22 + Math.sin(t * 3) * 1.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     ctx.fillStyle = "rgba(128,42,52,0.88)";
     ctx.beginPath();
     ctx.moveTo(-6, -2);
     ctx.lineTo(-11, 10);
     ctx.lineTo(-3, 12);
     ctx.lineTo(4, 3);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(64,24,32,0.42)";
+    ctx.beginPath();
+    ctx.moveTo(5, -3);
+    ctx.lineTo(13, 9);
+    ctx.lineTo(5, 12);
+    ctx.lineTo(0, 3);
     ctx.closePath();
     ctx.fill();
 
@@ -455,6 +508,16 @@ export class Hero {
       ctx.fill();
     }
 
+    if (armorItem?.rarity === "rare" || armorItem?.rarity === "epic") {
+      ctx.strokeStyle = armorItem.rarity === "epic" ? "rgba(226,194,255,0.75)" : "rgba(185,225,255,0.68)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(-7, -3);
+      ctx.lineTo(0, 8);
+      ctx.lineTo(7, -3);
+      ctx.stroke();
+    }
+
     this._drawWeapon(ctx, aim);
 
     if (this.equip?.ring) {
@@ -522,6 +585,11 @@ export class Enemy {
 
     this.attackCd = 0;
     this.rangedCd = 0;
+    this.lungeT = 0;
+    this.recoverT = 0;
+    this.specialCd = 0;
+    this.hitFlashT = 0;
+    this.staggerT = 0;
 
     this.colorA = "#d95b5b";
     this.colorB = "#8c2f38";
@@ -579,6 +647,45 @@ export class Enemy {
       this.touchDps *= 1.08;
       this.colorA = "#8a7c67";
       this.colorB = "#564d41";
+    } else if (this.kind === "wisp") {
+      this.radius = 8;
+      this.hp *= 0.72;
+      this.moveSpeed *= 1.38;
+      this.touchDps *= 0.72;
+      this.rangedCd = 1.1;
+      this.colorA = "#8fe8ff";
+      this.colorB = "#355f9d";
+    } else if (this.kind === "sentinel") {
+      this.radius = 15;
+      this.hp *= 1.72;
+      this.moveSpeed *= 0.64;
+      this.touchDps *= 1.28;
+      this.colorA = "#c8c0a2";
+      this.colorB = "#5b6470";
+    } else if (this.kind === "thorn") {
+      this.radius = 10;
+      this.hp *= 0.98;
+      this.moveSpeed *= 1.02;
+      this.touchDps *= 0.82;
+      this.rangedCd = 1.3;
+      this.colorA = "#79c95f";
+      this.colorB = "#2f6b39";
+    } else if (this.kind === "duelist") {
+      this.radius = 10;
+      this.hp *= 0.96;
+      this.moveSpeed *= 1.34;
+      this.touchDps *= 1.18;
+      this.colorA = "#d8d2c4";
+      this.colorB = "#6c4b8f";
+    } else if (this.kind === "mender") {
+      this.radius = 10;
+      this.hp *= 1.05;
+      this.moveSpeed *= 0.88;
+      this.touchDps *= 0.72;
+      this.rangedCd = 1.8;
+      this.specialCd = 2.2;
+      this.colorA = "#9ee6a5";
+      this.colorB = "#326d53";
     } else if (this.kind === "dragon") {
       this.radius = 30;
       this.hp *= 4.8;
@@ -610,17 +717,17 @@ export class Enemy {
   }
 
   _initLeash() {
-    if (this.kind === "wolf" || this.kind === "scout" || this.kind === "stalker") {
+    if (this.kind === "wolf" || this.kind === "scout" || this.kind === "stalker" || this.kind === "duelist") {
       this.leashRadius = 210;
       this.aggroRadius = 180;
       this.forgetRadius = 280;
       this.returnSpeedMul = 0.95;
-    } else if (this.kind === "caster") {
+    } else if (this.kind === "caster" || this.kind === "wisp" || this.kind === "thorn" || this.kind === "mender") {
       this.leashRadius = 190;
-      this.aggroRadius = 220;
-      this.forgetRadius = 300;
+      this.aggroRadius = this.kind === "wisp" ? 250 : 220;
+      this.forgetRadius = this.kind === "wisp" ? 340 : 300;
       this.returnSpeedMul = 0.85;
-    } else if (this.kind === "brute") {
+    } else if (this.kind === "brute" || this.kind === "sentinel") {
       this.leashRadius = 240;
       this.aggroRadius = 200;
       this.forgetRadius = 300;
@@ -665,6 +772,8 @@ export class Enemy {
 
   takeDamage(amount) {
     this.hp -= amount;
+    this.hitFlashT = 0.16;
+    this.staggerT = Math.max(this.staggerT || 0, this.boss ? 0.03 : this.elite ? 0.05 : 0.08);
     if (this.hp <= 0) {
       this.hp = 0;
       this.alive = false;
@@ -686,6 +795,11 @@ export class Enemy {
 
     this.attackCd = Math.max(0, this.attackCd - dt);
     this.rangedCd = Math.max(0, this.rangedCd - dt);
+    this.lungeT = Math.max(0, (this.lungeT || 0) - dt);
+    this.recoverT = Math.max(0, (this.recoverT || 0) - dt);
+    this.specialCd = Math.max(0, (this.specialCd || 0) - dt);
+    this.hitFlashT = Math.max(0, (this.hitFlashT || 0) - dt);
+    this.staggerT = Math.max(0, (this.staggerT || 0) - dt);
     this.alertT = Math.max(0, this.alertT - dt);
     this.patrolTimer -= dt;
 
@@ -721,6 +835,12 @@ export class Enemy {
 
     const shouldChase = inAggro || this.alertT > 0.01;
 
+    if (this.staggerT > 0) {
+      this.vx *= 0.25;
+      this.vy *= 0.25;
+      return;
+    }
+
     if (!shouldChase) {
       if (this.patrolTimer <= 0 || Math.hypot(this.patrolX - this.x, this.patrolY - this.y) < 12) {
         this.patrolTimer = 1.5 + Math.random() * 2.8;
@@ -731,7 +851,7 @@ export class Enemy {
       const pdy = this.patrolY - this.y;
       const pdir = norm(pdx, pdy);
 
-      const patrolSpeed = this.moveSpeed * (this.kind === "wolf" ? 0.34 : this.kind === "brute" ? 0.22 : 0.28);
+      const patrolSpeed = this.moveSpeed * (this.kind === "wolf" || this.kind === "duelist" ? 0.34 : this.kind === "brute" || this.kind === "sentinel" ? 0.22 : 0.28);
 
       this.vx = pdir.x * patrolSpeed;
       this.vy = pdir.y * patrolSpeed;
@@ -743,46 +863,93 @@ export class Enemy {
       return;
     }
 
-    if (this.kind === "caster" || this.kind === "dragon") {
-      if (d > 170) {
+    const rangedKind = this.kind === "caster" || this.kind === "dragon" || this.kind === "wisp" || this.kind === "thorn" || this.kind === "mender";
+
+    if (rangedKind) {
+      const preferred = this.kind === "dragon" ? 210 : this.kind === "wisp" ? 150 : this.kind === "thorn" ? 190 : 160;
+      const far = preferred + 35;
+      const close = preferred - 45;
+
+      if (d > far) {
         this.vx = dir.x * this.moveSpeed;
         this.vy = dir.y * this.moveSpeed;
-      } else if (d < 120) {
+      } else if (d < close) {
         this.vx = -dir.x * this.moveSpeed * 0.82;
         this.vy = -dir.y * this.moveSpeed * 0.82;
       } else {
-        this.vx = -dir.y * this.moveSpeed * 0.65;
-        this.vy = dir.x * this.moveSpeed * 0.65;
+        const orbit = ((this.seed & 1) ? 1 : -1) * (this.kind === "wisp" ? 1.05 : 0.65);
+        this.vx = -dir.y * this.moveSpeed * orbit;
+        this.vy = dir.x * this.moveSpeed * orbit;
       }
 
-      const range = this.kind === "dragon" ? 520 : 260;
+      if (this.kind === "mender" && this.specialCd <= 0 && game?.enemies) {
+        let healed = 0;
+        for (const ally of game.enemies) {
+          if (!ally?.alive || ally === this || (ally.hp || 0) >= (ally.maxHp || 1)) continue;
+          const ax = ally.x - this.x;
+          const ay = ally.y - this.y;
+          if (ax * ax + ay * ay > 185 * 185) continue;
+          ally.hp = Math.min(ally.maxHp, ally.hp + Math.max(5, Math.round(this.level * 1.1)));
+          healed++;
+          if (healed >= 3) break;
+        }
+        this.specialCd = healed ? 3.6 : 1.2;
+      }
+
+      const range = this.kind === "dragon" ? 520 : this.kind === "wisp" ? 300 : this.kind === "thorn" ? 330 : 260;
       if (this.rangedCd <= 0 && d < range && game?.projectiles) {
         const shotDir = norm(dx, dy);
-        const shotSpeed = this.kind === "dragon" ? 245 : 155;
-        const dmg = this.kind === "dragon" ? Math.max(14, Math.round(this.level * 1.15)) : Math.max(5, Math.round(this.level * 0.60));
+        const spread = this.kind === "thorn" ? [-0.18, 0, 0.18] : [0];
+        for (const turn of spread) {
+          const ca = Math.cos(turn);
+          const sa = Math.sin(turn);
+          const sx = shotDir.x * ca - shotDir.y * sa;
+          const sy = shotDir.x * sa + shotDir.y * ca;
+          const shotSpeed = this.kind === "dragon" ? 245 : this.kind === "wisp" ? 220 : this.kind === "thorn" ? 175 : 155;
+          const dmg = this.kind === "dragon" ? Math.max(14, Math.round(this.level * 1.15)) : this.kind === "wisp" ? Math.max(4, Math.round(this.level * 0.48)) : this.kind === "thorn" ? Math.max(4, Math.round(this.level * 0.52)) : Math.max(5, Math.round(this.level * 0.60));
 
-        game.projectiles.push(
-          new Projectile(
-            this.x + shotDir.x * (this.radius + 4),
-            this.y + shotDir.y * (this.radius + 4),
-            shotDir.x * shotSpeed,
-            shotDir.y * shotSpeed,
-            dmg,
-            1.7,
-            this.level,
-            {
-              friendly: false,
-              color: this.kind === "dragon" ? "rgba(255,105,50,0.94)" : "rgba(115,176,255,0.92)",
-              radius: this.kind === "dragon" ? 7 : 4,
-              hitRadius: this.kind === "dragon" ? 18 : 10,
-            }
-          )
-        );
-        this.rangedCd = this.kind === "dragon" ? 1.55 : 2.2;
+          game.projectiles.push(
+            new Projectile(
+              this.x + sx * (this.radius + 4),
+              this.y + sy * (this.radius + 4),
+              sx * shotSpeed,
+              sy * shotSpeed,
+              dmg,
+              this.kind === "wisp" ? 1.25 : 1.7,
+              this.level,
+              {
+                friendly: false,
+                color: this.kind === "dragon" ? "rgba(255,105,50,0.94)" : this.kind === "wisp" ? "rgba(124,232,255,0.90)" : this.kind === "thorn" ? "rgba(128,218,91,0.90)" : this.kind === "mender" ? "rgba(150,235,165,0.90)" : "rgba(115,176,255,0.92)",
+                radius: this.kind === "dragon" ? 7 : this.kind === "wisp" ? 3.5 : 4,
+                hitRadius: this.kind === "dragon" ? 18 : this.kind === "wisp" ? 8 : 10,
+              }
+            )
+          );
+        }
+        this.rangedCd = this.kind === "dragon" ? 1.55 : this.kind === "wisp" ? 1.05 : this.kind === "thorn" ? 2.35 : this.kind === "mender" ? 2.6 : 2.2;
       }
     } else {
-      this.vx = dir.x * this.moveSpeed;
-      this.vy = dir.y * this.moveSpeed;
+      const meleeRange = (this.radius || 12) + (hero.radius || hero.r || 12) + 24;
+      if (this.lungeT > 0) {
+        this.vx = dir.x * this.moveSpeed * 1.95;
+        this.vy = dir.y * this.moveSpeed * 1.95;
+      } else if (this.recoverT > 0) {
+        this.vx = -dir.x * this.moveSpeed * 0.30;
+        this.vy = -dir.y * this.moveSpeed * 0.30;
+      } else if (d <= meleeRange && this.attackCd <= 0) {
+        this.lungeT = 0.20;
+        this.recoverT = 0.44;
+        this.attackCd = this.kind === "sentinel" ? 1.22 : this.kind === "brute" ? 1.05 : this.kind === "duelist" ? 0.58 : this.kind === "wolf" ? 0.72 : 0.86;
+        const lungeMul = this.kind === "duelist" ? 2.35 : this.kind === "sentinel" ? 1.38 : 1.75;
+        this.vx = dir.x * this.moveSpeed * lungeMul;
+        this.vy = dir.y * this.moveSpeed * lungeMul;
+      } else if (d < meleeRange * 0.78) {
+        this.vx = -dir.x * this.moveSpeed * 0.42;
+        this.vy = -dir.y * this.moveSpeed * 0.42;
+      } else {
+        this.vx = dir.x * this.moveSpeed;
+        this.vy = dir.y * this.moveSpeed;
+      }
     }
 
     const nx = this.x + this.vx * dt;
@@ -811,8 +978,30 @@ export class Enemy {
     else if (this.kind === "scout") this._drawScout(ctx);
     else if (this.kind === "stalker") this._drawStalker(ctx);
     else if (this.kind === "ashling") this._drawAshling(ctx, t);
+    else if (this.kind === "wisp") this._drawWisp(ctx, t);
+    else if (this.kind === "sentinel") this._drawSentinel(ctx, t);
+    else if (this.kind === "thorn") this._drawThorn(ctx, t);
+    else if (this.kind === "duelist") this._drawDuelist(ctx, t);
+    else if (this.kind === "mender") this._drawMender(ctx, t);
     else if (this.kind === "dragon") this._drawDragon(ctx, t);
     else this._drawBlob(ctx, t);
+
+    if ((this.lungeT || 0) > 0) {
+      ctx.strokeStyle = "rgba(255,210,130,0.55)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, r + 8, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    if ((this.hitFlashT || 0) > 0) {
+      ctx.globalAlpha = Math.min(0.55, (this.hitFlashT || 0) * 4.0);
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.arc(0, 0, r + 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
 
     if (this.elite || this.boss) {
       ctx.strokeStyle = this.boss ? "rgba(255,150,150,0.48)" : "rgba(255,226,130,0.42)";
@@ -1083,6 +1272,134 @@ export class Enemy {
 
     this._drawEyes(ctx, -2, "#ffe7cf");
   }
+
+  _drawWisp(ctx, t) {
+    const glow = 1 + Math.sin(t * 8 + this.seed) * 0.12;
+    ctx.fillStyle = "rgba(124,232,255,0.18)";
+    ctx.beginPath();
+    ctx.arc(0, -1, this.radius * 2.0 * glow, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = this.colorB;
+    ctx.beginPath();
+    ctx.ellipse(0, 1, this.radius * 0.82, this.radius * 1.18, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = this.colorA;
+    ctx.beginPath();
+    ctx.arc(0, -3, this.radius * 0.72, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(220,250,255,0.72)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(0, -1, this.radius + 4, t * 2, t * 2 + Math.PI * 1.35);
+    ctx.stroke();
+    this._drawEyes(ctx, -4, "#ecfbff");
+  }
+
+  _drawSentinel(ctx, t) {
+    ctx.fillStyle = this.colorB;
+    ctx.fillRect(-this.radius - 2, -this.radius + 1, this.radius * 2 + 4, this.radius * 2 + 2);
+
+    ctx.fillStyle = this.colorA;
+    ctx.beginPath();
+    ctx.moveTo(0, -this.radius - 4);
+    ctx.lineTo(this.radius + 4, -this.radius + 3);
+    ctx.lineTo(this.radius + 2, this.radius + 6);
+    ctx.lineTo(0, this.radius + 10);
+    ctx.lineTo(-this.radius - 2, this.radius + 6);
+    ctx.lineTo(-this.radius - 4, -this.radius + 3);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(255,255,255,0.22)";
+    ctx.fillRect(-this.radius + 3, -this.radius + 4, this.radius * 2 - 6, 3);
+    ctx.fillRect(-2, -this.radius + 2, 4, this.radius * 2);
+
+    ctx.fillStyle = "#e7dbc0";
+    ctx.fillRect(-5, -5, 3, 3);
+    ctx.fillRect(2, -5, 3, 3);
+
+    ctx.strokeStyle = `rgba(255,230,165,${0.22 + Math.sin(t * 3) * 0.06})`;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(-this.radius - 4.5, -this.radius - 4.5, this.radius * 2 + 9, this.radius * 2 + 14);
+  }
+
+  _drawThorn(ctx, t) {
+    ctx.fillStyle = this.colorB;
+    ctx.beginPath();
+    ctx.moveTo(0, -this.radius - 6);
+    ctx.lineTo(this.radius + 8, 2);
+    ctx.lineTo(4, this.radius + 7);
+    ctx.lineTo(-this.radius - 8, 2);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = this.colorA;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, this.radius * 0.82, this.radius * 1.08, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "#d9ffc4";
+    ctx.lineWidth = 2;
+    for (let i = -1; i <= 1; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i * 5, -this.radius - 1);
+      ctx.lineTo(i * 9, -this.radius - 8 - Math.sin(t * 5 + i) * 2);
+      ctx.stroke();
+    }
+    this._drawEyes(ctx, -3, "#efffe6");
+  }
+
+  _drawDuelist(ctx, t) {
+    ctx.fillStyle = this.colorB;
+    ctx.beginPath();
+    ctx.ellipse(0, 1, this.radius * 0.86, this.radius * 1.12, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = this.colorA;
+    ctx.beginPath();
+    ctx.moveTo(0, -this.radius - 4);
+    ctx.lineTo(this.radius - 1, 2);
+    ctx.lineTo(3, this.radius + 4);
+    ctx.lineTo(-this.radius + 1, 2);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = "#f2e8ff";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(this.radius - 1, -6);
+    ctx.lineTo(this.radius + 12 + Math.sin(t * 9) * 2, -10);
+    ctx.stroke();
+
+    ctx.fillStyle = "#2b2440";
+    ctx.fillRect(-5, -5, 10, 3);
+    this._drawEyes(ctx, -4, "#ffffff");
+  }
+
+  _drawMender(ctx, t) {
+    ctx.fillStyle = "rgba(150,235,165,0.18)";
+    ctx.beginPath();
+    ctx.arc(0, 0, this.radius + 8 + Math.sin(t * 4) * 1.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = this.colorB;
+    ctx.beginPath();
+    ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = this.colorA;
+    ctx.beginPath();
+    ctx.arc(0, -2, this.radius * 0.80, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#e6ffe7";
+    ctx.fillRect(-2, -9, 4, 14);
+    ctx.fillRect(-7, -4, 14, 4);
+    this._drawEyes(ctx, -3, "#ffffff");
+  }
 }
 
 export class Projectile {
@@ -1186,9 +1503,10 @@ export class Loot {
     const dy = hero.y - this.y;
     const d = Math.hypot(dx, dy) || 0.001;
 
-    if (d < 96) {
+    const pullRange = this.kind === "gear" ? 132 : 96;
+    if (d < pullRange) {
       const dir = { x: dx / d, y: dy / d };
-      const speed = 44 + (96 - d) * 3.5;
+      const speed = 44 + (pullRange - d) * (this.kind === "gear" ? 3.0 : 3.5);
       this.x += dir.x * speed * dt;
       this.y += dir.y * speed * dt;
     }
@@ -1230,16 +1548,37 @@ export class Loot {
       ctx.fillStyle = "#d8cdb6";
       ctx.fillRect(-2, -6, 4, 5);
     } else if (this.kind === "gear") {
-      ctx.fillStyle = this.data?.color || "#d9dee8";
+      const color = this.data?.color || "#d9dee8";
+      const rarity = this.data?.rarity || "common";
+      const pulse = 1 + Math.sin(this.t * 5) * 0.08;
+      if (rarity !== "common") {
+        ctx.globalAlpha = rarity === "epic" ? 0.34 : rarity === "rare" ? 0.25 : 0.18;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(0, 0, 18 * pulse, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
+      ctx.fillStyle = color;
       ctx.beginPath();
       ctx.arc(0, 0, 6.5, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.strokeStyle = "rgba(255,255,255,0.5)";
+      ctx.strokeStyle = rarity === "epic" ? "rgba(255,240,170,0.88)" : "rgba(255,255,255,0.5)";
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(0, 0, 8.5, 0, Math.PI * 2);
       ctx.stroke();
+
+      if (rarity === "epic" || rarity === "rare") {
+        ctx.fillStyle = "rgba(5,8,12,0.72)";
+        ctx.fillRect(-22, -27, 44, 13);
+        ctx.fillStyle = color;
+        ctx.font = "bold 9px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText(rarity.toUpperCase(), 0, -17);
+      }
     }
 
     ctx.restore();
