@@ -56,6 +56,36 @@ function armorWeightFromItem(item) {
   return "light";
 }
 
+function alphaColor(hex, alpha) {
+  if (typeof hex !== "string" || !hex.startsWith("#")) return `rgba(255,255,255,${alpha})`;
+  const raw = hex.slice(1);
+  const full = raw.length === 3 ? raw.split("").map((c) => c + c).join("") : raw;
+  const value = Number.parseInt(full, 16);
+  if (!Number.isFinite(value)) return `rgba(255,255,255,${alpha})`;
+  const r = (value >> 16) & 255;
+  const g = (value >> 8) & 255;
+  const b = value & 255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function mixColor(a, b, t = 0.5) {
+  const read = (hex) => {
+    if (typeof hex !== "string" || !hex.startsWith("#")) return [255, 255, 255];
+    const raw = hex.slice(1);
+    const full = raw.length === 3 ? raw.split("").map((c) => c + c).join("") : raw;
+    const value = Number.parseInt(full, 16);
+    if (!Number.isFinite(value)) return [255, 255, 255];
+    return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
+  };
+  const ca = read(a);
+  const cb = read(b);
+  const p = clamp(t, 0, 1);
+  const r = Math.round(ca[0] + (cb[0] - ca[0]) * p);
+  const g = Math.round(ca[1] + (cb[1] - ca[1]) * p);
+  const b2 = Math.round(ca[2] + (cb[2] - ca[2]) * p);
+  return `rgb(${r},${g},${b2})`;
+}
+
 export function makeGear(slot, level = 1, rarity = "common", seed = 1) {
   const scale =
     rarity === "epic" ? 1.9 :
@@ -357,6 +387,28 @@ export class Hero {
     ctx.ellipse(0, 14, 14, 6, 0, 0, Math.PI * 2);
     ctx.fill();
 
+    ctx.strokeStyle = "rgba(230,240,255,0.18)";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.arc(0, -1, 17 + Math.sin(t * 2.6) * 0.8, 0, Math.PI * 2);
+    ctx.stroke();
+
+    const dashGlow = Math.max(0, this.state?.dashT || 0);
+    if (dashGlow > 0) {
+      const dashAngle = Math.atan2(aim.y, aim.x);
+      ctx.save();
+      ctx.rotate(dashAngle);
+      ctx.fillStyle = alphaColor("#ffd36e", Math.min(0.22, dashGlow * 0.35));
+      ctx.beginPath();
+      ctx.moveTo(-26, 0);
+      ctx.lineTo(-6, -7);
+      ctx.lineTo(10, 0);
+      ctx.lineTo(-6, 7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
     const gearGlow =
       (this.equip?.weapon?.rarity === "epic" || this.equip?.armor?.rarity === "epic" || this.equip?.helm?.rarity === "epic") ? "rgba(201,149,255,0.18)" :
       (this.equip?.weapon?.rarity === "rare" || this.equip?.armor?.rarity === "rare" || this.equip?.helm?.rarity === "rare") ? "rgba(136,207,255,0.15)" :
@@ -368,6 +420,26 @@ export class Hero {
       ctx.arc(0, -1, 22 + Math.sin(t * 3) * 1.2, 0, Math.PI * 2);
       ctx.fill();
     }
+
+    const cloakColor = mixColor(armorColor, "#5a1a24", armorWeight === "heavy" ? 0.48 : 0.62);
+    const stride = Math.sin(t * 7.5) * 1.2 + (this.state?.dashT || 0) * 10;
+    ctx.fillStyle = alphaColor(cloakColor, armorItem ? 0.82 : 0.74);
+    ctx.beginPath();
+    ctx.moveTo(-7, -5);
+    ctx.lineTo(-13, 10 + stride * 0.25);
+    ctx.lineTo(-2, 8);
+    ctx.lineTo(6, 13 + stride * 0.18);
+    ctx.lineTo(10, -1);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.10)";
+    ctx.beginPath();
+    ctx.moveTo(-3, -5);
+    ctx.lineTo(-1, 8);
+    ctx.lineTo(2, 7);
+    ctx.lineTo(1, -4);
+    ctx.closePath();
+    ctx.fill();
 
     ctx.fillStyle = "rgba(128,42,52,0.88)";
     ctx.beginPath();
@@ -972,6 +1044,14 @@ export class Enemy {
     ctx.ellipse(0, r + 3, r * 1.05, Math.max(4, r * 0.34), 0, 0, Math.PI * 2);
     ctx.fill();
 
+    const aura = this._ambientAuraColor();
+    if (aura) {
+      ctx.fillStyle = aura;
+      ctx.beginPath();
+      ctx.arc(0, 0, r + (this.boss ? 16 : this.elite ? 11 : 7) + Math.sin(t * 2.8 + this.seed) * 1.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     if (this.kind === "wolf") this._drawWolf(ctx);
     else if (this.kind === "brute") this._drawBrute(ctx);
     else if (this.kind === "caster") this._drawCaster(ctx, t);
@@ -994,6 +1074,14 @@ export class Enemy {
       ctx.stroke();
     }
 
+    if ((this.attackCd || 0) <= 0.14 && (this.alertT || 0) > 0.05 && !this.boss) {
+      ctx.strokeStyle = "rgba(255,168,120,0.42)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, r + 11, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
     if ((this.hitFlashT || 0) > 0) {
       ctx.globalAlpha = Math.min(0.55, (this.hitFlashT || 0) * 4.0);
       ctx.fillStyle = "#ffffff";
@@ -1002,6 +1090,12 @@ export class Enemy {
       ctx.fill();
       ctx.globalAlpha = 1;
     }
+
+    ctx.strokeStyle = this.boss ? "rgba(255,214,170,0.22)" : this.elite ? "rgba(255,240,170,0.16)" : "rgba(255,255,255,0.08)";
+    ctx.lineWidth = this.boss ? 2 : 1.2;
+    ctx.beginPath();
+    ctx.arc(0, 0, r + 1.5, 0, Math.PI * 2);
+    ctx.stroke();
 
     if (this.elite || this.boss) {
       ctx.strokeStyle = this.boss ? "rgba(255,150,150,0.48)" : "rgba(255,226,130,0.42)";
@@ -1022,21 +1116,46 @@ export class Enemy {
     }
 
     if ((this.hp || 0) < (this.maxHp || 1) || this.boss) {
-      const bw = this.boss ? 54 : 34;
-      const bh = this.boss ? 6 : 4;
+      const bw = this.boss ? 58 : this.elite ? 40 : 34;
+      const bh = this.boss ? 7 : 4;
       const y = r + 12;
       const frac = Math.max(0, Math.min(1, (this.hp || 0) / Math.max(1, this.maxHp || 1)));
 
-      ctx.fillStyle = "rgba(0,0,0,0.46)";
+      ctx.fillStyle = "rgba(0,0,0,0.58)";
+      ctx.fillRect(-bw * 0.5 - 1, y - 1, bw + 2, bh + 2);
+      ctx.fillStyle = "rgba(255,255,255,0.06)";
       ctx.fillRect(-bw * 0.5, y, bw, bh);
-      ctx.fillStyle = this.boss ? "#ff8a5c" : "#cf4d5f";
+      ctx.fillStyle = this.boss ? "#ff8a5c" : this.elite ? "#ffd36e" : "#cf4d5f";
       ctx.fillRect(-bw * 0.5, y, bw * frac, bh);
       ctx.strokeStyle = "rgba(255,255,255,0.24)";
       ctx.lineWidth = 1;
       ctx.strokeRect(-bw * 0.5 + 0.5, y + 0.5, bw - 1, bh - 1);
     }
 
+    if (this.elite || this.boss) {
+      const badgeY = -r - (this.affix ? 36 : 18);
+      const badgeW = this.boss ? 42 : 34;
+      ctx.fillStyle = "rgba(8,10,14,0.78)";
+      ctx.fillRect(-badgeW * 0.5, badgeY - 10, badgeW, 12);
+      ctx.strokeStyle = this.boss ? "rgba(255,150,150,0.40)" : "rgba(255,226,130,0.32)";
+      ctx.strokeRect(-badgeW * 0.5 + 0.5, badgeY - 9.5, badgeW - 1, 11);
+      ctx.fillStyle = this.boss ? "#ffb6a8" : "#ffe69a";
+      ctx.font = "bold 9px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(this.boss ? `BOSS ${this.level}` : `ELITE ${this.level}`, 0, badgeY - 0.5);
+    }
+
     ctx.restore();
+  }
+
+  _ambientAuraColor() {
+    if (this.boss) return alphaColor(this.colorA || "#ff8a5c", this.kind === "dragon" ? 0.16 : 0.12);
+    if (this.elite) return alphaColor(this.colorA || "#ffd36e", 0.09);
+    if (this.kind === "wisp") return "rgba(143,232,255,0.12)";
+    if (this.kind === "caster" || this.kind === "mender") return "rgba(136,207,255,0.08)";
+    if (this.kind === "thorn") return "rgba(126,201,95,0.08)";
+    if (this.kind === "ashling") return "rgba(194,134,92,0.08)";
+    return "";
   }
 
   _drawEyes(ctx, y = -2, glow = "#fff") {
@@ -1519,6 +1638,7 @@ export class Loot {
 
   draw(ctx) {
     const bob = Math.sin(this.t * 6) * 2;
+    const pulse = 1 + Math.sin(this.t * 5) * 0.08;
 
     ctx.save();
     ctx.translate(this.x, this.y + bob);
@@ -1529,29 +1649,81 @@ export class Loot {
     ctx.fill();
 
     if (this.kind === "gold") {
+      ctx.fillStyle = "rgba(255,210,92,0.16)";
+      ctx.beginPath();
+      ctx.arc(0, 0, 10.5 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+
       ctx.fillStyle = "#efc24a";
       ctx.beginPath();
       ctx.arc(0, 0, 6, 0, Math.PI * 2);
       ctx.fill();
 
+      ctx.strokeStyle = "rgba(255,244,170,0.55)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(0, 0, 8.5, 0, Math.PI * 2);
+      ctx.stroke();
+
       ctx.fillStyle = "#fff0a8";
       ctx.beginPath();
       ctx.arc(-1.5, -1.5, 2, 0, Math.PI * 2);
       ctx.fill();
+
+      const amount = this.data?.amount || 0;
+      if (amount >= 10) {
+        ctx.fillStyle = "rgba(5,8,12,0.70)";
+        ctx.fillRect(-12, -21, 24, 11);
+        ctx.fillStyle = "#ffe69a";
+        ctx.font = "bold 8px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText(`${amount}g`, 0, -13);
+      }
     } else if (this.kind === "potion") {
       const mana = this.data?.potionType === "mana";
+      ctx.fillStyle = mana ? "rgba(136,207,255,0.18)" : "rgba(255,143,160,0.18)";
+      ctx.beginPath();
+      ctx.arc(0, 2, 11 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+
       ctx.fillStyle = mana ? "#6aa6ff" : "#df5b72";
       ctx.beginPath();
       ctx.arc(0, 2, 6, 0, Math.PI * 2);
       ctx.fill();
 
+      ctx.strokeStyle = mana ? "rgba(206,232,255,0.62)" : "rgba(255,221,227,0.56)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(0, 2, 8.5, 0, Math.PI * 2);
+      ctx.stroke();
+
       ctx.fillStyle = "#d8cdb6";
       ctx.fillRect(-2, -6, 4, 5);
+
+      ctx.fillStyle = "rgba(5,8,12,0.68)";
+      ctx.fillRect(-14, -22, 28, 11);
+      ctx.fillStyle = mana ? "#d7ebff" : "#ffd3d7";
+      ctx.font = "bold 8px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(mana ? "MANA" : "HP", 0, -14);
     } else if (this.kind === "gear") {
       const color = this.data?.color || "#d9dee8";
       const rarity = this.data?.rarity || "common";
-      const pulse = 1 + Math.sin(this.t * 5) * 0.08;
-      if (rarity !== "common") {
+      const beamAlpha = rarity === "epic" ? 0.24 : rarity === "rare" ? 0.18 : rarity === "uncommon" ? 0.12 : 0;
+      if (beamAlpha > 0) {
+        const beam = ctx.createLinearGradient(0, -38, 0, 20);
+        beam.addColorStop(0, alphaColor(color, 0));
+        beam.addColorStop(0.3, alphaColor(color, beamAlpha));
+        beam.addColorStop(1, alphaColor(color, 0));
+        ctx.fillStyle = beam;
+        ctx.beginPath();
+        ctx.moveTo(-8, 14);
+        ctx.lineTo(-18, -34);
+        ctx.lineTo(18, -34);
+        ctx.lineTo(8, 14);
+        ctx.closePath();
+        ctx.fill();
+
         ctx.globalAlpha = rarity === "epic" ? 0.34 : rarity === "rare" ? 0.25 : 0.18;
         ctx.fillStyle = color;
         ctx.beginPath();
@@ -1559,6 +1731,11 @@ export class Loot {
         ctx.fill();
         ctx.globalAlpha = 1;
       }
+
+      ctx.fillStyle = alphaColor(color, 0.14);
+      ctx.beginPath();
+      ctx.arc(0, 0, 11.5 * pulse, 0, Math.PI * 2);
+      ctx.fill();
 
       ctx.fillStyle = color;
       ctx.beginPath();
@@ -1571,13 +1748,31 @@ export class Loot {
       ctx.arc(0, 0, 8.5, 0, Math.PI * 2);
       ctx.stroke();
 
-      if (rarity === "epic" || rarity === "rare") {
+      if (rarity === "epic" || rarity === "rare" || rarity === "uncommon") {
         ctx.fillStyle = "rgba(5,8,12,0.72)";
-        ctx.fillRect(-22, -27, 44, 13);
+        ctx.fillRect(-24, -27, 48, 13);
         ctx.fillStyle = color;
         ctx.font = "bold 9px Arial";
         ctx.textAlign = "center";
         ctx.fillText(rarity.toUpperCase(), 0, -17);
+      }
+
+      if (rarity === "epic") {
+        ctx.strokeStyle = "rgba(255,228,168,0.78)";
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(0, -14);
+        ctx.lineTo(3, -6);
+        ctx.lineTo(11, -6);
+        ctx.lineTo(5, -1);
+        ctx.lineTo(7, 8);
+        ctx.lineTo(0, 3);
+        ctx.lineTo(-7, 8);
+        ctx.lineTo(-5, -1);
+        ctx.lineTo(-11, -6);
+        ctx.lineTo(-3, -6);
+        ctx.closePath();
+        ctx.stroke();
       }
     }
 

@@ -16,6 +16,27 @@ import Input from "./input.js";
 import UI from "./ui.js";
 import Save from "./save.js";
 
+const DEV_RESET_CONFIRM_MS = 2500;
+const DEV_TOOL_ACTION_COUNT = 9;
+const SHOP_ACTION_COUNT = 4;
+const TOWN_ACTION_COUNT = 8;
+const EQUIPMENT_SLOTS = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+const SKILL_PANEL_ORDER = ["q", "w", "e", "r"];
+const QUEST_PANEL_HEIGHT = 420;
+const QUEST_TRACKS = [
+  ["1", "story"],
+  ["2", "bounty"],
+  ["3", "town"],
+  ["4", "dungeon"],
+  ["5", "dragon"],
+  ["6", "treasure"],
+  ["7", "secret"],
+];
+const QUEST_TRACK_ROWS = [
+  ["story", "bounty", "town", "dungeon"],
+  ["dragon", "treasure", "secret"],
+];
+
 export default class Game {
   constructor(canvas) {
     if (!canvas) throw new Error("Game: canvas is required");
@@ -228,6 +249,7 @@ export default class Game {
 
     this._tickMessages(dt);
     this._tickCooldowns(dt);
+    this._tickVisualEffects(dt);
     this._updateMouseWorld();
     this.world?.revealAround?.(this.hero.x, this.hero.y, this.dungeon.active ? 460 : 720);
     this._updateNearbyPOIs(dt);
@@ -290,12 +312,6 @@ export default class Game {
 
     ctx.clearRect(0, 0, this.w, this.h);
 
-    if (this._killFlashT > 0) {
-      ctx.fillStyle = `rgba(255,255,255,${0.06 * this._killFlashT})`;
-      ctx.fillRect(0, 0, this.w, this.h);
-      this._killFlashT = Math.max(0, this._killFlashT - 0.04);
-    }
-
     ctx.save();
     ctx.translate(
       this.w * 0.5 - this.camera.x + this.camera.sx,
@@ -341,10 +357,38 @@ export default class Game {
   _drawScreenEffects(ctx) {
     ctx.save();
 
+    if (this._killFlashT > 0) {
+      ctx.fillStyle = `rgba(255,255,255,${0.22 * this._killFlashT})`;
+      ctx.fillRect(0, 0, this.w, this.h);
+    }
+
     const hpFrac = clamp((this.hero.hp || 0) / Math.max(1, this.hero.maxHp || 100), 0, 1);
     if (hpFrac < 0.32 && !this.dev?.godMode) {
       ctx.fillStyle = `rgba(120, 10, 24, ${(0.32 - hpFrac) * 0.34})`;
       ctx.fillRect(0, 0, this.w, this.h);
+    }
+
+    const hurtT = this.hero?.state?.hurtT || 0;
+    if (hurtT > 0) {
+      ctx.fillStyle = `rgba(255,120,120,${hurtT * 0.18})`;
+      ctx.fillRect(0, 0, this.w, this.h);
+    }
+
+    const poisonT = this.hero?.state?.poisonT || 0;
+    if (poisonT > 0) {
+      ctx.fillStyle = `rgba(110,205,120,${Math.min(0.12, poisonT * 0.08)})`;
+      ctx.fillRect(0, 0, this.w, this.h);
+    }
+
+    const dashT = this.hero?.state?.dashT || 0;
+    if (dashT > 0) {
+      const dir = this.hero?.aimDir || this.hero?.lastMove || { x: 1, y: 0 };
+      const angle = Math.atan2(dir.y || 0, dir.x || 1);
+      ctx.translate(this.w * 0.5, this.h * 0.5);
+      ctx.rotate(angle);
+      ctx.fillStyle = `rgba(255,211,110,${Math.min(0.16, dashT * 0.18)})`;
+      ctx.fillRect(-this.w * 0.18, -18, this.w * 0.36, 36);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
 
     const grd = ctx.createRadialGradient(this.w * 0.5, this.h * 0.48, Math.min(this.w, this.h) * 0.18, this.w * 0.5, this.h * 0.5, Math.max(this.w, this.h) * 0.62);
@@ -386,11 +430,7 @@ export default class Game {
 
       if (this.menu.open !== "map") return;
       ev.preventDefault();
-      const current = clamp(this.menu.mapZoom || 1, 1, 8);
-      const next = ev.deltaY < 0 ? Math.min(8, current * 2) : Math.max(1, current / 2);
-      if (next === current) return;
-      this.menu.mapZoom = next;
-      this._msg(`Map zoom ${next}x`, 0.7);
+      this._setMapZoom(ev.deltaY < 0 ? "in" : "out");
     }, { passive: false });
 
     const toCanvasPoint = (ev) => {
@@ -556,6 +596,20 @@ export default class Game {
     }
   }
 
+  _tickVisualEffects(dt) {
+    this._killFlashT = Math.max(0, (this._killFlashT || 0) - dt * 2.4);
+
+    for (const f of this.floatingTexts) {
+      f.vy = Number.isFinite(f.vy) ? f.vy : -21;
+      f.life = Number.isFinite(f.life) ? f.life : Math.max(0.01, (f.a || 1) / 0.9);
+      f.y += f.vy * dt;
+      f.a = clamp((f.a ?? 1) - dt * 0.9, 0, 1);
+      f.life = Math.max(0, f.life - dt);
+    }
+
+    this.floatingTexts = this.floatingTexts.filter((f) => (f.a || 0) > 0 && (f.life || 0) > 0);
+  }
+
   _handleMenus() {
     if (this.input.wasPressed("m") || this.input.wasPressed("M")) {
       this.menu.open = this.menu.open === "map" ? null : "map";
@@ -599,44 +653,62 @@ export default class Game {
 
   _handleQuestInput() {
     this._handleQuestMouse();
-    const tracks = [
-      ["1", "story", "Tracking story"],
-      ["2", "bounty", "Tracking bounty"],
-      ["3", "town", "Tracking nearest town"],
-      ["4", "dungeon", "Tracking dungeon"],
-      ["5", "dragon", "Tracking dragon"],
-      ["6", "treasure", "Tracking treasure"],
-      ["7", "secret", "Tracking secrets"],
-    ];
-    for (const [key, track, msg] of tracks) {
+    for (const [key, track] of QUEST_TRACKS) {
       if (!this.input.wasPressed(key)) continue;
-      this.trackedObjective = track;
-      this._msg(msg, 0.9);
+      this._setTrackedObjective(track);
     }
   }
 
   _handleQuestMouse() {
     if (!this.mouse.clicked) return;
-    const w = Math.min(Math.max(this.w - 120, 430), 560);
-    const h = 398;
+    const { w, h, rows } = this.getQuestPanelLayout();
     const x = ((this.w - w) / 2) | 0;
     const y = ((this.h - h) / 2) | 0;
     const mx = this.mouse.x;
     const my = this.mouse.y;
-    const rows = [
-      { y: y + 62, tracks: ["story", "bounty", "town", "dungeon"] },
-      { y: y + 78, tracks: ["dragon", "treasure", "secret"] },
-    ];
 
     for (const row of rows) {
-      if (my < row.y || my > row.y + 18 || mx < x + 170 || mx > x + w - 18) continue;
+      const rowY = y + row.y;
+      if (my < rowY || my > rowY + 18 || mx < x + 170 || mx > x + w - 18) continue;
       const slotW = (w - 194) / row.tracks.length;
       const idx = clamp(Math.floor((mx - (x + 176)) / slotW), 0, row.tracks.length - 1);
-      const track = row.tracks[idx];
-      this.trackedObjective = track;
-      this._msg(`Tracking ${this._titleCase(track)}`, 0.9);
+      this._setTrackedObjective(row.tracks[idx]);
       return;
     }
+  }
+
+  getQuestPanelLayout() {
+    return {
+      w: Math.min(Math.max(this.w - 120, 430), 560),
+      h: QUEST_PANEL_HEIGHT,
+      rows: [
+        { y: 62, tracks: QUEST_TRACK_ROWS[0] },
+        { y: 78, tracks: QUEST_TRACK_ROWS[1] },
+      ],
+    };
+  }
+
+  _setTrackedObjective(track, message) {
+    const map = {
+      story: "Tracking story",
+      bounty: "Tracking bounty",
+      town: "Tracking nearest town",
+      dungeon: "Tracking dungeon",
+      dragon: "Tracking dragon",
+      treasure: "Tracking treasure",
+      secret: "Tracking secrets",
+    };
+    this.trackedObjective = track;
+    if (message !== null) this._msg(message || map[track] || `Tracking ${this._titleCase(track)}`, 0.9);
+  }
+
+  getQuestTrackHintLines() {
+    const first = QUEST_TRACKS.slice(0, 4).map(([key, track]) => `${key} ${this._titleCase(track)}`);
+    const second = QUEST_TRACKS.slice(4).map(([key, track]) => `${key} ${track === "secret" ? "Secrets" : this._titleCase(track)}`);
+    return [
+      first.join("  "),
+      `${second.join("  ")}  (click to track)`,
+    ];
   }
 
   getJournalStats() {
@@ -659,37 +731,41 @@ export default class Game {
     const zoomIn = this.input.wasPressed("+") || this.input.wasPressed("=") || this.input.wasPressed("Add");
     const zoomOut = this.input.wasPressed("-") || this.input.wasPressed("_") || this.input.wasPressed("Subtract");
     const reset = this.input.wasPressed("0");
-    const current = clamp(this.menu.mapZoom || 1, 1, 8);
 
     if (zoomIn) {
-      this.menu.mapZoom = Math.min(8, current * 2);
-      this._msg(`Map zoom ${this.menu.mapZoom}x`, 0.7);
+      this._setMapZoom("in");
     } else if (zoomOut) {
-      this.menu.mapZoom = Math.max(1, current / 2);
-      this._msg(`Map zoom ${this.menu.mapZoom}x`, 0.7);
+      this._setMapZoom("out");
     } else if (reset) {
-      this.menu.mapZoom = 1;
-      this._msg("Map zoom reset", 0.7);
+      this._setMapZoom("reset");
     }
+  }
+
+  _setMapZoom(mode) {
+    const current = clamp(this.menu.mapZoom || 1, 1, 8);
+    const next =
+      mode === "in" ? Math.min(8, current * 2) :
+      mode === "out" ? Math.max(1, current / 2) :
+      1;
+    if (next === current && mode !== "reset") return;
+    this.menu.mapZoom = next;
+    this._msg(mode === "reset" ? "Map zoom reset" : `Map zoom ${next}x`, 0.7);
   }
 
   _handleDevToolsInput() {
     this._handleDevToolsMouse();
-    for (let i = 1; i <= 9; i++) {
+    for (let i = 1; i <= DEV_TOOL_ACTION_COUNT; i++) {
       if (this.input.wasPressed(String(i))) this._runDevToolAction(i);
     }
   }
 
   _handleDevToolsMouse() {
     if (!this.mouse.clicked) return;
-    const w = Math.min(Math.max(this.w - 120, 430), 560);
-    const h = 340;
-    const x = ((this.w - w) / 2) | 0;
-    const y = ((this.h - h) / 2) | 0;
+    const { w, x, y, rowStart, rowStep, rowInset } = this.getDevPanelLayout();
     const mx = this.mouse.x;
     const my = this.mouse.y;
-    const row = Math.floor((my - (y + 70)) / 22);
-    if (mx < x + 20 || mx > x + w - 20 || row < 0 || row > 8) return;
+    const row = Math.floor((my - (y + rowStart)) / rowStep);
+    if (mx < x + rowInset || mx > x + w - rowInset || row < 0 || row >= DEV_TOOL_ACTION_COUNT) return;
     this._runDevToolAction(row + 1);
   }
 
@@ -737,9 +813,8 @@ export default class Game {
       this._devEquipBestGear();
     }
     if (action === 9) {
-      const now = Date.now();
-      if (!this._devResetConfirmAt || now - this._devResetConfirmAt > 2500) {
-        this._devResetConfirmAt = now;
+      if (!this._isDevResetConfirmLive()) {
+        this._devResetConfirmAt = Date.now();
         this._msg("Dev: press 9 again to reset", 1.4);
         return;
       }
@@ -748,8 +823,117 @@ export default class Game {
     }
   }
 
+  getDevToolLines() {
+    return [
+      "1 heal HP and mana",
+      "2 add 250 gold",
+      "3 grant one level worth of XP",
+      "4 reveal entire world map",
+      "5 spawn a dragon nearby",
+      "6 teleport near closest dragon lair",
+      `7 god mode ${this.dev?.godMode ? "ON" : "OFF"}`,
+      "8 equip mythic best gear",
+      this._isDevResetConfirmLive() ? "9 reset to a new game (press again now)" : "9 reset to a new game (confirm)",
+      `Explored cells: ${this.world?.exportDiscovery?.()?.length || 0}`,
+      `World span: ${((this.world?.mapHalfSize || 0) * 2).toLocaleString()} units`,
+    ];
+  }
+
+  getDevPanelLayout() {
+    const w = Math.min(Math.max(this.w - 120, 430), 560);
+    const h = 340;
+    const x = ((this.w - w) / 2) | 0;
+    const y = ((this.h - h) / 2) | 0;
+    return {
+      w,
+      h,
+      x,
+      y,
+      rowStart: 70,
+      rowStep: 22,
+      rowInset: 20,
+    };
+  }
+
+  getSkillPanelData() {
+    const defs = this.skillDefs || {};
+    const prog = this.skillProg || {};
+    const cooldowns = this.cooldowns || {};
+    const heroMana = this.hero?.mana || 0;
+    const heroMaxMana = this.hero?.maxMana || 0;
+
+    return {
+      manaText: `Mana ${Math.round(heroMana)}/${Math.round(heroMaxMana)}`,
+      legendText: "Green ready   amber cooling down   red low mana",
+      oathText: `Oath: ${this._className?.() || "Knight"}`,
+      rows: SKILL_PANEL_ORDER.map((key) => {
+        const def = defs[key] || {};
+        const s = prog[key] || { xp: 0, level: 1 };
+        const need = 10 + ((s.level || 1) - 1) * 8;
+        const xp = s.xp || 0;
+        const remainingCd = Math.max(0, cooldowns[key] || 0);
+        const baseCd = Math.max(0.01, +def.cd || 1);
+        const affordable = heroMana >= (def.mana || 0);
+        const statusText = remainingCd > 0.01 ? `${remainingCd.toFixed(1)}s left` : affordable ? "Ready" : "Low mana";
+        const statusColor = remainingCd > 0.01 ? "#ffd98a" : affordable ? "#94e48d" : "#ff9c9c";
+        return {
+          key,
+          name: def.name || "Skill",
+          color: def.color || "#dbe7ff",
+          manaCost: def.mana || 0,
+          manaText: `Mana ${def.mana || 0}`,
+          cooldownText: `Cooldown ${(+def.cd || 0).toFixed(1)}s`,
+          cooldownValue: remainingCd,
+          cooldownFrac: clamp(remainingCd / baseCd, 0, 1),
+          levelText: `Level ${s.level || 1}`,
+          statusText,
+          statusColor,
+          affordable,
+          xpText: `XP ${xp} / ${need}`,
+          infoText: this._classSkillInfo?.(key) || "Balanced scaling",
+          xpFrac: clamp(xp / Math.max(1, need), 0, 1),
+        };
+      }),
+    };
+  }
+
+  getSkillPanelLayout() {
+    const w = Math.min(Math.max(this.w - 110, 520), 620);
+    const h = Math.min(Math.max(this.h - 120, 360), 400);
+    const x = ((this.w - w) / 2) | 0;
+    const y = ((this.h - h) / 2) | 0;
+    return {
+      w,
+      h,
+      x,
+      y,
+      rowStart: 98,
+      rowStep: 74,
+      rowHeight: 58,
+      rowInset: 18,
+    };
+  }
+
+  getSpellBarLayout() {
+    const box = 46;
+    const gap = 10;
+    const total = box * SKILL_PANEL_ORDER.length + gap * (SKILL_PANEL_ORDER.length - 1);
+    return {
+      box,
+      gap,
+      total,
+      x: ((this.w - total) / 2) | 0,
+      y: this.h - 62,
+      inset: 5,
+    };
+  }
+
+  _isDevResetConfirmLive() {
+    return !!(this._devResetConfirmAt && Date.now() - this._devResetConfirmAt <= DEV_RESET_CONFIRM_MS);
+  }
+
   _devEquipBestGear() {
-    const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+    const slots = EQUIPMENT_SLOTS;
     const level = Math.max(18, (this.hero.level || 1) + 10);
     for (let i = 0; i < slots.length; i++) {
       const item = makeGear(slots[i], level, "epic", hash2(this.seed, i + 8800, level));
@@ -919,24 +1103,21 @@ export default class Game {
     const item = inv[this.invIndex];
 
     if ((this.input.wasPressed("Enter") || this.input.wasPressed("e") || this.input.wasPressed("E")) && item) {
-      this._equipInventoryItem(this.invIndex);
+      this._runInventoryAction("equip", this.invIndex);
     }
 
     if ((this.input.wasPressed("x") || this.input.wasPressed("X") || this.input.wasPressed("Backspace") || this.input.wasPressed("Delete")) && item) {
-      this._salvageInventoryItem(this.invIndex);
+      this._runInventoryAction("salvage", this.invIndex);
     }
   }
 
   _handleInventoryMouse(inv) {
-    const panelW = Math.min(Math.max(this.w - 90, 700), 860);
-    const panelH = Math.min(Math.max(this.h - 90, 430), 540);
-    const x = ((this.w - panelW) / 2) | 0;
-    const y = ((this.h - panelH) / 2) | 0;
-    const leftX = x + 18;
-    const leftY = y + 74;
-    const leftW = 370;
-    const leftH = panelH - 92;
-    const rowH = 28;
+    const layout = this.getInventoryPanelLayout();
+    const leftX = layout.leftX;
+    const leftY = layout.leftY;
+    const leftW = layout.leftW;
+    const leftH = layout.leftH;
+    const rowH = layout.rowH;
     const visible = Math.max(1, Math.floor((leftH - 40) / rowH));
     const selected = clamp(this.invIndex || 0, 0, Math.max(0, inv.length - 1));
     const scroll = clamp(selected - visible + 1, 0, Math.max(0, inv.length - visible));
@@ -949,8 +1130,53 @@ export default class Game {
     const idx = scroll + row;
     if (idx < 0 || idx >= inv.length) return;
 
+    if (this.mouse.clicked && idx === selected) {
+      this._runInventoryAction("equip", idx);
+      return;
+    }
+
     this.invIndex = idx;
     if (this.mouse.clicked) this._msg(`${inv[idx]?.name || "Item"} selected`, 0.55);
+  }
+
+  _runInventoryAction(action, index) {
+    if (action === "equip") this._equipInventoryItem(index);
+    else if (action === "salvage") this._salvageInventoryItem(index);
+  }
+
+  getInventoryPanelText(hasItems = (this.hero?.inventory?.length || 0) > 0) {
+    return {
+      headerHint: hasItems ? "I or Esc close   wheel/arrow select   click again equip" : "I or Esc close",
+      emptyBagTitle: "No gear in your bag yet.",
+      emptyBagBody: "Clear camps, shops, contracts, and dungeons will start filling it.",
+      emptyDetailTitle: "Item Details",
+      emptyDetailBody: "Pick up gear to compare it here.",
+      emptyDetailNote: "Your equipped kit will stay visible above while the bag is empty.",
+      equipHint: "Enter/E or click again equip",
+      salvageHint: "X/Delete salvage",
+    };
+  }
+
+  getInventoryPanelLayout() {
+    const panelW = Math.min(Math.max(this.w - 90, 700), 860);
+    const panelH = Math.min(Math.max(this.h - 90, 430), 540);
+    const x = ((this.w - panelW) / 2) | 0;
+    const y = ((this.h - panelH) / 2) | 0;
+    return {
+      panelW,
+      panelH,
+      x,
+      y,
+      leftX: x + 18,
+      leftY: y + 74,
+      leftW: 370,
+      leftH: panelH - 92,
+      rowH: 28,
+    };
+  }
+
+  getEquipmentSlots() {
+    return EQUIPMENT_SLOTS;
   }
 
   _equipInventoryItem(index) {
@@ -989,61 +1215,106 @@ export default class Game {
 
   _handleShopInput() {
     this._handleShopMouse();
-    if (this.input.wasPressed("1")) this._buyShopItem(0);
-    if (this.input.wasPressed("2")) this._buyShopItem(1);
-    if (this.input.wasPressed("3")) this._buyShopItem(2);
-    if (this.input.wasPressed("4")) this._buyShopItem(3);
+    for (let i = 1; i <= SHOP_ACTION_COUNT; i++) {
+      if (this.input.wasPressed(String(i))) this._runShopAction(i);
+    }
   }
 
   _handleShopMouse() {
     if (!this.mouse.clicked) return;
-    const w = 430;
-    const x = ((this.w - w) / 2) | 0;
-    const y = ((this.h - 260) / 2) | 0;
+    const layout = this.getShopPanelLayout();
+    const w = layout.w;
+    const x = layout.x;
+    const y = layout.y;
     const mx = this.mouse.x;
     const my = this.mouse.y;
     if (mx < x + 16 || mx > x + w - 16) return;
 
-    for (let i = 0; i < 4; i++) {
-      const rowY = y + 70 + i * 42;
+    for (let i = 0; i < SHOP_ACTION_COUNT; i++) {
+      const rowY = y + layout.rowStart + i * layout.rowStep;
       if (my >= rowY - 16 && my <= rowY + 16) {
-        this._buyShopItem(i);
+        this._runShopAction(i + 1);
         return;
       }
     }
   }
 
+  _runShopAction(action) {
+    const index = (action | 0) - 1;
+    if (index < 0 || index >= SHOP_ACTION_COUNT) return;
+    this._buyShopItem(index);
+  }
+
   _handleTownInput() {
     this._handleTownMouse();
-    if (this.input.wasPressed("1")) this._townRest();
-    if (this.input.wasPressed("2")) this._townBuyPotion("hp");
-    if (this.input.wasPressed("3")) this._townBuyPotion("mana");
-    if (this.input.wasPressed("4")) this._townCommissionGear();
-    if (this.input.wasPressed("5")) this._townAskRumor();
-    if (this.input.wasPressed("6")) this._townCycleOath();
-    if (this.input.wasPressed("7")) this._townTakeContract();
-    if (this.input.wasPressed("8")) this._townBuyMapClue();
+    for (let i = 1; i <= TOWN_ACTION_COUNT; i++) {
+      if (this.input.wasPressed(String(i))) this._runTownAction(i);
+    }
   }
 
   _handleTownMouse() {
     if (!this.mouse.clicked) return;
+    const layout = this.getTownPanelLayout();
+    const w = layout.w;
+    const x = layout.x;
+    const y = layout.y;
+    const mx = this.mouse.x;
+    const my = this.mouse.y;
+    if (mx < x + 18 || mx > x + w - 18 || my < y + layout.actionTop || my > y + layout.actionBottom) return;
+
+    const row = Math.floor((my - (y + layout.rowStart)) / layout.rowStep);
+    if (row >= 0 && row < TOWN_ACTION_COUNT) this._runTownAction(row + 1);
+  }
+
+  _runTownAction(action) {
+    if (action === 1) this._townRest();
+    else if (action === 2) this._townBuyPotion("hp");
+    else if (action === 3) this._townBuyPotion("mana");
+    else if (action === 4) this._townCommissionGear();
+    else if (action === 5) this._townAskRumor();
+    else if (action === 6) this._townCycleOath();
+    else if (action === 7) this._townTakeContract();
+    else if (action === 8) this._townBuyMapClue();
+  }
+
+  getTownMenuLines(town = this._cachedNearbyTown) {
+    const npcs = town?.npcs || ["Warden", "Smith", "Archivist"];
+    const visited = !!(town && this.progress?.visitedTowns?.has?.(String(town.id)));
+    const restCost = Math.max(0, Math.min(28, 8 + (this.hero?.level || 1) * 2));
+    const forgeCost = 58 + (this.hero?.level || 1) * 9;
+    const clueCost = 36 + (this.hero?.level || 1) * 4;
+    return {
+      npcs,
+      lines: [
+        `1 Rest at inn (${restCost}g)`,
+        "2 Buy health potion (18g)",
+        "3 Buy mana potion (22g)",
+        `4 Commission townforged gear (${forgeCost}g)`,
+        "5 Ask for a rumor objective",
+        "6 Change oath / class",
+        "7 Take town contract",
+        `8 Buy cartographer clue (${clueCost}g)`,
+        visited ? `${npcs[0]}: Roads are safer when camps are cleared.` : `${npcs[0]}: First visit supplies were added.`,
+      ],
+      npcSummary: `${npcs.join(", ")} are available. Current oath: ${this._className?.() || "Knight"}.`,
+    };
+  }
+
+  getTownPanelLayout() {
     const w = Math.min(Math.max(this.w - 120, 430), 560);
     const h = 354;
     const x = ((this.w - w) / 2) | 0;
     const y = ((this.h - h) / 2) | 0;
-    const mx = this.mouse.x;
-    const my = this.mouse.y;
-    if (mx < x + 18 || mx > x + w - 18 || my < y + 82 || my > y + 280) return;
-
-    const row = Math.floor((my - (y + 91)) / 21);
-    if (row === 0) this._townRest();
-    else if (row === 1) this._townBuyPotion("hp");
-    else if (row === 2) this._townBuyPotion("mana");
-    else if (row === 3) this._townCommissionGear();
-    else if (row === 4) this._townAskRumor();
-    else if (row === 5) this._townCycleOath();
-    else if (row === 6) this._townTakeContract();
-    else if (row === 7) this._townBuyMapClue();
+    return {
+      w,
+      h,
+      x,
+      y,
+      actionTop: 82,
+      actionBottom: 280,
+      rowStart: 91,
+      rowStep: 21,
+    };
   }
 
   _className(id = this.hero?.classId) {
@@ -1771,7 +2042,7 @@ export default class Game {
     }
 
     if (e.boss || Math.random() < (e.elite ? 0.34 : 0.10)) {
-      const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+      const slots = EQUIPMENT_SLOTS;
       const slot = slots[(Math.random() * slots.length) | 0];
       const rarity = e.boss
         ? (Math.random() < 0.45 ? "epic" : "rare")
@@ -2002,7 +2273,7 @@ export default class Game {
       this._msg(`Smith needs ${cost}g`, 0.9);
       return;
     }
-    const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+    const slots = EQUIPMENT_SLOTS;
     const slot = slots[Math.abs(hash2(this.seed, this.hero.gold, this.time | 0)) % slots.length];
     const rarity = (this.hero.level || 1) >= 6 ? "rare" : "uncommon";
     const item = makeGear(slot, Math.max(1, this.hero.level || 1), rarity, hash2(this.seed, slot.length, this.hero.gold, this.time | 0));
@@ -2015,8 +2286,8 @@ export default class Game {
   _townAskRumor() {
     const order = ["secret", "treasure", "town", "dungeon", "dragon", "bounty"];
     const current = order.indexOf(this.trackedObjective);
-    this.trackedObjective = order[(current + 1 + order.length) % order.length];
-    this._msg(`Rumor tracked: ${this._titleCase(this.trackedObjective)}`, 1.0);
+    const next = order[(current + 1 + order.length) % order.length];
+    this._setTrackedObjective(next, `Rumor tracked: ${this._titleCase(next)}`);
   }
 
   _townCycleOath() {
@@ -2048,11 +2319,11 @@ export default class Game {
     const key = `contract_${id}`;
     const options = ["secret", "treasure", "town", "dungeon", "dragon", "bounty"];
     const pick = options[Math.abs(hash2(this.seed, town?.x | 0, town?.y | 0, this.progress.bountyCompletions || 0)) % options.length];
-    this.trackedObjective = pick;
+    this._setTrackedObjective(pick, null);
 
     if (!done[key]) {
       done[key] = true;
-      const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+      const slots = EQUIPMENT_SLOTS;
       const rewardSlot = slots[Math.abs(hash2(id.length, this.seed, this.hero.level || 1)) % slots.length];
       const reward = makeGear(rewardSlot, Math.max(1, this.hero.level || 1), "uncommon", hash2(this.seed, town?.x | 0, town?.y | 0, 77));
       reward.name = `Town-Writ ${reward.name}`;
@@ -2108,7 +2379,7 @@ export default class Game {
     candidates.sort((a, b) => dist2(this.hero.x, this.hero.y, a.target.x, a.target.y) - dist2(this.hero.x, this.hero.y, b.target.x, b.target.y));
     const clue = candidates[0];
     this.hero.gold -= cost;
-    this.trackedObjective = clue.mode;
+    this._setTrackedObjective(clue.mode, null);
     this.world?.revealAround?.(clue.target.x, clue.target.y, 520);
     this._spawnFloatingText(this.hero.x, this.hero.y - 42, "Map clue", "#8be9ff");
     this._msg(`Cartographer marked ${clue.label} -${cost}g`, 1.6);
@@ -2145,7 +2416,7 @@ export default class Game {
       data: { potionType: "mana" },
     });
 
-    const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+    const slots = EQUIPMENT_SLOTS;
     for (let i = 0; i < 4; i++) {
       const slot = slots[(rng.int(0, slots.length - 1) + i) % slots.length];
       const rarityRoll = rng.float();
@@ -2180,6 +2451,30 @@ export default class Game {
 
   _shopPrice(base, discount) {
     return Math.max(1, Math.round(base * (1 - discount)));
+  }
+
+  getShopPanelMeta() {
+    const discount = Math.round((this.shop?.discount || 0) * 100);
+    return {
+      hint: "1-4 or click buy - Esc close",
+      goldText: `Gold: ${this.hero?.gold || 0}`,
+      discountText: discount > 0 ? `Renown discount: ${discount}%` : "",
+    };
+  }
+
+  getShopPanelLayout() {
+    const w = 430;
+    const h = 260;
+    const x = ((this.w - w) / 2) | 0;
+    const y = ((this.h - h) / 2) | 0;
+    return {
+      w,
+      h,
+      x,
+      y,
+      rowStart: 70,
+      rowStep: 42,
+    };
   }
 
   _buyShopItem(index) {
@@ -2274,7 +2569,7 @@ export default class Game {
     this.loot.push(new Loot(cache.x + 10, cache.y + 2, "potion", { potionType: level >= 3 ? "mana" : "hp" }));
 
     if (level >= 2) {
-      const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+      const slots = EQUIPMENT_SLOTS;
       const slot = slots[Math.abs(hash2(cache.x | 0, cache.y | 0, level)) % slots.length];
       const rarity = level >= 5 ? "rare" : "uncommon";
       const item = makeGear(slot, Math.max(level, this.hero.level || 1), rarity, hash2(this.seed, cache.x | 0, cache.y | 0));
@@ -2399,7 +2694,7 @@ export default class Game {
     }
 
     if (floor % 3 === 0) {
-      const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+      const slots = EQUIPMENT_SLOTS;
       const slot = slots[Math.abs(hash2(this.seed, floor, this.hero.level || 1)) % slots.length];
       const rarity = floor >= 9 ? "epic" : floor >= 5 ? "rare" : "uncommon";
       const gear = makeGear(slot, Math.max(1, (this.hero.level || 1) + Math.floor(floor / 3)), rarity, hash2(this.seed, floor, slot.length));
@@ -2559,7 +2854,7 @@ export default class Game {
     this.hero.gold += q.rewardGold || 0;
     this.hero.giveXP?.(q.rewardXp || 0);
 
-    const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+    const slots = EQUIPMENT_SLOTS;
     const slot = slots[this.progress.bountyCompletions % slots.length];
     const rarity = this.progress.bountyCompletions % 4 === 0 ? "rare" : "uncommon";
     const reward = makeGear(slot, Math.max(1, this.hero.level), rarity, hash2(this.seed, this.progress.bountyCompletions));
@@ -2705,6 +3000,10 @@ export default class Game {
     );
   }
 
+  getTrackedObjectiveSummary() {
+    return this._getTrackedObjective() || this.getObjective();
+  }
+
   _objective(title, detail, target, color) {
     return { title, detail, target, color };
   }
@@ -2777,6 +3076,52 @@ export default class Game {
     );
   }
 
+  getActiveBossState() {
+    const hero = this.hero;
+    if (!hero) return null;
+
+    let best = null;
+    let bestD2 = Infinity;
+    for (const e of this.enemies || []) {
+      if (!e?.alive || !e.boss) continue;
+      const d2 = dist2(hero.x, hero.y, e.x, e.y);
+      const visible = this._isVisibleWorldPoint(e.x, e.y, 240);
+      const alert = (e.alertT || 0) > 0.08;
+      const engageR = Math.max(760, (e.aggroRadius || 0) + 280);
+      if (!this.dungeon?.active && !visible && !alert && d2 > engageR * engageR) continue;
+      if (d2 < bestD2) {
+        best = e;
+        bestD2 = d2;
+      }
+    }
+
+    if (!best) return null;
+
+    const frac = clamp((best.hp || 0) / Math.max(1, best.maxHp || 1), 0, 1);
+    const distance = Math.max(0, Math.round(Math.sqrt(bestD2) / 10) * 10);
+    const isDragon = best.kind === "dragon";
+    const name = best.name || (isDragon ? "Ancient Dragon" : `${this._titleCase(best.kind)} Boss`);
+    const detail =
+      isDragon ? "Ancient threat" :
+      this.dungeon?.active ? `Dungeon floor ${this.dungeon.floor || 1} boss` :
+      "Roaming boss";
+
+    return {
+      name,
+      detail,
+      kind: best.kind || "boss",
+      level: best.level || 1,
+      hp: Math.round(best.hp || 0),
+      maxHp: Math.max(1, Math.round(best.maxHp || 1)),
+      frac,
+      distance,
+      colorA: isDragon ? "#b53045" : "#a9852d",
+      colorB: isDragon ? "#ff8a5c" : "#ffd36e",
+      accent: isDragon ? "#ff8a5c" : "#ffd36e",
+      alive: !!best.alive,
+    };
+  }
+
   _titleCase(text) {
     const s = String(text || "");
     return s ? s.charAt(0).toUpperCase() + s.slice(1) : "";
@@ -2805,18 +3150,13 @@ export default class Game {
       ctx.textAlign = "center";
       ctx.fillText(f.text, f.x, f.y);
       ctx.restore();
-
-      f.y -= 0.35;
-      f.a -= 0.015;
     }
-
-    this.floatingTexts = this.floatingTexts.filter((f) => f.a > 0);
   }
 
   _spawnFloatingText(x, y, text, color = "#fff") {
     const cap = this.perf?.maxFloatingTexts || 48;
     if (this.floatingTexts.length >= cap) this.floatingTexts.splice(0, this.floatingTexts.length - cap + 1);
-    this.floatingTexts.push({ x, y, text, color, a: 1 });
+    this.floatingTexts.push({ x, y, text, color, a: 1, vy: -21, life: 1.1 });
   }
 
   _nearPointOfInterest(x, y, r) {

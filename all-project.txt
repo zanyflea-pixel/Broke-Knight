@@ -367,6 +367,36 @@ function armorWeightFromItem(item) {
   return "light";
 }
 
+function alphaColor(hex, alpha) {
+  if (typeof hex !== "string" || !hex.startsWith("#")) return `rgba(255,255,255,${alpha})`;
+  const raw = hex.slice(1);
+  const full = raw.length === 3 ? raw.split("").map((c) => c + c).join("") : raw;
+  const value = Number.parseInt(full, 16);
+  if (!Number.isFinite(value)) return `rgba(255,255,255,${alpha})`;
+  const r = (value >> 16) & 255;
+  const g = (value >> 8) & 255;
+  const b = value & 255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function mixColor(a, b, t = 0.5) {
+  const read = (hex) => {
+    if (typeof hex !== "string" || !hex.startsWith("#")) return [255, 255, 255];
+    const raw = hex.slice(1);
+    const full = raw.length === 3 ? raw.split("").map((c) => c + c).join("") : raw;
+    const value = Number.parseInt(full, 16);
+    if (!Number.isFinite(value)) return [255, 255, 255];
+    return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
+  };
+  const ca = read(a);
+  const cb = read(b);
+  const p = clamp(t, 0, 1);
+  const r = Math.round(ca[0] + (cb[0] - ca[0]) * p);
+  const g = Math.round(ca[1] + (cb[1] - ca[1]) * p);
+  const b2 = Math.round(ca[2] + (cb[2] - ca[2]) * p);
+  return `rgb(${r},${g},${b2})`;
+}
+
 export function makeGear(slot, level = 1, rarity = "common", seed = 1) {
   const scale =
     rarity === "epic" ? 1.9 :
@@ -668,6 +698,28 @@ export class Hero {
     ctx.ellipse(0, 14, 14, 6, 0, 0, Math.PI * 2);
     ctx.fill();
 
+    ctx.strokeStyle = "rgba(230,240,255,0.18)";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.arc(0, -1, 17 + Math.sin(t * 2.6) * 0.8, 0, Math.PI * 2);
+    ctx.stroke();
+
+    const dashGlow = Math.max(0, this.state?.dashT || 0);
+    if (dashGlow > 0) {
+      const dashAngle = Math.atan2(aim.y, aim.x);
+      ctx.save();
+      ctx.rotate(dashAngle);
+      ctx.fillStyle = alphaColor("#ffd36e", Math.min(0.22, dashGlow * 0.35));
+      ctx.beginPath();
+      ctx.moveTo(-26, 0);
+      ctx.lineTo(-6, -7);
+      ctx.lineTo(10, 0);
+      ctx.lineTo(-6, 7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
     const gearGlow =
       (this.equip?.weapon?.rarity === "epic" || this.equip?.armor?.rarity === "epic" || this.equip?.helm?.rarity === "epic") ? "rgba(201,149,255,0.18)" :
       (this.equip?.weapon?.rarity === "rare" || this.equip?.armor?.rarity === "rare" || this.equip?.helm?.rarity === "rare") ? "rgba(136,207,255,0.15)" :
@@ -679,6 +731,26 @@ export class Hero {
       ctx.arc(0, -1, 22 + Math.sin(t * 3) * 1.2, 0, Math.PI * 2);
       ctx.fill();
     }
+
+    const cloakColor = mixColor(armorColor, "#5a1a24", armorWeight === "heavy" ? 0.48 : 0.62);
+    const stride = Math.sin(t * 7.5) * 1.2 + (this.state?.dashT || 0) * 10;
+    ctx.fillStyle = alphaColor(cloakColor, armorItem ? 0.82 : 0.74);
+    ctx.beginPath();
+    ctx.moveTo(-7, -5);
+    ctx.lineTo(-13, 10 + stride * 0.25);
+    ctx.lineTo(-2, 8);
+    ctx.lineTo(6, 13 + stride * 0.18);
+    ctx.lineTo(10, -1);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.10)";
+    ctx.beginPath();
+    ctx.moveTo(-3, -5);
+    ctx.lineTo(-1, 8);
+    ctx.lineTo(2, 7);
+    ctx.lineTo(1, -4);
+    ctx.closePath();
+    ctx.fill();
 
     ctx.fillStyle = "rgba(128,42,52,0.88)";
     ctx.beginPath();
@@ -1283,6 +1355,14 @@ export class Enemy {
     ctx.ellipse(0, r + 3, r * 1.05, Math.max(4, r * 0.34), 0, 0, Math.PI * 2);
     ctx.fill();
 
+    const aura = this._ambientAuraColor();
+    if (aura) {
+      ctx.fillStyle = aura;
+      ctx.beginPath();
+      ctx.arc(0, 0, r + (this.boss ? 16 : this.elite ? 11 : 7) + Math.sin(t * 2.8 + this.seed) * 1.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     if (this.kind === "wolf") this._drawWolf(ctx);
     else if (this.kind === "brute") this._drawBrute(ctx);
     else if (this.kind === "caster") this._drawCaster(ctx, t);
@@ -1305,6 +1385,14 @@ export class Enemy {
       ctx.stroke();
     }
 
+    if ((this.attackCd || 0) <= 0.14 && (this.alertT || 0) > 0.05 && !this.boss) {
+      ctx.strokeStyle = "rgba(255,168,120,0.42)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, r + 11, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
     if ((this.hitFlashT || 0) > 0) {
       ctx.globalAlpha = Math.min(0.55, (this.hitFlashT || 0) * 4.0);
       ctx.fillStyle = "#ffffff";
@@ -1313,6 +1401,12 @@ export class Enemy {
       ctx.fill();
       ctx.globalAlpha = 1;
     }
+
+    ctx.strokeStyle = this.boss ? "rgba(255,214,170,0.22)" : this.elite ? "rgba(255,240,170,0.16)" : "rgba(255,255,255,0.08)";
+    ctx.lineWidth = this.boss ? 2 : 1.2;
+    ctx.beginPath();
+    ctx.arc(0, 0, r + 1.5, 0, Math.PI * 2);
+    ctx.stroke();
 
     if (this.elite || this.boss) {
       ctx.strokeStyle = this.boss ? "rgba(255,150,150,0.48)" : "rgba(255,226,130,0.42)";
@@ -1333,21 +1427,46 @@ export class Enemy {
     }
 
     if ((this.hp || 0) < (this.maxHp || 1) || this.boss) {
-      const bw = this.boss ? 54 : 34;
-      const bh = this.boss ? 6 : 4;
+      const bw = this.boss ? 58 : this.elite ? 40 : 34;
+      const bh = this.boss ? 7 : 4;
       const y = r + 12;
       const frac = Math.max(0, Math.min(1, (this.hp || 0) / Math.max(1, this.maxHp || 1)));
 
-      ctx.fillStyle = "rgba(0,0,0,0.46)";
+      ctx.fillStyle = "rgba(0,0,0,0.58)";
+      ctx.fillRect(-bw * 0.5 - 1, y - 1, bw + 2, bh + 2);
+      ctx.fillStyle = "rgba(255,255,255,0.06)";
       ctx.fillRect(-bw * 0.5, y, bw, bh);
-      ctx.fillStyle = this.boss ? "#ff8a5c" : "#cf4d5f";
+      ctx.fillStyle = this.boss ? "#ff8a5c" : this.elite ? "#ffd36e" : "#cf4d5f";
       ctx.fillRect(-bw * 0.5, y, bw * frac, bh);
       ctx.strokeStyle = "rgba(255,255,255,0.24)";
       ctx.lineWidth = 1;
       ctx.strokeRect(-bw * 0.5 + 0.5, y + 0.5, bw - 1, bh - 1);
     }
 
+    if (this.elite || this.boss) {
+      const badgeY = -r - (this.affix ? 36 : 18);
+      const badgeW = this.boss ? 42 : 34;
+      ctx.fillStyle = "rgba(8,10,14,0.78)";
+      ctx.fillRect(-badgeW * 0.5, badgeY - 10, badgeW, 12);
+      ctx.strokeStyle = this.boss ? "rgba(255,150,150,0.40)" : "rgba(255,226,130,0.32)";
+      ctx.strokeRect(-badgeW * 0.5 + 0.5, badgeY - 9.5, badgeW - 1, 11);
+      ctx.fillStyle = this.boss ? "#ffb6a8" : "#ffe69a";
+      ctx.font = "bold 9px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(this.boss ? `BOSS ${this.level}` : `ELITE ${this.level}`, 0, badgeY - 0.5);
+    }
+
     ctx.restore();
+  }
+
+  _ambientAuraColor() {
+    if (this.boss) return alphaColor(this.colorA || "#ff8a5c", this.kind === "dragon" ? 0.16 : 0.12);
+    if (this.elite) return alphaColor(this.colorA || "#ffd36e", 0.09);
+    if (this.kind === "wisp") return "rgba(143,232,255,0.12)";
+    if (this.kind === "caster" || this.kind === "mender") return "rgba(136,207,255,0.08)";
+    if (this.kind === "thorn") return "rgba(126,201,95,0.08)";
+    if (this.kind === "ashling") return "rgba(194,134,92,0.08)";
+    return "";
   }
 
   _drawEyes(ctx, y = -2, glow = "#fff") {
@@ -1830,6 +1949,7 @@ export class Loot {
 
   draw(ctx) {
     const bob = Math.sin(this.t * 6) * 2;
+    const pulse = 1 + Math.sin(this.t * 5) * 0.08;
 
     ctx.save();
     ctx.translate(this.x, this.y + bob);
@@ -1840,29 +1960,81 @@ export class Loot {
     ctx.fill();
 
     if (this.kind === "gold") {
+      ctx.fillStyle = "rgba(255,210,92,0.16)";
+      ctx.beginPath();
+      ctx.arc(0, 0, 10.5 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+
       ctx.fillStyle = "#efc24a";
       ctx.beginPath();
       ctx.arc(0, 0, 6, 0, Math.PI * 2);
       ctx.fill();
 
+      ctx.strokeStyle = "rgba(255,244,170,0.55)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(0, 0, 8.5, 0, Math.PI * 2);
+      ctx.stroke();
+
       ctx.fillStyle = "#fff0a8";
       ctx.beginPath();
       ctx.arc(-1.5, -1.5, 2, 0, Math.PI * 2);
       ctx.fill();
+
+      const amount = this.data?.amount || 0;
+      if (amount >= 10) {
+        ctx.fillStyle = "rgba(5,8,12,0.70)";
+        ctx.fillRect(-12, -21, 24, 11);
+        ctx.fillStyle = "#ffe69a";
+        ctx.font = "bold 8px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText(`${amount}g`, 0, -13);
+      }
     } else if (this.kind === "potion") {
       const mana = this.data?.potionType === "mana";
+      ctx.fillStyle = mana ? "rgba(136,207,255,0.18)" : "rgba(255,143,160,0.18)";
+      ctx.beginPath();
+      ctx.arc(0, 2, 11 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+
       ctx.fillStyle = mana ? "#6aa6ff" : "#df5b72";
       ctx.beginPath();
       ctx.arc(0, 2, 6, 0, Math.PI * 2);
       ctx.fill();
 
+      ctx.strokeStyle = mana ? "rgba(206,232,255,0.62)" : "rgba(255,221,227,0.56)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(0, 2, 8.5, 0, Math.PI * 2);
+      ctx.stroke();
+
       ctx.fillStyle = "#d8cdb6";
       ctx.fillRect(-2, -6, 4, 5);
+
+      ctx.fillStyle = "rgba(5,8,12,0.68)";
+      ctx.fillRect(-14, -22, 28, 11);
+      ctx.fillStyle = mana ? "#d7ebff" : "#ffd3d7";
+      ctx.font = "bold 8px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(mana ? "MANA" : "HP", 0, -14);
     } else if (this.kind === "gear") {
       const color = this.data?.color || "#d9dee8";
       const rarity = this.data?.rarity || "common";
-      const pulse = 1 + Math.sin(this.t * 5) * 0.08;
-      if (rarity !== "common") {
+      const beamAlpha = rarity === "epic" ? 0.24 : rarity === "rare" ? 0.18 : rarity === "uncommon" ? 0.12 : 0;
+      if (beamAlpha > 0) {
+        const beam = ctx.createLinearGradient(0, -38, 0, 20);
+        beam.addColorStop(0, alphaColor(color, 0));
+        beam.addColorStop(0.3, alphaColor(color, beamAlpha));
+        beam.addColorStop(1, alphaColor(color, 0));
+        ctx.fillStyle = beam;
+        ctx.beginPath();
+        ctx.moveTo(-8, 14);
+        ctx.lineTo(-18, -34);
+        ctx.lineTo(18, -34);
+        ctx.lineTo(8, 14);
+        ctx.closePath();
+        ctx.fill();
+
         ctx.globalAlpha = rarity === "epic" ? 0.34 : rarity === "rare" ? 0.25 : 0.18;
         ctx.fillStyle = color;
         ctx.beginPath();
@@ -1870,6 +2042,11 @@ export class Loot {
         ctx.fill();
         ctx.globalAlpha = 1;
       }
+
+      ctx.fillStyle = alphaColor(color, 0.14);
+      ctx.beginPath();
+      ctx.arc(0, 0, 11.5 * pulse, 0, Math.PI * 2);
+      ctx.fill();
 
       ctx.fillStyle = color;
       ctx.beginPath();
@@ -1882,13 +2059,31 @@ export class Loot {
       ctx.arc(0, 0, 8.5, 0, Math.PI * 2);
       ctx.stroke();
 
-      if (rarity === "epic" || rarity === "rare") {
+      if (rarity === "epic" || rarity === "rare" || rarity === "uncommon") {
         ctx.fillStyle = "rgba(5,8,12,0.72)";
-        ctx.fillRect(-22, -27, 44, 13);
+        ctx.fillRect(-24, -27, 48, 13);
         ctx.fillStyle = color;
         ctx.font = "bold 9px Arial";
         ctx.textAlign = "center";
         ctx.fillText(rarity.toUpperCase(), 0, -17);
+      }
+
+      if (rarity === "epic") {
+        ctx.strokeStyle = "rgba(255,228,168,0.78)";
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(0, -14);
+        ctx.lineTo(3, -6);
+        ctx.lineTo(11, -6);
+        ctx.lineTo(5, -1);
+        ctx.lineTo(7, 8);
+        ctx.lineTo(0, 3);
+        ctx.lineTo(-7, 8);
+        ctx.lineTo(-5, -1);
+        ctx.lineTo(-11, -6);
+        ctx.lineTo(-3, -6);
+        ctx.closePath();
+        ctx.stroke();
       }
     }
 
@@ -1915,6 +2110,27 @@ import { Hero, Enemy, Projectile, Loot, makeGear } from "./entities.js";
 import Input from "./input.js";
 import UI from "./ui.js";
 import Save from "./save.js";
+
+const DEV_RESET_CONFIRM_MS = 2500;
+const DEV_TOOL_ACTION_COUNT = 9;
+const SHOP_ACTION_COUNT = 4;
+const TOWN_ACTION_COUNT = 8;
+const EQUIPMENT_SLOTS = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+const SKILL_PANEL_ORDER = ["q", "w", "e", "r"];
+const QUEST_PANEL_HEIGHT = 420;
+const QUEST_TRACKS = [
+  ["1", "story"],
+  ["2", "bounty"],
+  ["3", "town"],
+  ["4", "dungeon"],
+  ["5", "dragon"],
+  ["6", "treasure"],
+  ["7", "secret"],
+];
+const QUEST_TRACK_ROWS = [
+  ["story", "bounty", "town", "dungeon"],
+  ["dragon", "treasure", "secret"],
+];
 
 export default class Game {
   constructor(canvas) {
@@ -2128,6 +2344,7 @@ export default class Game {
 
     this._tickMessages(dt);
     this._tickCooldowns(dt);
+    this._tickVisualEffects(dt);
     this._updateMouseWorld();
     this.world?.revealAround?.(this.hero.x, this.hero.y, this.dungeon.active ? 460 : 720);
     this._updateNearbyPOIs(dt);
@@ -2190,12 +2407,6 @@ export default class Game {
 
     ctx.clearRect(0, 0, this.w, this.h);
 
-    if (this._killFlashT > 0) {
-      ctx.fillStyle = `rgba(255,255,255,${0.06 * this._killFlashT})`;
-      ctx.fillRect(0, 0, this.w, this.h);
-      this._killFlashT = Math.max(0, this._killFlashT - 0.04);
-    }
-
     ctx.save();
     ctx.translate(
       this.w * 0.5 - this.camera.x + this.camera.sx,
@@ -2241,10 +2452,38 @@ export default class Game {
   _drawScreenEffects(ctx) {
     ctx.save();
 
+    if (this._killFlashT > 0) {
+      ctx.fillStyle = `rgba(255,255,255,${0.22 * this._killFlashT})`;
+      ctx.fillRect(0, 0, this.w, this.h);
+    }
+
     const hpFrac = clamp((this.hero.hp || 0) / Math.max(1, this.hero.maxHp || 100), 0, 1);
     if (hpFrac < 0.32 && !this.dev?.godMode) {
       ctx.fillStyle = `rgba(120, 10, 24, ${(0.32 - hpFrac) * 0.34})`;
       ctx.fillRect(0, 0, this.w, this.h);
+    }
+
+    const hurtT = this.hero?.state?.hurtT || 0;
+    if (hurtT > 0) {
+      ctx.fillStyle = `rgba(255,120,120,${hurtT * 0.18})`;
+      ctx.fillRect(0, 0, this.w, this.h);
+    }
+
+    const poisonT = this.hero?.state?.poisonT || 0;
+    if (poisonT > 0) {
+      ctx.fillStyle = `rgba(110,205,120,${Math.min(0.12, poisonT * 0.08)})`;
+      ctx.fillRect(0, 0, this.w, this.h);
+    }
+
+    const dashT = this.hero?.state?.dashT || 0;
+    if (dashT > 0) {
+      const dir = this.hero?.aimDir || this.hero?.lastMove || { x: 1, y: 0 };
+      const angle = Math.atan2(dir.y || 0, dir.x || 1);
+      ctx.translate(this.w * 0.5, this.h * 0.5);
+      ctx.rotate(angle);
+      ctx.fillStyle = `rgba(255,211,110,${Math.min(0.16, dashT * 0.18)})`;
+      ctx.fillRect(-this.w * 0.18, -18, this.w * 0.36, 36);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
 
     const grd = ctx.createRadialGradient(this.w * 0.5, this.h * 0.48, Math.min(this.w, this.h) * 0.18, this.w * 0.5, this.h * 0.5, Math.max(this.w, this.h) * 0.62);
@@ -2286,11 +2525,7 @@ export default class Game {
 
       if (this.menu.open !== "map") return;
       ev.preventDefault();
-      const current = clamp(this.menu.mapZoom || 1, 1, 8);
-      const next = ev.deltaY < 0 ? Math.min(8, current * 2) : Math.max(1, current / 2);
-      if (next === current) return;
-      this.menu.mapZoom = next;
-      this._msg(`Map zoom ${next}x`, 0.7);
+      this._setMapZoom(ev.deltaY < 0 ? "in" : "out");
     }, { passive: false });
 
     const toCanvasPoint = (ev) => {
@@ -2456,6 +2691,20 @@ export default class Game {
     }
   }
 
+  _tickVisualEffects(dt) {
+    this._killFlashT = Math.max(0, (this._killFlashT || 0) - dt * 2.4);
+
+    for (const f of this.floatingTexts) {
+      f.vy = Number.isFinite(f.vy) ? f.vy : -21;
+      f.life = Number.isFinite(f.life) ? f.life : Math.max(0.01, (f.a || 1) / 0.9);
+      f.y += f.vy * dt;
+      f.a = clamp((f.a ?? 1) - dt * 0.9, 0, 1);
+      f.life = Math.max(0, f.life - dt);
+    }
+
+    this.floatingTexts = this.floatingTexts.filter((f) => (f.a || 0) > 0 && (f.life || 0) > 0);
+  }
+
   _handleMenus() {
     if (this.input.wasPressed("m") || this.input.wasPressed("M")) {
       this.menu.open = this.menu.open === "map" ? null : "map";
@@ -2499,44 +2748,62 @@ export default class Game {
 
   _handleQuestInput() {
     this._handleQuestMouse();
-    const tracks = [
-      ["1", "story", "Tracking story"],
-      ["2", "bounty", "Tracking bounty"],
-      ["3", "town", "Tracking nearest town"],
-      ["4", "dungeon", "Tracking dungeon"],
-      ["5", "dragon", "Tracking dragon"],
-      ["6", "treasure", "Tracking treasure"],
-      ["7", "secret", "Tracking secrets"],
-    ];
-    for (const [key, track, msg] of tracks) {
+    for (const [key, track] of QUEST_TRACKS) {
       if (!this.input.wasPressed(key)) continue;
-      this.trackedObjective = track;
-      this._msg(msg, 0.9);
+      this._setTrackedObjective(track);
     }
   }
 
   _handleQuestMouse() {
     if (!this.mouse.clicked) return;
-    const w = Math.min(Math.max(this.w - 120, 430), 560);
-    const h = 398;
+    const { w, h, rows } = this.getQuestPanelLayout();
     const x = ((this.w - w) / 2) | 0;
     const y = ((this.h - h) / 2) | 0;
     const mx = this.mouse.x;
     const my = this.mouse.y;
-    const rows = [
-      { y: y + 62, tracks: ["story", "bounty", "town", "dungeon"] },
-      { y: y + 78, tracks: ["dragon", "treasure", "secret"] },
-    ];
 
     for (const row of rows) {
-      if (my < row.y || my > row.y + 18 || mx < x + 170 || mx > x + w - 18) continue;
+      const rowY = y + row.y;
+      if (my < rowY || my > rowY + 18 || mx < x + 170 || mx > x + w - 18) continue;
       const slotW = (w - 194) / row.tracks.length;
       const idx = clamp(Math.floor((mx - (x + 176)) / slotW), 0, row.tracks.length - 1);
-      const track = row.tracks[idx];
-      this.trackedObjective = track;
-      this._msg(`Tracking ${this._titleCase(track)}`, 0.9);
+      this._setTrackedObjective(row.tracks[idx]);
       return;
     }
+  }
+
+  getQuestPanelLayout() {
+    return {
+      w: Math.min(Math.max(this.w - 120, 430), 560),
+      h: QUEST_PANEL_HEIGHT,
+      rows: [
+        { y: 62, tracks: QUEST_TRACK_ROWS[0] },
+        { y: 78, tracks: QUEST_TRACK_ROWS[1] },
+      ],
+    };
+  }
+
+  _setTrackedObjective(track, message) {
+    const map = {
+      story: "Tracking story",
+      bounty: "Tracking bounty",
+      town: "Tracking nearest town",
+      dungeon: "Tracking dungeon",
+      dragon: "Tracking dragon",
+      treasure: "Tracking treasure",
+      secret: "Tracking secrets",
+    };
+    this.trackedObjective = track;
+    if (message !== null) this._msg(message || map[track] || `Tracking ${this._titleCase(track)}`, 0.9);
+  }
+
+  getQuestTrackHintLines() {
+    const first = QUEST_TRACKS.slice(0, 4).map(([key, track]) => `${key} ${this._titleCase(track)}`);
+    const second = QUEST_TRACKS.slice(4).map(([key, track]) => `${key} ${track === "secret" ? "Secrets" : this._titleCase(track)}`);
+    return [
+      first.join("  "),
+      `${second.join("  ")}  (click to track)`,
+    ];
   }
 
   getJournalStats() {
@@ -2559,37 +2826,41 @@ export default class Game {
     const zoomIn = this.input.wasPressed("+") || this.input.wasPressed("=") || this.input.wasPressed("Add");
     const zoomOut = this.input.wasPressed("-") || this.input.wasPressed("_") || this.input.wasPressed("Subtract");
     const reset = this.input.wasPressed("0");
-    const current = clamp(this.menu.mapZoom || 1, 1, 8);
 
     if (zoomIn) {
-      this.menu.mapZoom = Math.min(8, current * 2);
-      this._msg(`Map zoom ${this.menu.mapZoom}x`, 0.7);
+      this._setMapZoom("in");
     } else if (zoomOut) {
-      this.menu.mapZoom = Math.max(1, current / 2);
-      this._msg(`Map zoom ${this.menu.mapZoom}x`, 0.7);
+      this._setMapZoom("out");
     } else if (reset) {
-      this.menu.mapZoom = 1;
-      this._msg("Map zoom reset", 0.7);
+      this._setMapZoom("reset");
     }
+  }
+
+  _setMapZoom(mode) {
+    const current = clamp(this.menu.mapZoom || 1, 1, 8);
+    const next =
+      mode === "in" ? Math.min(8, current * 2) :
+      mode === "out" ? Math.max(1, current / 2) :
+      1;
+    if (next === current && mode !== "reset") return;
+    this.menu.mapZoom = next;
+    this._msg(mode === "reset" ? "Map zoom reset" : `Map zoom ${next}x`, 0.7);
   }
 
   _handleDevToolsInput() {
     this._handleDevToolsMouse();
-    for (let i = 1; i <= 9; i++) {
+    for (let i = 1; i <= DEV_TOOL_ACTION_COUNT; i++) {
       if (this.input.wasPressed(String(i))) this._runDevToolAction(i);
     }
   }
 
   _handleDevToolsMouse() {
     if (!this.mouse.clicked) return;
-    const w = Math.min(Math.max(this.w - 120, 430), 560);
-    const h = 340;
-    const x = ((this.w - w) / 2) | 0;
-    const y = ((this.h - h) / 2) | 0;
+    const { w, x, y, rowStart, rowStep, rowInset } = this.getDevPanelLayout();
     const mx = this.mouse.x;
     const my = this.mouse.y;
-    const row = Math.floor((my - (y + 70)) / 22);
-    if (mx < x + 20 || mx > x + w - 20 || row < 0 || row > 8) return;
+    const row = Math.floor((my - (y + rowStart)) / rowStep);
+    if (mx < x + rowInset || mx > x + w - rowInset || row < 0 || row >= DEV_TOOL_ACTION_COUNT) return;
     this._runDevToolAction(row + 1);
   }
 
@@ -2637,9 +2908,8 @@ export default class Game {
       this._devEquipBestGear();
     }
     if (action === 9) {
-      const now = Date.now();
-      if (!this._devResetConfirmAt || now - this._devResetConfirmAt > 2500) {
-        this._devResetConfirmAt = now;
+      if (!this._isDevResetConfirmLive()) {
+        this._devResetConfirmAt = Date.now();
         this._msg("Dev: press 9 again to reset", 1.4);
         return;
       }
@@ -2648,8 +2918,117 @@ export default class Game {
     }
   }
 
+  getDevToolLines() {
+    return [
+      "1 heal HP and mana",
+      "2 add 250 gold",
+      "3 grant one level worth of XP",
+      "4 reveal entire world map",
+      "5 spawn a dragon nearby",
+      "6 teleport near closest dragon lair",
+      `7 god mode ${this.dev?.godMode ? "ON" : "OFF"}`,
+      "8 equip mythic best gear",
+      this._isDevResetConfirmLive() ? "9 reset to a new game (press again now)" : "9 reset to a new game (confirm)",
+      `Explored cells: ${this.world?.exportDiscovery?.()?.length || 0}`,
+      `World span: ${((this.world?.mapHalfSize || 0) * 2).toLocaleString()} units`,
+    ];
+  }
+
+  getDevPanelLayout() {
+    const w = Math.min(Math.max(this.w - 120, 430), 560);
+    const h = 340;
+    const x = ((this.w - w) / 2) | 0;
+    const y = ((this.h - h) / 2) | 0;
+    return {
+      w,
+      h,
+      x,
+      y,
+      rowStart: 70,
+      rowStep: 22,
+      rowInset: 20,
+    };
+  }
+
+  getSkillPanelData() {
+    const defs = this.skillDefs || {};
+    const prog = this.skillProg || {};
+    const cooldowns = this.cooldowns || {};
+    const heroMana = this.hero?.mana || 0;
+    const heroMaxMana = this.hero?.maxMana || 0;
+
+    return {
+      manaText: `Mana ${Math.round(heroMana)}/${Math.round(heroMaxMana)}`,
+      legendText: "Green ready   amber cooling down   red low mana",
+      oathText: `Oath: ${this._className?.() || "Knight"}`,
+      rows: SKILL_PANEL_ORDER.map((key) => {
+        const def = defs[key] || {};
+        const s = prog[key] || { xp: 0, level: 1 };
+        const need = 10 + ((s.level || 1) - 1) * 8;
+        const xp = s.xp || 0;
+        const remainingCd = Math.max(0, cooldowns[key] || 0);
+        const baseCd = Math.max(0.01, +def.cd || 1);
+        const affordable = heroMana >= (def.mana || 0);
+        const statusText = remainingCd > 0.01 ? `${remainingCd.toFixed(1)}s left` : affordable ? "Ready" : "Low mana";
+        const statusColor = remainingCd > 0.01 ? "#ffd98a" : affordable ? "#94e48d" : "#ff9c9c";
+        return {
+          key,
+          name: def.name || "Skill",
+          color: def.color || "#dbe7ff",
+          manaCost: def.mana || 0,
+          manaText: `Mana ${def.mana || 0}`,
+          cooldownText: `Cooldown ${(+def.cd || 0).toFixed(1)}s`,
+          cooldownValue: remainingCd,
+          cooldownFrac: clamp(remainingCd / baseCd, 0, 1),
+          levelText: `Level ${s.level || 1}`,
+          statusText,
+          statusColor,
+          affordable,
+          xpText: `XP ${xp} / ${need}`,
+          infoText: this._classSkillInfo?.(key) || "Balanced scaling",
+          xpFrac: clamp(xp / Math.max(1, need), 0, 1),
+        };
+      }),
+    };
+  }
+
+  getSkillPanelLayout() {
+    const w = Math.min(Math.max(this.w - 110, 520), 620);
+    const h = Math.min(Math.max(this.h - 120, 360), 400);
+    const x = ((this.w - w) / 2) | 0;
+    const y = ((this.h - h) / 2) | 0;
+    return {
+      w,
+      h,
+      x,
+      y,
+      rowStart: 98,
+      rowStep: 74,
+      rowHeight: 58,
+      rowInset: 18,
+    };
+  }
+
+  getSpellBarLayout() {
+    const box = 46;
+    const gap = 10;
+    const total = box * SKILL_PANEL_ORDER.length + gap * (SKILL_PANEL_ORDER.length - 1);
+    return {
+      box,
+      gap,
+      total,
+      x: ((this.w - total) / 2) | 0,
+      y: this.h - 62,
+      inset: 5,
+    };
+  }
+
+  _isDevResetConfirmLive() {
+    return !!(this._devResetConfirmAt && Date.now() - this._devResetConfirmAt <= DEV_RESET_CONFIRM_MS);
+  }
+
   _devEquipBestGear() {
-    const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+    const slots = EQUIPMENT_SLOTS;
     const level = Math.max(18, (this.hero.level || 1) + 10);
     for (let i = 0; i < slots.length; i++) {
       const item = makeGear(slots[i], level, "epic", hash2(this.seed, i + 8800, level));
@@ -2819,24 +3198,21 @@ export default class Game {
     const item = inv[this.invIndex];
 
     if ((this.input.wasPressed("Enter") || this.input.wasPressed("e") || this.input.wasPressed("E")) && item) {
-      this._equipInventoryItem(this.invIndex);
+      this._runInventoryAction("equip", this.invIndex);
     }
 
     if ((this.input.wasPressed("x") || this.input.wasPressed("X") || this.input.wasPressed("Backspace") || this.input.wasPressed("Delete")) && item) {
-      this._salvageInventoryItem(this.invIndex);
+      this._runInventoryAction("salvage", this.invIndex);
     }
   }
 
   _handleInventoryMouse(inv) {
-    const panelW = Math.min(Math.max(this.w - 90, 700), 860);
-    const panelH = Math.min(Math.max(this.h - 90, 430), 540);
-    const x = ((this.w - panelW) / 2) | 0;
-    const y = ((this.h - panelH) / 2) | 0;
-    const leftX = x + 18;
-    const leftY = y + 74;
-    const leftW = 370;
-    const leftH = panelH - 92;
-    const rowH = 28;
+    const layout = this.getInventoryPanelLayout();
+    const leftX = layout.leftX;
+    const leftY = layout.leftY;
+    const leftW = layout.leftW;
+    const leftH = layout.leftH;
+    const rowH = layout.rowH;
     const visible = Math.max(1, Math.floor((leftH - 40) / rowH));
     const selected = clamp(this.invIndex || 0, 0, Math.max(0, inv.length - 1));
     const scroll = clamp(selected - visible + 1, 0, Math.max(0, inv.length - visible));
@@ -2849,8 +3225,53 @@ export default class Game {
     const idx = scroll + row;
     if (idx < 0 || idx >= inv.length) return;
 
+    if (this.mouse.clicked && idx === selected) {
+      this._runInventoryAction("equip", idx);
+      return;
+    }
+
     this.invIndex = idx;
     if (this.mouse.clicked) this._msg(`${inv[idx]?.name || "Item"} selected`, 0.55);
+  }
+
+  _runInventoryAction(action, index) {
+    if (action === "equip") this._equipInventoryItem(index);
+    else if (action === "salvage") this._salvageInventoryItem(index);
+  }
+
+  getInventoryPanelText(hasItems = (this.hero?.inventory?.length || 0) > 0) {
+    return {
+      headerHint: hasItems ? "I or Esc close   wheel/arrow select   click again equip" : "I or Esc close",
+      emptyBagTitle: "No gear in your bag yet.",
+      emptyBagBody: "Clear camps, shops, contracts, and dungeons will start filling it.",
+      emptyDetailTitle: "Item Details",
+      emptyDetailBody: "Pick up gear to compare it here.",
+      emptyDetailNote: "Your equipped kit will stay visible above while the bag is empty.",
+      equipHint: "Enter/E or click again equip",
+      salvageHint: "X/Delete salvage",
+    };
+  }
+
+  getInventoryPanelLayout() {
+    const panelW = Math.min(Math.max(this.w - 90, 700), 860);
+    const panelH = Math.min(Math.max(this.h - 90, 430), 540);
+    const x = ((this.w - panelW) / 2) | 0;
+    const y = ((this.h - panelH) / 2) | 0;
+    return {
+      panelW,
+      panelH,
+      x,
+      y,
+      leftX: x + 18,
+      leftY: y + 74,
+      leftW: 370,
+      leftH: panelH - 92,
+      rowH: 28,
+    };
+  }
+
+  getEquipmentSlots() {
+    return EQUIPMENT_SLOTS;
   }
 
   _equipInventoryItem(index) {
@@ -2889,61 +3310,106 @@ export default class Game {
 
   _handleShopInput() {
     this._handleShopMouse();
-    if (this.input.wasPressed("1")) this._buyShopItem(0);
-    if (this.input.wasPressed("2")) this._buyShopItem(1);
-    if (this.input.wasPressed("3")) this._buyShopItem(2);
-    if (this.input.wasPressed("4")) this._buyShopItem(3);
+    for (let i = 1; i <= SHOP_ACTION_COUNT; i++) {
+      if (this.input.wasPressed(String(i))) this._runShopAction(i);
+    }
   }
 
   _handleShopMouse() {
     if (!this.mouse.clicked) return;
-    const w = 430;
-    const x = ((this.w - w) / 2) | 0;
-    const y = ((this.h - 260) / 2) | 0;
+    const layout = this.getShopPanelLayout();
+    const w = layout.w;
+    const x = layout.x;
+    const y = layout.y;
     const mx = this.mouse.x;
     const my = this.mouse.y;
     if (mx < x + 16 || mx > x + w - 16) return;
 
-    for (let i = 0; i < 4; i++) {
-      const rowY = y + 70 + i * 42;
+    for (let i = 0; i < SHOP_ACTION_COUNT; i++) {
+      const rowY = y + layout.rowStart + i * layout.rowStep;
       if (my >= rowY - 16 && my <= rowY + 16) {
-        this._buyShopItem(i);
+        this._runShopAction(i + 1);
         return;
       }
     }
   }
 
+  _runShopAction(action) {
+    const index = (action | 0) - 1;
+    if (index < 0 || index >= SHOP_ACTION_COUNT) return;
+    this._buyShopItem(index);
+  }
+
   _handleTownInput() {
     this._handleTownMouse();
-    if (this.input.wasPressed("1")) this._townRest();
-    if (this.input.wasPressed("2")) this._townBuyPotion("hp");
-    if (this.input.wasPressed("3")) this._townBuyPotion("mana");
-    if (this.input.wasPressed("4")) this._townCommissionGear();
-    if (this.input.wasPressed("5")) this._townAskRumor();
-    if (this.input.wasPressed("6")) this._townCycleOath();
-    if (this.input.wasPressed("7")) this._townTakeContract();
-    if (this.input.wasPressed("8")) this._townBuyMapClue();
+    for (let i = 1; i <= TOWN_ACTION_COUNT; i++) {
+      if (this.input.wasPressed(String(i))) this._runTownAction(i);
+    }
   }
 
   _handleTownMouse() {
     if (!this.mouse.clicked) return;
+    const layout = this.getTownPanelLayout();
+    const w = layout.w;
+    const x = layout.x;
+    const y = layout.y;
+    const mx = this.mouse.x;
+    const my = this.mouse.y;
+    if (mx < x + 18 || mx > x + w - 18 || my < y + layout.actionTop || my > y + layout.actionBottom) return;
+
+    const row = Math.floor((my - (y + layout.rowStart)) / layout.rowStep);
+    if (row >= 0 && row < TOWN_ACTION_COUNT) this._runTownAction(row + 1);
+  }
+
+  _runTownAction(action) {
+    if (action === 1) this._townRest();
+    else if (action === 2) this._townBuyPotion("hp");
+    else if (action === 3) this._townBuyPotion("mana");
+    else if (action === 4) this._townCommissionGear();
+    else if (action === 5) this._townAskRumor();
+    else if (action === 6) this._townCycleOath();
+    else if (action === 7) this._townTakeContract();
+    else if (action === 8) this._townBuyMapClue();
+  }
+
+  getTownMenuLines(town = this._cachedNearbyTown) {
+    const npcs = town?.npcs || ["Warden", "Smith", "Archivist"];
+    const visited = !!(town && this.progress?.visitedTowns?.has?.(String(town.id)));
+    const restCost = Math.max(0, Math.min(28, 8 + (this.hero?.level || 1) * 2));
+    const forgeCost = 58 + (this.hero?.level || 1) * 9;
+    const clueCost = 36 + (this.hero?.level || 1) * 4;
+    return {
+      npcs,
+      lines: [
+        `1 Rest at inn (${restCost}g)`,
+        "2 Buy health potion (18g)",
+        "3 Buy mana potion (22g)",
+        `4 Commission townforged gear (${forgeCost}g)`,
+        "5 Ask for a rumor objective",
+        "6 Change oath / class",
+        "7 Take town contract",
+        `8 Buy cartographer clue (${clueCost}g)`,
+        visited ? `${npcs[0]}: Roads are safer when camps are cleared.` : `${npcs[0]}: First visit supplies were added.`,
+      ],
+      npcSummary: `${npcs.join(", ")} are available. Current oath: ${this._className?.() || "Knight"}.`,
+    };
+  }
+
+  getTownPanelLayout() {
     const w = Math.min(Math.max(this.w - 120, 430), 560);
     const h = 354;
     const x = ((this.w - w) / 2) | 0;
     const y = ((this.h - h) / 2) | 0;
-    const mx = this.mouse.x;
-    const my = this.mouse.y;
-    if (mx < x + 18 || mx > x + w - 18 || my < y + 82 || my > y + 280) return;
-
-    const row = Math.floor((my - (y + 91)) / 21);
-    if (row === 0) this._townRest();
-    else if (row === 1) this._townBuyPotion("hp");
-    else if (row === 2) this._townBuyPotion("mana");
-    else if (row === 3) this._townCommissionGear();
-    else if (row === 4) this._townAskRumor();
-    else if (row === 5) this._townCycleOath();
-    else if (row === 6) this._townTakeContract();
-    else if (row === 7) this._townBuyMapClue();
+    return {
+      w,
+      h,
+      x,
+      y,
+      actionTop: 82,
+      actionBottom: 280,
+      rowStart: 91,
+      rowStep: 21,
+    };
   }
 
   _className(id = this.hero?.classId) {
@@ -3671,7 +4137,7 @@ export default class Game {
     }
 
     if (e.boss || Math.random() < (e.elite ? 0.34 : 0.10)) {
-      const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+      const slots = EQUIPMENT_SLOTS;
       const slot = slots[(Math.random() * slots.length) | 0];
       const rarity = e.boss
         ? (Math.random() < 0.45 ? "epic" : "rare")
@@ -3902,7 +4368,7 @@ export default class Game {
       this._msg(`Smith needs ${cost}g`, 0.9);
       return;
     }
-    const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+    const slots = EQUIPMENT_SLOTS;
     const slot = slots[Math.abs(hash2(this.seed, this.hero.gold, this.time | 0)) % slots.length];
     const rarity = (this.hero.level || 1) >= 6 ? "rare" : "uncommon";
     const item = makeGear(slot, Math.max(1, this.hero.level || 1), rarity, hash2(this.seed, slot.length, this.hero.gold, this.time | 0));
@@ -3915,8 +4381,8 @@ export default class Game {
   _townAskRumor() {
     const order = ["secret", "treasure", "town", "dungeon", "dragon", "bounty"];
     const current = order.indexOf(this.trackedObjective);
-    this.trackedObjective = order[(current + 1 + order.length) % order.length];
-    this._msg(`Rumor tracked: ${this._titleCase(this.trackedObjective)}`, 1.0);
+    const next = order[(current + 1 + order.length) % order.length];
+    this._setTrackedObjective(next, `Rumor tracked: ${this._titleCase(next)}`);
   }
 
   _townCycleOath() {
@@ -3948,11 +4414,11 @@ export default class Game {
     const key = `contract_${id}`;
     const options = ["secret", "treasure", "town", "dungeon", "dragon", "bounty"];
     const pick = options[Math.abs(hash2(this.seed, town?.x | 0, town?.y | 0, this.progress.bountyCompletions || 0)) % options.length];
-    this.trackedObjective = pick;
+    this._setTrackedObjective(pick, null);
 
     if (!done[key]) {
       done[key] = true;
-      const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+      const slots = EQUIPMENT_SLOTS;
       const rewardSlot = slots[Math.abs(hash2(id.length, this.seed, this.hero.level || 1)) % slots.length];
       const reward = makeGear(rewardSlot, Math.max(1, this.hero.level || 1), "uncommon", hash2(this.seed, town?.x | 0, town?.y | 0, 77));
       reward.name = `Town-Writ ${reward.name}`;
@@ -4008,7 +4474,7 @@ export default class Game {
     candidates.sort((a, b) => dist2(this.hero.x, this.hero.y, a.target.x, a.target.y) - dist2(this.hero.x, this.hero.y, b.target.x, b.target.y));
     const clue = candidates[0];
     this.hero.gold -= cost;
-    this.trackedObjective = clue.mode;
+    this._setTrackedObjective(clue.mode, null);
     this.world?.revealAround?.(clue.target.x, clue.target.y, 520);
     this._spawnFloatingText(this.hero.x, this.hero.y - 42, "Map clue", "#8be9ff");
     this._msg(`Cartographer marked ${clue.label} -${cost}g`, 1.6);
@@ -4045,7 +4511,7 @@ export default class Game {
       data: { potionType: "mana" },
     });
 
-    const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+    const slots = EQUIPMENT_SLOTS;
     for (let i = 0; i < 4; i++) {
       const slot = slots[(rng.int(0, slots.length - 1) + i) % slots.length];
       const rarityRoll = rng.float();
@@ -4080,6 +4546,30 @@ export default class Game {
 
   _shopPrice(base, discount) {
     return Math.max(1, Math.round(base * (1 - discount)));
+  }
+
+  getShopPanelMeta() {
+    const discount = Math.round((this.shop?.discount || 0) * 100);
+    return {
+      hint: "1-4 or click buy - Esc close",
+      goldText: `Gold: ${this.hero?.gold || 0}`,
+      discountText: discount > 0 ? `Renown discount: ${discount}%` : "",
+    };
+  }
+
+  getShopPanelLayout() {
+    const w = 430;
+    const h = 260;
+    const x = ((this.w - w) / 2) | 0;
+    const y = ((this.h - h) / 2) | 0;
+    return {
+      w,
+      h,
+      x,
+      y,
+      rowStart: 70,
+      rowStep: 42,
+    };
   }
 
   _buyShopItem(index) {
@@ -4174,7 +4664,7 @@ export default class Game {
     this.loot.push(new Loot(cache.x + 10, cache.y + 2, "potion", { potionType: level >= 3 ? "mana" : "hp" }));
 
     if (level >= 2) {
-      const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+      const slots = EQUIPMENT_SLOTS;
       const slot = slots[Math.abs(hash2(cache.x | 0, cache.y | 0, level)) % slots.length];
       const rarity = level >= 5 ? "rare" : "uncommon";
       const item = makeGear(slot, Math.max(level, this.hero.level || 1), rarity, hash2(this.seed, cache.x | 0, cache.y | 0));
@@ -4299,7 +4789,7 @@ export default class Game {
     }
 
     if (floor % 3 === 0) {
-      const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+      const slots = EQUIPMENT_SLOTS;
       const slot = slots[Math.abs(hash2(this.seed, floor, this.hero.level || 1)) % slots.length];
       const rarity = floor >= 9 ? "epic" : floor >= 5 ? "rare" : "uncommon";
       const gear = makeGear(slot, Math.max(1, (this.hero.level || 1) + Math.floor(floor / 3)), rarity, hash2(this.seed, floor, slot.length));
@@ -4459,7 +4949,7 @@ export default class Game {
     this.hero.gold += q.rewardGold || 0;
     this.hero.giveXP?.(q.rewardXp || 0);
 
-    const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+    const slots = EQUIPMENT_SLOTS;
     const slot = slots[this.progress.bountyCompletions % slots.length];
     const rarity = this.progress.bountyCompletions % 4 === 0 ? "rare" : "uncommon";
     const reward = makeGear(slot, Math.max(1, this.hero.level), rarity, hash2(this.seed, this.progress.bountyCompletions));
@@ -4605,6 +5095,10 @@ export default class Game {
     );
   }
 
+  getTrackedObjectiveSummary() {
+    return this._getTrackedObjective() || this.getObjective();
+  }
+
   _objective(title, detail, target, color) {
     return { title, detail, target, color };
   }
@@ -4677,6 +5171,52 @@ export default class Game {
     );
   }
 
+  getActiveBossState() {
+    const hero = this.hero;
+    if (!hero) return null;
+
+    let best = null;
+    let bestD2 = Infinity;
+    for (const e of this.enemies || []) {
+      if (!e?.alive || !e.boss) continue;
+      const d2 = dist2(hero.x, hero.y, e.x, e.y);
+      const visible = this._isVisibleWorldPoint(e.x, e.y, 240);
+      const alert = (e.alertT || 0) > 0.08;
+      const engageR = Math.max(760, (e.aggroRadius || 0) + 280);
+      if (!this.dungeon?.active && !visible && !alert && d2 > engageR * engageR) continue;
+      if (d2 < bestD2) {
+        best = e;
+        bestD2 = d2;
+      }
+    }
+
+    if (!best) return null;
+
+    const frac = clamp((best.hp || 0) / Math.max(1, best.maxHp || 1), 0, 1);
+    const distance = Math.max(0, Math.round(Math.sqrt(bestD2) / 10) * 10);
+    const isDragon = best.kind === "dragon";
+    const name = best.name || (isDragon ? "Ancient Dragon" : `${this._titleCase(best.kind)} Boss`);
+    const detail =
+      isDragon ? "Ancient threat" :
+      this.dungeon?.active ? `Dungeon floor ${this.dungeon.floor || 1} boss` :
+      "Roaming boss";
+
+    return {
+      name,
+      detail,
+      kind: best.kind || "boss",
+      level: best.level || 1,
+      hp: Math.round(best.hp || 0),
+      maxHp: Math.max(1, Math.round(best.maxHp || 1)),
+      frac,
+      distance,
+      colorA: isDragon ? "#b53045" : "#a9852d",
+      colorB: isDragon ? "#ff8a5c" : "#ffd36e",
+      accent: isDragon ? "#ff8a5c" : "#ffd36e",
+      alive: !!best.alive,
+    };
+  }
+
   _titleCase(text) {
     const s = String(text || "");
     return s ? s.charAt(0).toUpperCase() + s.slice(1) : "";
@@ -4705,18 +5245,13 @@ export default class Game {
       ctx.textAlign = "center";
       ctx.fillText(f.text, f.x, f.y);
       ctx.restore();
-
-      f.y -= 0.35;
-      f.a -= 0.015;
     }
-
-    this.floatingTexts = this.floatingTexts.filter((f) => f.a > 0);
   }
 
   _spawnFloatingText(x, y, text, color = "#fff") {
     const cap = this.perf?.maxFloatingTexts || 48;
     if (this.floatingTexts.length >= cap) this.floatingTexts.splice(0, this.floatingTexts.length - cap + 1);
-    this.floatingTexts.push({ x, y, text, color, a: 1 });
+    this.floatingTexts.push({ x, y, text, color, a: 1, vy: -21, life: 1.1 });
   }
 
   _nearPointOfInterest(x, y, r) {
@@ -5860,7 +6395,7 @@ export default class UI {
     this._miniT += dt;
     if (this._miniT >= 0.28) {
       this._miniT = 0;
-      this._mini = game?.world?._mapInfo ? null : (game?.world?.getMinimapCanvas?.() || null);
+      this._mini = game?.world?.getMinimapCanvas?.() || null;
       this._miniFrameDirty = true;
     }
 
@@ -5886,6 +6421,7 @@ export default class UI {
     this._drawSpellBar(ctx, game);
     this._drawMinimap(ctx, game);
     this._drawObjective(ctx, game);
+    this._drawBossBanner(ctx, game);
     this._drawHelp(ctx, game);
     this._drawTouchControls(ctx, game);
     this._drawPrompt(ctx, game);
@@ -5965,6 +6501,82 @@ export default class UI {
       ctx.fillText(label, x + 8, y + h * 0.5 + 0.5);
     }
     ctx.restore();
+  }
+
+  _drawPill(ctx, x, y, w, h, text, opts = {}) {
+    const fill = opts.fill || "rgba(255,255,255,0.08)";
+    const stroke = opts.stroke || "rgba(255,255,255,0.14)";
+    const textColor = opts.textColor || "#e6edf7";
+    const font = opts.font || "bold 11px 'Segoe UI', Arial";
+
+    ctx.save();
+    ctx.fillStyle = fill;
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = stroke;
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    ctx.fillStyle = textColor;
+    ctx.font = font;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    this._drawFitText(ctx, text, x + w * 0.5 - (w - 12) * 0.5, y + h * 0.5 + 0.5, w - 12, 8);
+    ctx.restore();
+  }
+
+  _getHudLayout() {
+    const x = 16;
+    const y = 16;
+    const w = Math.min(Math.max(this.w * 0.34, 300), 382);
+    return {
+      x,
+      y,
+      w,
+      panelH: 126,
+      hpH: 18,
+      manaH: 12,
+      xpH: 8,
+    };
+  }
+
+  _getMinimapLayout() {
+    const size =
+      this.w < 760 || this.h < 500 ? 130 :
+      this.w < 980 || this.h < 620 ? 154 :
+      178;
+    return {
+      size,
+      x: this.w - size - 16,
+      y: 16,
+    };
+  }
+
+  _getObjectiveLayout() {
+    const hud = this._getHudLayout();
+    const minimap = this._getMinimapLayout();
+    const x = 16;
+    const y = hud.y + hud.panelH + 14;
+    const rightLimit = minimap.x - 18;
+    const maxW = Math.max(248, rightLimit - x);
+    return {
+      x,
+      y,
+      w: Math.min(380, Math.max(248, maxW)),
+      h: 108,
+    };
+  }
+
+  _getBossLayout() {
+    const hud = this._getHudLayout();
+    const minimap = this._getMinimapLayout();
+    const left = hud.x + hud.w + 18;
+    const right = minimap.x - 18;
+    const available = right - left;
+    const w = Math.min(420, Math.max(240, available > 240 ? available : this.w * 0.32));
+    return {
+      x: available > 240 ? (left + (available - w) * 0.5) | 0 : ((this.w - w) * 0.5) | 0,
+      y: this.h < 560 ? 20 : 16,
+      w,
+      h: 62,
+    };
   }
 
   _drawKeyCap(ctx, x, y, key, label, active = false) {
@@ -6055,12 +6667,16 @@ export default class UI {
       crit: 0.05,
     };
 
-    const x = 16;
-    const y = 16;
-    const w = 330;
-    const hpH = 18;
-    const manaH = 12;
-    const xpH = 8;
+    const layout = this._getHudLayout();
+    const x = layout.x;
+    const y = layout.y;
+    const w = layout.w;
+    const hpH = layout.hpH;
+    const manaH = layout.manaH;
+    const xpH = layout.xpH;
+    const panelH = layout.panelH;
+    const className = game?._className?.() || "Knight";
+    const godMode = !!game?.dev?.godMode;
 
     const hpMax = Math.max(1, stats.maxHp || hero.maxHp || 100);
     const manaMax = Math.max(1, stats.maxMana || hero.maxMana || 60);
@@ -6072,21 +6688,28 @@ export default class UI {
 
     ctx.save();
 
-    this._drawPanel(ctx, x - 8, y - 8, w + 16, 108, { accent: "rgba(232,190,96,0.54)" });
+    this._drawPanel(ctx, x - 8, y - 8, w + 16, panelH, { accent: godMode ? "rgba(92,210,255,0.54)" : "rgba(232,190,96,0.54)" });
 
-    ctx.fillStyle = "#f3f0dc";
-    ctx.font = "bold 15px 'Segoe UI', Arial";
+    ctx.fillStyle = "#f4f7fc";
+    ctx.font = "bold 16px 'Segoe UI', Arial";
     ctx.textAlign = "left";
-    ctx.fillText(`Lv ${hero.level || 1}`, x, y + 2);
-    ctx.fillStyle = "#ffd779";
-    ctx.fillText(`Gold ${hero.gold || 0}`, x + 88, y + 2);
-    if (game?.dev?.godMode) {
-      ctx.fillStyle = "rgba(92,210,255,0.16)";
-      ctx.fillRect(x + 174, y - 11, 48, 18);
-      ctx.strokeStyle = "rgba(128,224,255,0.35)";
-      ctx.strokeRect(x + 174.5, y - 10.5, 47, 17);
-      ctx.fillStyle = "#8fd8ff";
-      ctx.fillText("GOD", x + 184, y + 2);
+    this._drawFitText(ctx, `${className}`, x, y + 2, w - 184, 11);
+    this._drawPill(ctx, x + w - 176, y - 11, 68, 20, `Lv ${hero.level || 1}`, {
+      fill: "rgba(255,255,255,0.08)",
+      stroke: "rgba(255,255,255,0.16)",
+      textColor: "#f3f0dc",
+    });
+    this._drawPill(ctx, x + w - 100, y - 11, 100, 20, `Gold ${hero.gold || 0}`, {
+      fill: "rgba(255,215,121,0.10)",
+      stroke: "rgba(255,215,121,0.20)",
+      textColor: "#ffd779",
+    });
+    if (godMode) {
+      this._drawPill(ctx, x + w - 236, y - 11, 52, 20, "GOD", {
+        fill: "rgba(92,210,255,0.16)",
+        stroke: "rgba(128,224,255,0.35)",
+        textColor: "#8fd8ff",
+      });
     }
 
     this._drawBar(ctx, x, y + 12, w, hpH, hpFrac, "#b53045", "#f06d73", `HP ${Math.round(hero.hp || 0)} / ${hpMax}`);
@@ -6097,72 +6720,103 @@ export default class UI {
     ctx.font = "11px 'Segoe UI', Arial";
     ctx.fillText(`XP ${hero.xp || 0} / ${xpNeed}`, x + 8, y + 74);
 
-    const potX = x + w - 112;
-    ctx.fillStyle = "#e2ebf7";
-    ctx.fillText(`1:HP ${hero?.potions?.hp || 0}`, potX, y + 26);
-    ctx.fillText(`2:MP ${hero?.potions?.mana || 0}`, potX, y + 48);
+    this._drawPill(ctx, x + w - 108, y + 18, 100, 18, `1  HP ${hero?.potions?.hp || 0}`, {
+      fill: "rgba(240,109,115,0.10)",
+      stroke: "rgba(240,109,115,0.22)",
+      textColor: "#ffd3d7",
+      font: "bold 10px 'Segoe UI', Arial",
+    });
+    this._drawPill(ctx, x + w - 108, y + 40, 100, 18, `2  MP ${hero?.potions?.mana || 0}`, {
+      fill: "rgba(109,184,255,0.10)",
+      stroke: "rgba(109,184,255,0.22)",
+      textColor: "#d7ebff",
+      font: "bold 10px 'Segoe UI', Arial",
+    });
 
-    ctx.fillStyle = "#9fb1c7";
-    ctx.fillText(`DMG ${stats.dmg || 0}`, x + 8, y + 94);
-    ctx.fillText(`ARM ${stats.armor || 0}`, x + 92, y + 94);
-    ctx.fillText(`CRIT ${Math.round((stats.crit || 0) * 100)}%`, x + 168, y + 94);
+    const statY = y + 86;
+    const statGap = 8;
+    const statW = Math.floor((w - statGap * 2) / 3);
+    this._drawPill(ctx, x, statY, statW, 22, `DMG ${stats.dmg || 0}`, {
+      fill: "rgba(255,255,255,0.06)",
+      stroke: "rgba(255,255,255,0.12)",
+      textColor: "#9fb1c7",
+    });
+    this._drawPill(ctx, x + statW + statGap, statY, statW, 22, `ARM ${stats.armor || 0}`, {
+      fill: "rgba(255,255,255,0.06)",
+      stroke: "rgba(255,255,255,0.12)",
+      textColor: "#9fb1c7",
+    });
+    this._drawPill(ctx, x + (statW + statGap) * 2, statY, statW, 22, `CRIT ${Math.round((stats.crit || 0) * 100)}%`, {
+      fill: "rgba(255,255,255,0.06)",
+      stroke: "rgba(255,255,255,0.12)",
+      textColor: "#9fb1c7",
+    });
 
     ctx.restore();
   }
 
   _drawSpellBar(ctx, game) {
-    const defs = game.skillDefs || {};
-    const cds = game.cooldowns || {};
-    const hero = game.hero;
-    const bottomY = this.h - 62;
-    const box = 46;
-    const gap = 10;
-    const total = box * 4 + gap * 3;
-    const startX = ((this.w - total) / 2) | 0;
-    const order = ["q", "w", "e", "r"];
+    const spellRows = game?.getSkillPanelData?.()?.rows || [];
+    const layout = game?.getSpellBarLayout?.() || {
+      box: 46,
+      gap: 10,
+      total: 46 * Math.max(1, spellRows.length) + 10 * Math.max(0, spellRows.length - 1),
+      x: ((this.w - (46 * Math.max(1, spellRows.length) + 10 * Math.max(0, spellRows.length - 1))) / 2) | 0,
+      y: this.h - 62,
+      inset: 5,
+    };
 
     ctx.save();
+    this._drawPanel(ctx, layout.x - 12, layout.y - 16, layout.total + 24, layout.box + 30, {
+      alpha: 0.58,
+      accent: "rgba(132,170,255,0.26)",
+    });
 
-    for (let i = 0; i < order.length; i++) {
-      const key = order[i];
-      const def = defs[key];
-      const cd = Math.max(0, cds[key] || 0);
-      const x = startX + i * (box + gap);
-      const y = bottomY;
+    for (let i = 0; i < spellRows.length; i++) {
+      const row = spellRows[i];
+      const x = layout.x + i * (layout.box + layout.gap);
+      const y = layout.y;
+      const accent = row.cooldownValue > 0 ? "#ffd98a" : row.affordable ? row.color || "#94e48d" : "#ff9c9c";
+      this._drawPanel(ctx, x, y, layout.box, layout.box, { alpha: 0.82, accent });
 
-      this._drawPanel(ctx, x, y, box, box, { alpha: 0.78, accent: def?.color || "rgba(220,225,235,0.32)" });
-
-      ctx.fillStyle = def?.color || "#a9c3ff";
+      ctx.fillStyle = row.color || "#a9c3ff";
       ctx.globalAlpha = 0.22;
-      ctx.fillRect(x + 5, y + 5, box - 10, box - 10);
+      ctx.fillRect(x + layout.inset, y + layout.inset, layout.box - layout.inset * 2, layout.box - layout.inset * 2);
       ctx.globalAlpha = 1;
 
       ctx.fillStyle = "#eef4ff";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.font = "bold 16px 'Segoe UI', Arial";
-      ctx.fillText((key || "?").toUpperCase(), x + box * 0.5, y + box * 0.5 - 3);
+      ctx.fillText((row.key || "?").toUpperCase(), x + layout.box * 0.5, y + layout.box * 0.5 - 3);
 
       ctx.font = "10px 'Segoe UI', Arial";
       ctx.fillStyle = "#9ab2cf";
-      ctx.fillText(`${def?.mana || 0} MP`, x + box * 0.5, y + box - 8);
+      ctx.fillText(`${row.manaCost || 0} MP`, x + layout.box * 0.5, y + layout.box - 8);
 
-      const manaOK = (hero?.mana || 0) >= (def?.mana || 0);
+      ctx.fillStyle = accent;
+      ctx.globalAlpha = row.cooldownValue > 0 ? 0.22 : row.affordable ? 0.16 : 0.18;
+      ctx.fillRect(x + 2, y + 2, layout.box - 4, 4);
+      ctx.globalAlpha = 1;
 
-      if (cd > 0) {
-        const frac = clamp(cd / Math.max(0.01, def?.cd || 1), 0, 1);
+      if ((row.cooldownValue || 0) > 0) {
         ctx.fillStyle = "rgba(3,5,8,0.70)";
-        ctx.fillRect(x, y, box, box * frac);
+        ctx.fillRect(x, y, layout.box, layout.box * (row.cooldownFrac || 0));
 
         ctx.fillStyle = "#ffffff";
         ctx.font = "bold 11px 'Segoe UI', Arial";
-        ctx.fillText(cd.toFixed(1), x + box * 0.5, y + box * 0.5 + 9);
+        ctx.fillText((row.cooldownValue || 0).toFixed(1), x + layout.box * 0.5, y + layout.box * 0.5 + 9);
       }
 
-      if (!manaOK) {
+      if (!row.affordable) {
         ctx.fillStyle = "rgba(35,70,120,0.28)";
-        ctx.fillRect(x, y, box, box);
+        ctx.fillRect(x, y, layout.box, layout.box);
       }
+
+      ctx.fillStyle = row.cooldownValue > 0 ? "#ffd98a" : row.affordable ? "#94e48d" : "#ff9c9c";
+      ctx.beginPath();
+      ctx.arc(x + layout.box - 8, y + 8, 3, 0, Math.PI * 2);
+      ctx.fill();
     }
 
     ctx.restore();
@@ -6173,9 +6827,10 @@ export default class UI {
     const hero = game?.hero;
     if (!world || !hero) return;
 
-    const size = 178;
-    const x = this.w - size - 16;
-    const y = 16;
+    const layout = this._getMinimapLayout();
+    const size = layout.size;
+    const x = layout.x;
+    const y = layout.y;
     const cx = x + size * 0.5;
     const cy = y + size * 0.5;
     const r = size * 0.5 - 4;
@@ -6213,6 +6868,12 @@ export default class UI {
     ctx.font = "bold 12px 'Segoe UI', Arial";
     ctx.textAlign = "center";
     ctx.fillText("N", cx, y + 16);
+    this._drawPill(ctx, x + 28, y + size - 26, size - 56, 16, `Tracking ${this._titleCase(game?.trackedObjective || "story")}`, {
+      fill: "rgba(3,7,12,0.72)",
+      stroke: "rgba(143,216,255,0.20)",
+      textColor: "#d8e9f9",
+      font: "bold 9px 'Segoe UI', Arial",
+    });
     ctx.restore();
   }
 
@@ -6225,14 +6886,14 @@ export default class UI {
 
     c.clearRect(0, 0, w, h);
 
-    const info = game?.world?.getMapInfo?.();
-    if (info?.revealed) {
-      this._drawMinimapFromMapInfo(c, game, 0, 0, w, h);
+    if (this._mini) {
+      this._drawMinimapFromCanvas(c, game, this._mini, 0, 0, w);
       return;
     }
 
-    if (this._mini) {
-      this._drawMinimapFromCanvas(c, game, this._mini, 0, 0, w);
+    const info = game?.world?.getMapInfo?.();
+    if (info?.revealed?.length) {
+      this._drawMinimapFromMapInfo(c, game, 0, 0, w, h);
       return;
     }
 
@@ -6266,7 +6927,7 @@ export default class UI {
     ctx.imageSmoothingEnabled = true;
     ctx.restore();
 
-    this._drawHeroCrosshair(ctx, x, y, size, x + size * 0.5, y + size * 0.5, false);
+    this._drawHeroCrosshair(ctx, x, y, size, size, x + size * 0.5, y + size * 0.5, false);
   }
 
   _drawMinimapFromMapInfo(ctx, game, x, y, w, h) {
@@ -6332,10 +6993,10 @@ export default class UI {
     this._drawMapPoiMarkers(ctx, game, x, y, w, h, left, top, worldSpan, 2.4);
 
     ctx.restore();
-    this._drawHeroCrosshair(ctx, x, y, w, x + w * 0.5, y + h * 0.5, false);
+    this._drawHeroCrosshair(ctx, x, y, w, h, x + w * 0.5, y + h * 0.5, false);
   }
 
-  _drawHeroCrosshair(ctx, x, y, size, hx, hy, drawBorder = true) {
+  _drawHeroCrosshair(ctx, x, y, w, h, hx, hy, drawBorder = true) {
     ctx.save();
 
     ctx.strokeStyle = "rgba(10,20,34,0.95)";
@@ -6358,7 +7019,7 @@ export default class UI {
 
     if (drawBorder) {
       ctx.strokeStyle = "rgba(255,255,255,0.12)";
-      ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
+      ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
     }
     ctx.restore();
   }
@@ -6370,7 +7031,7 @@ export default class UI {
       return;
     }
 
-    const lines = [
+    const fullLines = [
       "Arrow Keys move",
       "Mouse aim",
       "Q/W/E/R skills",
@@ -6385,12 +7046,27 @@ export default class UI {
       "G dev",
       "Esc close",
     ];
+    const compactLines = [
+      "Arrows move",
+      "Mouse aim",
+      "Q/W/E/R skills",
+      "F interact",
+      "M map",
+      "I/K/J menus",
+      "Esc close",
+    ];
+    const compact = this.w < 1040 || this.h < 700;
+    const lines = compact ? compactLines : fullLines;
 
+    const hud = this._getHudLayout();
+    const spell = game?.getSpellBarLayout?.() || { y: this.h - 62 };
     const x = 16;
-    const y = this.h - 198;
+    const y = Math.max(hud.y + hud.panelH + 128, spell.y - (compact ? 104 : 136));
+    const panelH = compact ? 118 : 206;
+    const panelW = compact ? 156 : 164;
 
     ctx.save();
-    this._drawPanel(ctx, x - 8, y - 16, 164, 206, { alpha: 0.56, accent: "rgba(148,170,190,0.28)" });
+    this._drawPanel(ctx, x - 8, y - 16, panelW, panelH, { alpha: 0.56, accent: "rgba(148,170,190,0.28)" });
 
     ctx.fillStyle = "#dfe7f2";
     ctx.font = "bold 13px 'Segoe UI', Arial";
@@ -6474,37 +7150,42 @@ export default class UI {
     const objective = game?.getObjective?.();
     if (!objective) return;
 
-    const x = 16;
-    const y = 134;
-    const w = Math.min(360, Math.max(260, this.w - 32));
-    const h = 104;
+    const layout = this._getObjectiveLayout();
+    const x = layout.x;
+    const y = layout.y;
+    const w = layout.w;
+    const h = layout.h;
     const hasTarget = !!(objective.target && game?.hero);
-    const arrowW = hasTarget ? 70 : 0;
+    const arrowW = hasTarget && w >= 300 ? 76 : 0;
     const textW = w - 24 - arrowW;
 
     ctx.save();
     this._drawPanel(ctx, x - 8, y - 8, w, h, { alpha: 0.72, accent: objective.color || "rgba(255,211,110,0.52)" });
 
-    ctx.fillStyle = objective.color || "#ffd36e";
-    ctx.font = "bold 13px Arial";
-    ctx.textAlign = "left";
-    ctx.fillText("Objective", x, y + 2);
+    this._drawPill(ctx, x, y - 10, 78, 18, "Objective", {
+      fill: "rgba(255,211,110,0.12)",
+      stroke: "rgba(255,211,110,0.28)",
+      textColor: objective.color || "#ffd36e",
+      font: "bold 10px 'Segoe UI', Arial",
+    });
 
     const track = game?.trackedObjective || "story";
-    ctx.fillStyle = "#8fa2bb";
-    ctx.font = "10px Arial";
-    ctx.textAlign = "left";
-    this._drawFitText(ctx, `Tracking ${this._titleCase(track)}`, x + 88, y + 2, Math.max(90, textW - 88), 8);
+    this._drawPill(ctx, x + 86, y - 10, Math.min(122, Math.max(74, w - 112 - arrowW)), 18, `Tracking ${this._titleCase(track)}`, {
+      fill: "rgba(255,255,255,0.06)",
+      stroke: "rgba(255,255,255,0.14)",
+      textColor: "#8fa2bb",
+      font: "bold 10px 'Segoe UI', Arial",
+    });
 
     ctx.fillStyle = "#eef4fb";
-    ctx.font = "bold 14px Arial";
-    this._drawFitText(ctx, objective.title || "Explore", x, y + 24, textW);
+    ctx.font = "bold 15px 'Segoe UI', Arial";
+    this._drawFitText(ctx, objective.title || "Explore", x, y + 24, textW, 10);
 
     ctx.fillStyle = "#9fb1c7";
-    ctx.font = "12px Arial";
+    ctx.font = "12px 'Segoe UI', Arial";
     this._drawClampedText(ctx, objective.detail || "", x, y + 46, textW, 15, 3);
 
-    if (hasTarget) {
+    if (hasTarget && arrowW > 0) {
       const dx = objective.target.x - game.hero.x;
       const dy = objective.target.y - game.hero.y;
       const angle = Math.atan2(dy, dx);
@@ -6525,12 +7206,72 @@ export default class UI {
       ctx.restore();
 
       const dist = Math.max(0, Math.round(Math.hypot(dx, dy) / 10) * 10);
-      ctx.fillStyle = "#c7d4e6";
-      ctx.font = "11px Arial";
-      ctx.textAlign = "center";
-      ctx.fillText(`${dist}m`, cx, y + 76);
+      this._drawPill(ctx, x + w - 78, y + 64, 72, 18, `${dist}m`, {
+        fill: "rgba(255,255,255,0.06)",
+        stroke: "rgba(255,255,255,0.14)",
+        textColor: "#c7d4e6",
+        font: "bold 10px 'Segoe UI', Arial",
+      });
     }
 
+    ctx.restore();
+  }
+
+  _drawBossBanner(ctx, game) {
+    const boss = game?.getActiveBossState?.();
+    if (!boss?.alive) return;
+
+    const layout = this._getBossLayout();
+    const x = layout.x;
+    const y = layout.y;
+    const w = layout.w;
+
+    ctx.save();
+    this._drawPanel(ctx, x, y, w, layout.h, {
+      alpha: 0.86,
+      accent: boss.accent || "rgba(255,138,92,0.46)",
+    });
+
+    this._drawPill(ctx, x + 10, y + 8, 64, 16, boss.kind === "dragon" ? "Boss" : "Elite Boss", {
+      fill: "rgba(255,138,92,0.12)",
+      stroke: "rgba(255,138,92,0.28)",
+      textColor: boss.accent || "#ffb99c",
+      font: "bold 9px 'Segoe UI', Arial",
+    });
+    this._drawPill(ctx, x + w - 132, y + 8, 56, 16, `Lv ${boss.level || 1}`, {
+      fill: "rgba(255,255,255,0.06)",
+      stroke: "rgba(255,255,255,0.14)",
+      textColor: "#edf3fb",
+      font: "bold 9px 'Segoe UI', Arial",
+    });
+    this._drawPill(ctx, x + w - 68, y + 8, 58, 16, `${boss.distance || 0}m`, {
+      fill: "rgba(255,255,255,0.06)",
+      stroke: "rgba(255,255,255,0.14)",
+      textColor: "#cfd9e7",
+      font: "bold 9px 'Segoe UI', Arial",
+    });
+
+    ctx.fillStyle = "#f4f7fc";
+    ctx.font = "bold 15px 'Segoe UI', Arial";
+    ctx.textAlign = "left";
+    this._drawFitText(ctx, boss.name || "Boss", x + 10, y + 24, w - 152, 10);
+
+    this._drawBar(
+      ctx,
+      x + 10,
+      y + 30,
+      w - 20,
+      14,
+      boss.frac || 0,
+      boss.colorA || "#b53045",
+      boss.colorB || "#ff8a5c",
+      `${boss.hp || 0} / ${boss.maxHp || 1}`
+    );
+
+    ctx.fillStyle = "#aab9ca";
+    ctx.font = "10px 'Segoe UI', Arial";
+    ctx.textAlign = "left";
+    this._drawFitText(ctx, boss.detail || "Active threat", x + 10, y + 56, w - 20, 8);
     ctx.restore();
   }
 
@@ -6552,12 +7293,15 @@ export default class UI {
 
     ctx.save();
     const panelW = Math.min(300, Math.max(190, text.length * 9 + 36));
-    this._drawPanel(ctx, (this.w - panelW) / 2, this.h - 116, panelW, 34, { alpha: 0.78, accent: "rgba(232,190,96,0.52)" });
+    const spell = game?.getSpellBarLayout?.() || { y: this.h - 62, box: 46 };
+    const panelX = (this.w - panelW) / 2;
+    const panelY = spell.y - (this.h < 540 ? 42 : 48);
+    this._drawPanel(ctx, panelX, panelY, panelW, 34, { alpha: 0.78, accent: "rgba(232,190,96,0.52)" });
 
     ctx.fillStyle = "#edf3fb";
     ctx.font = "bold 14px 'Segoe UI', Arial";
     ctx.textAlign = "left";
-    this._drawFitText(ctx, text, (this.w - panelW) * 0.5 + 12, this.h - 92, panelW - 24, 9);
+    this._drawFitText(ctx, text, panelX + 12, panelY + 24, panelW - 24, 9);
     ctx.restore();
   }
 
@@ -6589,6 +7333,8 @@ export default class UI {
 
     ctx.save();
     ctx.globalAlpha = clamp(t / 0.25, 0, 1);
+    ctx.shadowColor = "rgba(7,10,15,0.85)";
+    ctx.shadowBlur = 10;
     ctx.fillStyle = "#dbe8f6";
     ctx.font = "bold 18px 'Segoe UI', Arial";
     ctx.textAlign = "center";
@@ -6611,11 +7357,18 @@ export default class UI {
     ctx.fillText("World Map", x + 18, y + 28);
 
     const zoom = clamp(game?.menu?.mapZoom || 1, 1, 8);
-    ctx.textAlign = "right";
-    ctx.fillStyle = zoom > 1 ? "#8fd8ff" : "#95a7bd";
-    ctx.font = "bold 12px 'Segoe UI', Arial";
-    ctx.fillText(`${zoom}x`, x + panelW - 18, y + 28);
-    ctx.textAlign = "left";
+    this._drawPill(ctx, x + panelW - 74, y + 10, 56, 18, `${zoom}x`, {
+      fill: zoom > 1 ? "rgba(143,216,255,0.12)" : "rgba(255,255,255,0.06)",
+      stroke: zoom > 1 ? "rgba(143,216,255,0.26)" : "rgba(255,255,255,0.12)",
+      textColor: zoom > 1 ? "#8fd8ff" : "#95a7bd",
+      font: "bold 11px 'Segoe UI', Arial",
+    });
+    this._drawPill(ctx, x + 138, y + 10, Math.min(170, panelW - 238), 18, `Tracking ${this._titleCase(game?.trackedObjective || "story")}`, {
+      fill: "rgba(255,255,255,0.06)",
+      stroke: "rgba(255,255,255,0.12)",
+      textColor: "#9db2ca",
+      font: "bold 10px 'Segoe UI', Arial",
+    });
 
     const mapX = x + 18;
     const mapY = y + 42;
@@ -6628,10 +7381,11 @@ export default class UI {
     ctx.strokeRect(mapX + 0.5, mapY + 0.5, mapW - 1, mapH - 1);
 
     const info = game?.world?.getMapInfo?.();
-    if (info?.revealed) {
-      this._drawBigMapFromMapInfo(ctx, game, info, mapX, mapY, mapW, mapH);
-    } else if (this._mini) {
+    const mapReady = !!info?.revealed?.length && !game?.world?._mapDirty;
+    if (this._mini && !mapReady) {
       this._drawBigMapFromCanvas(ctx, game, this._mini, mapX, mapY, mapW, mapH);
+    } else if (info?.revealed?.length) {
+      this._drawBigMapFromMapInfo(ctx, game, info, mapX, mapY, mapW, mapH);
     } else {
       ctx.fillStyle = "rgba(255,255,255,0.05)";
       ctx.fillRect(mapX, mapY, mapW, mapH);
@@ -6666,7 +7420,7 @@ export default class UI {
     const hx = x + ((heroNormX * mini.width - srcX) / srcW) * w;
     const hy = y + ((heroNormY * mini.height - srcY) / srcH) * h;
 
-    this._drawHeroCrosshair(ctx, x, y, w, hx, hy);
+      this._drawHeroCrosshair(ctx, x, y, w, h, hx, hy);
   }
 
   _drawBigMapFromMapInfo(ctx, game, info, x, y, w, h) {
@@ -6730,7 +7484,7 @@ export default class UI {
     const hx = x + (heroX - viewLeft) * pxPerWorldX;
     const hy = y + (heroY - viewTop) * pxPerWorldY;
 
-    this._drawHeroCrosshair(ctx, x, y, w, hx, hy);
+    this._drawHeroCrosshair(ctx, x, y, w, h, hx, hy);
   }
 
   _drawMapPoiMarkers(ctx, game, x, y, w, h, viewLeft, viewTop, viewSpan, radius = 3) {
@@ -6879,11 +7633,28 @@ export default class UI {
     const hero = game.hero;
     const items = hero.inventory || [];
     const equip = hero.equip || {};
-
-    const panelW = Math.min(Math.max(this.w - 90, 700), 860);
-    const panelH = Math.min(Math.max(this.h - 90, 430), 540);
-    const x = ((this.w - panelW) / 2) | 0;
-    const y = ((this.h - panelH) / 2) | 0;
+    const inventoryText = game?.getInventoryPanelText?.(items.length > 0) || {
+      headerHint: items.length > 0 ? "I or Esc close   wheel/arrow select   click again equip" : "I or Esc close",
+      emptyBagTitle: "No gear in your bag yet.",
+      emptyBagBody: "Clear camps, shops, contracts, and dungeons will start filling it.",
+      emptyDetailTitle: "Item Details",
+      emptyDetailBody: "Pick up gear to compare it here.",
+      emptyDetailNote: "Your equipped kit will stay visible above while the bag is empty.",
+      equipHint: "Enter/E or click again equip",
+      salvageHint: "X/Delete salvage",
+    };
+    const layout = game?.getInventoryPanelLayout?.() || {
+      panelW: Math.min(Math.max(this.w - 90, 700), 860),
+      panelH: Math.min(Math.max(this.h - 90, 430), 540),
+      x: ((this.w - Math.min(Math.max(this.w - 90, 700), 860)) / 2) | 0,
+      y: ((this.h - Math.min(Math.max(this.h - 90, 430), 540)) / 2) | 0,
+      leftW: 370,
+      rowH: 28,
+    };
+    const panelW = layout.panelW;
+    const panelH = layout.panelH;
+    const x = layout.x;
+    const y = layout.y;
 
     ctx.save();
     this._drawPanel(ctx, x, y, panelW, panelH, { alpha: 0.92, accent: "rgba(232,190,96,0.50)" });
@@ -6894,12 +7665,19 @@ export default class UI {
 
     ctx.fillStyle = "#95a7bd";
     ctx.font = "13px Arial";
-    ctx.fillText("I or Esc close   wheel/arrow select", x + 18, y + 52);
+    this._drawFitText(
+      ctx,
+      inventoryText.headerHint,
+      x + 18,
+      y + 52,
+      panelW - 36,
+      9
+    );
 
-    const leftX = x + 18;
-    const leftY = y + 74;
-    const leftW = 370;
-    const leftH = panelH - 92;
+    const leftX = layout.leftX ?? x + 18;
+    const leftY = layout.leftY ?? y + 74;
+    const leftW = layout.leftW ?? 370;
+    const leftH = layout.leftH ?? (panelH - 92);
 
     ctx.fillStyle = "rgba(255,255,255,0.04)";
     ctx.fillRect(leftX, leftY, leftW, leftH);
@@ -6910,7 +7688,7 @@ export default class UI {
     ctx.font = "bold 15px Arial";
     ctx.fillText(`Bag (${items.length})`, leftX + 12, leftY + 22);
 
-    const rowH = 28;
+    const rowH = layout.rowH ?? 28;
     const visible = Math.max(1, Math.floor((leftH - 40) / rowH));
     const selected = clamp(game?.invIndex || 0, 0, Math.max(0, items.length - 1));
     const scroll = clamp(selected - visible + 1, 0, Math.max(0, items.length - visible));
@@ -6945,6 +7723,13 @@ export default class UI {
       );
     }
 
+    if (items.length <= 0) {
+      ctx.fillStyle = "#8ea1b8";
+      ctx.font = "12px Arial";
+      this._drawFitText(ctx, inventoryText.emptyBagTitle, leftX + 16, leftY + 58, leftW - 32);
+      this._drawFitText(ctx, inventoryText.emptyBagBody, leftX + 16, leftY + 78, leftW - 32, 8);
+    }
+
     const rightX = x + 408;
     const rightY = leftY;
     const rightW = panelW - (rightX - x) - 18;
@@ -6961,7 +7746,7 @@ export default class UI {
 
     this._drawHeroPortrait(ctx, hero, rightX + rightW - 96, rightY + 14, 74, 92);
 
-    const slots = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
+    const slots = game?.getEquipmentSlots?.() || ["weapon", "armor", "helm", "boots", "ring", "trinket"];
     for (let i = 0; i < slots.length; i++) {
       const slot = slots[i];
       const item = equip[slot];
@@ -6989,7 +7774,7 @@ export default class UI {
 
     ctx.fillStyle = "#dce6f4";
     ctx.font = "bold 15px Arial";
-    ctx.fillText("Selected Item", statX, sy);
+    ctx.fillText(picked ? "Selected Item" : inventoryText.emptyDetailTitle, statX, sy);
     sy += 22;
 
     if (picked) {
@@ -7054,26 +7839,46 @@ export default class UI {
 
       sy += 12;
       ctx.fillStyle = "#95a7bd";
-      ctx.fillText("Enter/E equip", statX, sy);
+      ctx.fillText(inventoryText.equipHint, statX, sy);
       sy += 16;
-      ctx.fillText("X/Delete salvage", statX, sy);
+      ctx.fillText(inventoryText.salvageHint, statX, sy);
     } else {
       ctx.fillStyle = "#8ea1b8";
       ctx.font = "12px Arial";
-      ctx.fillText("No item selected.", statX, sy);
+      if (items.length > 0) {
+        ctx.fillText("No item selected.", statX, sy);
+      } else {
+        this._drawFitText(ctx, inventoryText.emptyDetailBody, statX, sy, rightW - 24);
+        sy += 18;
+        this._drawFitText(ctx, inventoryText.emptyDetailNote, statX, sy, rightW - 24, 8);
+      }
     }
 
     ctx.restore();
   }
 
   _drawSkillsPanel(ctx, game) {
-    const panelW = Math.min(Math.max(this.w - 110, 520), 620);
-    const panelH = Math.min(Math.max(this.h - 120, 360), 400);
-    const x = ((this.w - panelW) / 2) | 0;
-    const y = ((this.h - panelH) / 2) | 0;
+    const layout = game?.getSkillPanelLayout?.() || {
+      w: Math.min(Math.max(this.w - 110, 520), 620),
+      h: Math.min(Math.max(this.h - 120, 360), 400),
+      x: ((this.w - Math.min(Math.max(this.w - 110, 520), 620)) / 2) | 0,
+      y: ((this.h - Math.min(Math.max(this.h - 120, 360), 400)) / 2) | 0,
+      rowStart: 98,
+      rowStep: 74,
+      rowHeight: 58,
+      rowInset: 18,
+    };
+    const panelW = layout.w;
+    const panelH = layout.h;
+    const x = layout.x;
+    const y = layout.y;
 
-    const defs = game.skillDefs || {};
-    const prog = game.skillProg || {};
+    const panelData = game?.getSkillPanelData?.() || {
+      manaText: `Mana ${Math.round(game?.hero?.mana || 0)}/${Math.round(game?.hero?.maxMana || 0)}`,
+      legendText: "Green ready   amber cooling down   red low mana",
+      oathText: `Oath: ${game?._className?.() || "Knight"}`,
+      rows: [],
+    };
 
     ctx.save();
     this._drawPanel(ctx, x, y, panelW, panelH, { alpha: 0.92, accent: "rgba(132,170,255,0.46)" });
@@ -7084,58 +7889,67 @@ export default class UI {
 
     ctx.fillStyle = "#95a7bd";
     ctx.font = "13px Arial";
-    ctx.fillText("K or Esc to close", x + 18, y + 52);
-    ctx.fillStyle = "#d6e2f2";
-    ctx.font = "bold 13px Arial";
-    this._drawFitText(ctx, `Oath: ${game?._className?.() || "Knight"}`, x + panelW - 160, y + 52, 142, 9);
-
-    const order = ["q", "w", "e", "r"];
-    let sy = y + 90;
-
-    for (const key of order) {
-      const def = defs[key];
-      const s = prog[key] || { xp: 0, level: 1 };
-      const need = 10 + (s.level - 1) * 8;
-      const frac = clamp((s.xp || 0) / Math.max(1, need), 0, 1);
-
-      ctx.fillStyle = "rgba(255,255,255,0.04)";
-      ctx.fillRect(x + 18, sy - 18, panelW - 36, 58);
-      ctx.strokeStyle = "rgba(255,255,255,0.08)";
-      ctx.strokeRect(x + 18.5, sy - 17.5, panelW - 37, 57);
-
-      ctx.fillStyle = def?.color || "#dbe7ff";
-      ctx.font = "bold 16px Arial";
-      this._drawFitText(ctx, `${(key || "?").toUpperCase()}  ${def?.name || "Skill"}`, x + 30, sy, 150);
-
+      ctx.fillText("K or Esc to close", x + 18, y + 52);
       ctx.fillStyle = "#9bb0c8";
       ctx.font = "12px Arial";
-      ctx.fillText(`Mana ${def?.mana || 0}`, x + 190, sy);
-      ctx.fillText(`Cooldown ${(def?.cd || 0).toFixed(1)}s`, x + 270, sy);
-      ctx.fillText(`Level ${s.level || 1}`, x + 400, sy);
+      this._drawFitText(ctx, panelData.manaText, x + 18, y + 68, 140, 8);
+      ctx.fillStyle = "#d6e2f2";
+        ctx.font = "bold 13px Arial";
+        this._drawFitText(ctx, panelData.oathText, x + panelW - 160, y + 52, 142, 9);
+        ctx.fillStyle = "#8ea1b8";
+        ctx.font = "11px Arial";
+        this._drawFitText(ctx, panelData.legendText, x + 164, y + 68, panelW - 182, 8);
+        let sy = y + layout.rowStart;
 
-      ctx.fillStyle = "rgba(255,255,255,0.08)";
-      ctx.fillRect(x + 30, sy + 10, panelW - 120, 10);
-      ctx.fillStyle = def?.color || "#b7ceff";
-      ctx.fillRect(x + 30, sy + 10, ((panelW - 120) * frac) | 0, 10);
+        for (const row of panelData.rows) {
+          ctx.fillStyle = "rgba(255,255,255,0.04)";
+          ctx.fillRect(x + layout.rowInset, sy - 18, panelW - layout.rowInset * 2, layout.rowHeight);
+          ctx.strokeStyle = "rgba(255,255,255,0.08)";
+          ctx.strokeRect(x + layout.rowInset + 0.5, sy - 17.5, panelW - layout.rowInset * 2 - 1, layout.rowHeight - 1);
 
-      ctx.fillStyle = "#dce6f4";
-      ctx.fillText(`XP ${s.xp || 0} / ${need}`, x + panelW - 120, sy + 19);
+          ctx.fillStyle = row.color;
+          ctx.font = "bold 16px Arial";
+          this._drawFitText(ctx, `${(row.key || "?").toUpperCase()}  ${row.name}`, x + 30, sy, 150);
 
-      ctx.fillStyle = "#8ea1b8";
-      ctx.font = "11px Arial";
-      this._drawFitText(ctx, game?._classSkillInfo?.(key) || "Balanced scaling", x + 30, sy + 34, panelW - 60, 8);
+        ctx.fillStyle = "#9bb0c8";
+        ctx.font = "12px Arial";
+        ctx.fillText(row.manaText, x + 190, sy);
+        ctx.fillText(row.cooldownText, x + 270, sy);
+        this._drawFitText(ctx, row.levelText, x + 400, sy, 62, 8);
+        ctx.fillStyle = row.statusColor;
+        this._drawFitText(ctx, row.statusText, x + panelW - 112, sy, 82, 8);
 
-      sy += 74;
+        ctx.fillStyle = "rgba(255,255,255,0.08)";
+        ctx.fillRect(x + 30, sy + 10, panelW - 120, 10);
+        ctx.fillStyle = row.color;
+        ctx.fillRect(x + 30, sy + 10, ((panelW - 120) * row.xpFrac) | 0, 10);
+
+        ctx.fillStyle = "#dce6f4";
+        ctx.fillText(row.xpText, x + panelW - 120, sy + 19);
+
+          ctx.fillStyle = "#8ea1b8";
+          ctx.font = "11px Arial";
+          this._drawFitText(ctx, row.infoText, x + 30, sy + 34, panelW - 60, 8);
+
+          sy += layout.rowStep;
+        }
+
+      ctx.restore();
     }
 
-    ctx.restore();
-  }
-
   _drawShopPanel(ctx, game) {
-    const w = 430;
-    const h = 260;
-    const x = ((this.w - w) / 2) | 0;
-    const y = ((this.h - h) / 2) | 0;
+    const layout = game?.getShopPanelLayout?.() || {
+      w: 430,
+      h: 260,
+      x: ((this.w - 430) / 2) | 0,
+      y: ((this.h - 260) / 2) | 0,
+      rowStart: 70,
+      rowStep: 42,
+    };
+    const w = layout.w;
+    const h = layout.h;
+    const x = layout.x;
+    const y = layout.y;
 
     const items = game?.shop?.items || [];
 
@@ -7146,23 +7960,27 @@ export default class UI {
     ctx.font = "bold 22px Arial";
     ctx.fillText("Camp Shop", x + 18, y + 30);
 
+    const shopMeta = game?.getShopPanelMeta?.() || {
+      hint: "1-4 or click buy - Esc close",
+      goldText: `Gold: ${game?.hero?.gold || 0}`,
+      discountText: Math.round((game?.shop?.discount || 0) * 100) > 0 ? `Renown discount: ${Math.round((game?.shop?.discount || 0) * 100)}%` : "",
+    };
     ctx.fillStyle = "#95a7bd";
     ctx.font = "12px Arial";
-    this._drawFitText(ctx, "1-4 or click buy - Esc close", x + 18, y + 48, w - 150, 9);
+    this._drawFitText(ctx, shopMeta.hint, x + 18, y + 48, w - 150, 9);
     ctx.fillStyle = "#d7dfeb";
     ctx.font = "bold 13px Arial";
-    this._drawFitText(ctx, `Gold: ${game?.hero?.gold || 0}`, x + w - 118, y + 30, 100, 9);
+    this._drawFitText(ctx, shopMeta.goldText, x + w - 118, y + 30, 100, 9);
 
-    const discount = Math.round((game?.shop?.discount || 0) * 100);
-    if (discount > 0) {
+    if (shopMeta.discountText) {
       ctx.fillStyle = "#94e48d";
       ctx.font = "12px Arial";
-      this._drawFitText(ctx, `Renown discount: ${discount}%`, x + w - 178, y + 48, 160, 8);
+      this._drawFitText(ctx, shopMeta.discountText, x + w - 178, y + 48, 160, 8);
     }
 
     for (let i = 0; i < 4; i++) {
       const item = items[i];
-      const yy = y + 70 + i * 42;
+      const yy = y + layout.rowStart + i * layout.rowStep;
 
       ctx.fillStyle = "rgba(255,255,255,0.04)";
       ctx.fillRect(x + 16, yy - 16, w - 32, 32);
@@ -7257,8 +8075,9 @@ export default class UI {
   }
 
   _drawQuestPanel(ctx, game) {
-    const w = Math.min(Math.max(this.w - 120, 430), 560);
-    const h = 398;
+    const layout = game?.getQuestPanelLayout?.() || { w: Math.min(Math.max(this.w - 120, 430), 560), h: 420 };
+    const w = layout.w;
+    const h = layout.h;
     const x = ((this.w - w) / 2) | 0;
     const y = ((this.h - h) / 2) | 0;
     const q = game?.quest || {};
@@ -7279,12 +8098,22 @@ export default class UI {
     ctx.fillText("J or Esc to close", x + 18, y + 54);
 
     const track = game?.trackedObjective || "story";
+    const questHints = game?.getQuestTrackHintLines?.() || [
+      "1 Story  2 Bounty  3 Town  4 Dungeon",
+      "5 Dragon  6 Treasure  7 Secrets  (click to track)",
+    ];
+    const activeObjective = game?.getTrackedObjectiveSummary?.() || game?.getObjective?.();
     ctx.fillStyle = "#d6e2f2";
     ctx.font = "12px Arial";
     this._drawFitText(ctx, `Tracking: ${this._titleCase(track)}`, x + 18, y + 72, 150, 8);
+    ctx.fillStyle = "#c9a7ff";
+    ctx.font = "11px Arial";
+    this._drawFitText(ctx, `Marker: ${activeObjective?.title || "Explore"}`, x + 18, y + 88, 150, 8);
+    ctx.fillStyle = "#8ea1b8";
+    this._drawFitText(ctx, activeObjective?.detail || "Follow the active marker from the HUD.", x + 18, y + 104, 150, 8);
     ctx.fillStyle = "#95a7bd";
-    this._drawFitText(ctx, "1 Story  2 Bounty  3 Town  4 Dungeon", x + 176, y + 72, w - 194, 8);
-    this._drawFitText(ctx, "5 Dragon  6 Treasure  7 Secrets  (click to track)", x + 176, y + 88, w - 194, 8);
+    this._drawFitText(ctx, questHints[0] || "", x + 176, y + 72, w - 194, 8);
+    this._drawFitText(ctx, questHints[1] || "", x + 176, y + 88, w - 194, 8);
 
     const shards = game?.progress?.relicShards || 0;
     const next = shards < 3 ? 3 : shards < 7 ? 7 : shards < 12 ? 12 : shards < 20 ? 20 : 20;
@@ -7292,58 +8121,58 @@ export default class UI {
     const journal = game?.getJournalStats?.() || {};
 
     ctx.fillStyle = "rgba(201,167,255,0.08)";
-    ctx.fillRect(x + 18, y + 96, w - 36, 76);
+    ctx.fillRect(x + 18, y + 118, w - 36, 76);
     ctx.strokeStyle = "rgba(255,255,255,0.08)";
-    ctx.strokeRect(x + 18.5, y + 96.5, w - 37, 75);
+    ctx.strokeRect(x + 18.5, y + 118.5, w - 37, 75);
 
     ctx.fillStyle = "#c9a7ff";
     ctx.font = "bold 16px Arial";
-    this._drawFitText(ctx, "Restore the Ash Crown", x + 34, y + 120, w - 68);
+    this._drawFitText(ctx, "Restore the Ash Crown", x + 34, y + 142, w - 68);
 
     ctx.fillStyle = "#b7c6da";
     ctx.font = "13px Arial";
-    ctx.fillText(`Relic shards: ${shards} / ${next}`, x + 34, y + 142);
+    ctx.fillText(`Relic shards: ${shards} / ${next}`, x + 34, y + 164);
 
     ctx.fillStyle = "rgba(255,255,255,0.08)";
-    ctx.fillRect(x + 34, y + 154, w - 68, 10);
+    ctx.fillRect(x + 34, y + 176, w - 68, 10);
     ctx.fillStyle = "#c9a7ff";
-    ctx.fillRect(x + 34, y + 154, ((w - 68) * storyFrac) | 0, 10);
+    ctx.fillRect(x + 34, y + 176, ((w - 68) * storyFrac) | 0, 10);
 
     ctx.fillStyle = "rgba(255,255,255,0.05)";
-    ctx.fillRect(x + 18, y + 184, w - 36, 112);
+    ctx.fillRect(x + 18, y + 206, w - 36, 112);
     ctx.strokeStyle = "rgba(255,255,255,0.08)";
-    ctx.strokeRect(x + 18.5, y + 184.5, w - 37, 111);
+    ctx.strokeRect(x + 18.5, y + 206.5, w - 37, 111);
 
     ctx.fillStyle = "#ffd86e";
     ctx.font = "bold 17px Arial";
-    this._drawFitText(ctx, `Bounty: Cull ${target}s`, x + 34, y + 214, w - 68);
+    this._drawFitText(ctx, `Bounty: Cull ${target}s`, x + 34, y + 236, w - 68);
 
     ctx.fillStyle = "#b7c6da";
     ctx.font = "13px Arial";
-    ctx.fillText(`${count} / ${needed} defeated`, x + 34, y + 238);
+    ctx.fillText(`${count} / ${needed} defeated`, x + 34, y + 260);
 
     ctx.fillStyle = "rgba(255,255,255,0.08)";
-    ctx.fillRect(x + 34, y + 254, w - 68, 12);
+    ctx.fillRect(x + 34, y + 276, w - 68, 12);
     ctx.fillStyle = "#ffd86e";
-    ctx.fillRect(x + 34, y + 254, ((w - 68) * frac) | 0, 12);
+    ctx.fillRect(x + 34, y + 276, ((w - 68) * frac) | 0, 12);
 
     ctx.fillStyle = "#dfe8f5";
     ctx.font = "13px Arial";
-    this._drawFitText(ctx, `Reward: ${q.rewardGold || 0}g, ${q.rewardXp || 0} XP, and gear`, x + 34, y + 286, w - 68);
+    this._drawFitText(ctx, `Reward: ${q.rewardGold || 0}g, ${q.rewardXp || 0} XP, and gear`, x + 34, y + 308, w - 68);
 
     const completed = game?.progress?.bountyCompletions || 0;
     const elites = game?.progress?.eliteKills || 0;
     ctx.fillStyle = "rgba(255,255,255,0.05)";
-    ctx.fillRect(x + 18, y + 316, w - 36, 62);
+    ctx.fillRect(x + 18, y + 338, w - 36, 62);
 
     ctx.fillStyle = "#dce6f4";
     ctx.font = "bold 13px Arial";
-    ctx.fillText("Journal", x + 34, y + 340);
+    ctx.fillText("Journal", x + 34, y + 362);
 
     ctx.fillStyle = "#9fb1c7";
     ctx.font = "12px Arial";
-    this._drawFitText(ctx, `Bounties ${completed}  Elites ${elites}  Towns ${journal.towns || 0}/${journal.townsTotal || 0}  Waystones ${journal.waystones || 0}/${journal.waystonesTotal || 0}`, x + 34, y + 354, w - 68, 8);
-    this._drawFitText(ctx, `Bridges ${journal.bridges || 0}/${journal.bridgesTotal || 0}  Secrets ${journal.secrets || 0}/${journal.secretsTotal || 0}  Dragons ${journal.dragons || 0}/${journal.dragonsTotal || 0}`, x + 34, y + 370, w - 68, 8);
+    this._drawFitText(ctx, `Bounties ${completed}  Elites ${elites}  Towns ${journal.towns || 0}/${journal.townsTotal || 0}  Waystones ${journal.waystones || 0}/${journal.waystonesTotal || 0}`, x + 34, y + 376, w - 68, 8);
+    this._drawFitText(ctx, `Bridges ${journal.bridges || 0}/${journal.bridgesTotal || 0}  Secrets ${journal.secrets || 0}/${journal.secretsTotal || 0}  Dragons ${journal.dragons || 0}/${journal.dragonsTotal || 0}`, x + 34, y + 392, w - 68, 8);
 
     ctx.restore();
   }
@@ -7352,10 +8181,16 @@ export default class UI {
     const town = game?._cachedNearbyTown;
     const name = town?.name || "Town";
     const visited = town && game?.progress?.visitedTowns?.has?.(String(town.id));
-    const w = Math.min(Math.max(this.w - 120, 430), 560);
-    const h = 354;
-    const x = ((this.w - w) / 2) | 0;
-    const y = ((this.h - h) / 2) | 0;
+    const layout = game?.getTownPanelLayout?.() || {
+      w: Math.min(Math.max(this.w - 120, 430), 560),
+      h: 354,
+      x: ((this.w - Math.min(Math.max(this.w - 120, 430), 560)) / 2) | 0,
+      y: ((this.h - 354) / 2) | 0,
+    };
+    const w = layout.w;
+    const h = layout.h;
+    const x = layout.x;
+    const y = layout.y;
 
     ctx.save();
     this._drawPanel(ctx, x, y, w, h, { alpha: 0.94, accent: "rgba(117,211,224,0.52)" });
@@ -7368,21 +8203,22 @@ export default class UI {
     ctx.font = "12px Arial";
     ctx.fillText("1-8 or click - Esc to leave town", x + 18, y + 55);
 
-    const npcs = town?.npcs || ["Warden", "Smith", "Archivist"];
-    const restCost = Math.max(0, Math.min(28, 8 + (game?.hero?.level || 1) * 2));
-    const forgeCost = 58 + (game?.hero?.level || 1) * 9;
-    const clueCost = 36 + (game?.hero?.level || 1) * 4;
-    const lines = [
-      `1 Rest at inn (${restCost}g)`,
-      "2 Buy health potion (18g)",
-      "3 Buy mana potion (22g)",
-      `4 Commission townforged gear (${forgeCost}g)`,
-      "5 Ask for a rumor objective",
-      "6 Change oath / class",
-      "7 Take town contract",
-      `8 Buy cartographer clue (${clueCost}g)`,
-      visited ? `${npcs[0]}: Roads are safer when camps are cleared.` : `${npcs[0]}: First visit supplies were added.`,
-    ];
+    const townMenu = game?.getTownMenuLines?.(town) || {
+      npcs: town?.npcs || ["Warden", "Smith", "Archivist"],
+      lines: [
+        "1 Rest at inn",
+        "2 Buy health potion",
+        "3 Buy mana potion",
+        "4 Commission townforged gear",
+        "5 Ask for a rumor objective",
+        "6 Change oath / class",
+        "7 Take town contract",
+        "8 Buy cartographer clue",
+        visited ? "Warden: Roads are safer when camps are cleared." : "Warden: First visit supplies were added.",
+      ],
+    };
+    const npcs = townMenu.npcs || ["Warden", "Smith", "Archivist"];
+    const lines = townMenu.lines || [];
 
     ctx.fillStyle = "rgba(117,211,224,0.08)";
     ctx.fillRect(x + 18, y + 82, w - 36, 198);
@@ -7402,7 +8238,7 @@ export default class UI {
     ctx.fillText("NPCs", x + 34, y + 318);
     ctx.fillStyle = "#9fb1c7";
     ctx.font = "12px Arial";
-    this._drawFitText(ctx, `${npcs.join(", ")} are available. Current oath: ${game?._className?.() || "Knight"}.`, x + 88, y + 318, w - 122, 8);
+    this._drawFitText(ctx, townMenu.npcSummary || `${npcs.join(", ")} are available. Current oath: ${game?._className?.() || "Knight"}.`, x + 88, y + 318, w - 122, 8);
 
     ctx.restore();
   }
@@ -7413,12 +8249,27 @@ export default class UI {
   }
 
   _drawDevPanel(ctx, game) {
-    const w = Math.min(Math.max(this.w - 120, 430), 560);
-    const h = 340;
-    const x = ((this.w - w) / 2) | 0;
-    const y = ((this.h - h) / 2) | 0;
-    const world = game?.world;
-    const explored = world?.exportDiscovery?.()?.length || 0;
+    const { w, h, x, y, rowStart, rowStep } = game?.getDevPanelLayout?.() || {
+      w: Math.min(Math.max(this.w - 120, 430), 560),
+      h: 340,
+      x: ((this.w - Math.min(Math.max(this.w - 120, 430), 560)) / 2) | 0,
+      y: ((this.h - 340) / 2) | 0,
+      rowStart: 70,
+      rowStep: 22,
+    };
+    const lines = game?.getDevToolLines?.() || [
+      "1 heal HP and mana",
+      "2 add 250 gold",
+      "3 grant one level worth of XP",
+      "4 reveal entire world map",
+      "5 spawn a dragon nearby",
+      "6 teleport near closest dragon lair",
+      `7 god mode ${game?.dev?.godMode ? "ON" : "OFF"}`,
+      "8 equip mythic best gear",
+      game?._isDevResetConfirmLive?.() ? "9 reset to a new game (press again now)" : "9 reset to a new game (confirm)",
+      `Explored cells: ${game?.world?.exportDiscovery?.()?.length || 0}`,
+      `World span: ${((game?.world?.mapHalfSize || 0) * 2).toLocaleString()}`,
+    ];
 
     ctx.save();
     this._drawPanel(ctx, x, y, w, h, { alpha: 0.93, accent: game?.dev?.godMode ? "rgba(118,224,255,0.58)" : "rgba(232,190,96,0.46)" });
@@ -7431,28 +8282,14 @@ export default class UI {
     ctx.font = "12px 'Segoe UI', Arial";
     ctx.fillText("G or Esc close - click action", x + 18, y + 52);
 
-    const lines = [
-      "1 heal HP and mana",
-      "2 add 250 gold",
-      "3 grant one level worth of XP",
-      "4 reveal entire world map",
-      "5 spawn a dragon nearby",
-      "6 teleport near closest dragon lair",
-      `7 god mode ${game?.dev?.godMode ? "ON" : "OFF"}`,
-      "8 equip mythic best gear",
-      "9 reset to a new game (confirm)",
-      `Explored cells: ${explored}`,
-      `World span: ${((world?.mapHalfSize || 0) * 2).toLocaleString()} units`,
-    ];
+      ctx.font = "14px Arial";
+      for (let i = 0; i < lines.length; i++) {
+        ctx.fillStyle = i < 9 ? "#dfe8f5" : "#8ea1b8";
+        this._drawFitText(ctx, lines[i], x + 28, y + rowStart + 16 + i * rowStep, w - 56);
+      }
 
-    ctx.font = "14px Arial";
-    for (let i = 0; i < lines.length; i++) {
-      ctx.fillStyle = i < 9 ? "#dfe8f5" : "#8ea1b8";
-      this._drawFitText(ctx, lines[i], x + 28, y + 86 + i * 22, w - 56);
+      ctx.restore();
     }
-
-    ctx.restore();
-  }
 
   _drawSimplePanel(ctx, title, body = "") {
     const panelW = Math.min(Math.max(this.w - 140, 320), 520);
@@ -7734,7 +8571,7 @@ function quadPoint(ax, ay, bx, by, cx, cy, t) {
 
 export default class World {
   constructor(seed = 12345, opts = {}) {
-    this.buildId = "rpg-v126";
+    this.buildId = "rpg-v127";
     this.seed = (seed | 0) || 12345;
 
     this.tileSize = opts.tileSize || 24;
@@ -7766,9 +8603,12 @@ export default class World {
     this._mapCanvas = null;
     this._mapInfo = null;
     this._mapDirty = true;
-    this._mapSize = 448;
+    this._mapSize = 320;
+    this._mapPreviewSize = 96;
     this._discoveryExportCache = null;
     this._revealed = null;
+    this._mapBuildQueued = false;
+    this._mapBuildState = null;
     this._riverWaterLimit = 1.42;
 
     this._spawnSafeRadius = 620;
@@ -7777,11 +8617,16 @@ export default class World {
     this._riverAvoidSpawnRadius = 1650;
 
     this._riverBands = this._makeRiverBands();
+    this._mountainRanges = this._makeMountainRanges();
+    this._mountainPasses = this._makeMountainPasses();
+    this._mountainRenderData = this._buildMountainRenderData();
+    this._bootRawSampleCache = new Map();
 
     this._buildPOIs();
     this._buildRoadNetwork();
     this._finalizeBridges();
     this._ensureSpawnSafety();
+    this._bootRawSampleCache = null;
   }
 
   setViewSize(w, h) {
@@ -7796,18 +8641,23 @@ export default class World {
   }
 
   getMapInfo() {
-    if (this._mapDirty || !this._mapInfo) this._buildMapInfo();
-    return this._mapInfo;
+    if (!this._mapInfo) this._buildMapPreview();
+    if (this._mapDirty || !this._mapInfo) this._queueMapBuild();
+    return this._mapInfo || { size: this._mapSize || 320, colors: [], tiles: [], revealed: [] };
   }
 
   getMinimapCanvas() {
-    if (this._mapDirty || !this._mapCanvas) this._buildMapInfo();
+    if (!this._mapCanvas) this._buildMapPreview();
+    if (this._mapDirty || !this._mapCanvas) this._queueMapBuild();
     return this._mapCanvas;
   }
 
   revealAround(x, y, radius = 620) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
-    if (this._mapDirty || !this._mapInfo) this._buildMapInfo();
+    if (this._mapDirty || !this._mapInfo) {
+      this._queueMapBuild();
+      return false;
+    }
 
     const info = this._mapInfo;
     const rows = info?.revealed?.length || 0;
@@ -7838,13 +8688,19 @@ export default class World {
   }
 
   revealAll() {
-    if (this._mapDirty || !this._mapInfo) this._buildMapInfo();
+    if (this._mapDirty || !this._mapInfo) {
+      this._queueMapBuild();
+      return;
+    }
     for (const row of this._mapInfo.revealed || []) row.fill(true);
     this._discoveryExportCache = null;
   }
 
   exportDiscovery() {
-    if (this._mapDirty || !this._mapInfo) this._buildMapInfo();
+    if (this._mapDirty || !this._mapInfo) {
+      this._queueMapBuild();
+      return [];
+    }
     if (this._discoveryExportCache) return this._discoveryExportCache.slice();
 
     const out = [];
@@ -7861,7 +8717,10 @@ export default class World {
 
   importDiscovery(cells) {
     if (!Array.isArray(cells)) return;
-    if (this._mapDirty || !this._mapInfo) this._buildMapInfo();
+    if (this._mapDirty || !this._mapInfo) {
+      this._queueMapBuild();
+      return;
+    }
     const revealed = this._mapInfo.revealed || [];
     let changed = false;
     for (const cell of cells) {
@@ -7888,7 +8747,7 @@ export default class World {
       return s.isWater || this._isNearDock(x, y, 34);
     }
 
-    return !s.isWater;
+    return !s.isWater && !s.isMountainWall;
   }
 
   getMoveModifier(x, y) {
@@ -7897,7 +8756,7 @@ export default class World {
     if (s.isWater) return 0.92;
     if (s.bridge) return 1.12;
     if (s.road) return 1.18;
-    if (s.zone === "mountain") return 0.93;
+    if (s.zone === "mountain" || s.zone === "stone flats") return 0.93;
     return 1;
   }
 
@@ -7940,10 +8799,21 @@ export default class World {
 
     const startX = Math.floor(left / size) * size;
     const startY = Math.floor(top / size) * size;
+    const cellCache = new Map();
+
+    const getCell = (x, y) => {
+      const key = `${x}|${y}`;
+      let cell = cellCache.get(key);
+      if (!cell) {
+        cell = this._sampleCell(x, y);
+        cellCache.set(key, cell);
+      }
+      return cell;
+    };
 
     for (let x = startX; x < right; x += size) {
       for (let y = startY; y < bottom; y += size) {
-        const s = this._sampleCell(x, y);
+        const s = getCell(x, y);
 
         const tint = (hash2((x / size) | 0, (y / size) | 0, this.seed + 808) / 4294967296 - 0.5) * 0.12;
         const tileColor = s.bridge || (s.isRiver && !s.isLake) ? s.landColor || s.color : s.color;
@@ -7964,67 +8834,447 @@ export default class World {
           }
         }
 
-        if (!s.isLake) {
-          if ((s.river < 0.105 || s.ground < 0.285) && parity % 2 === 0) {
-            ctx.fillStyle = "rgba(222,220,170,0.10)";
-            ctx.fillRect(x + 2, y + size - 5, size - 4, 2);
-          }
-
-          if (s.zone === "forest" || s.zone === "greenwood" || s.zone === "deep wilds") {
-            if (parity === 0 || parity === 4) {
-              ctx.fillStyle = "rgba(13,23,11,0.18)";
-              ctx.beginPath();
-              ctx.ellipse(x + 13, y + 23, 11, 4, -0.25, 0, Math.PI * 2);
-              ctx.fill();
-              ctx.fillStyle = "rgba(20,55,18,0.25)";
-              ctx.beginPath();
-              ctx.moveTo(x + 12, y + 6);
-              ctx.lineTo(x + 19, y + 21);
-              ctx.lineTo(x + 5, y + 21);
-              ctx.closePath();
-              ctx.fill();
-              ctx.fillStyle = "rgba(118,169,94,0.14)";
-              ctx.beginPath();
-              ctx.moveTo(x + 11, y + 8);
-              ctx.lineTo(x + 14, y + 18);
-              ctx.lineTo(x + 6, y + 18);
-              ctx.closePath();
-              ctx.fill();
-            }
-          } else if (s.zone === "meadow" || s.zone === "whisper grass") {
-            if (parity === 1 || parity === 7) {
-              ctx.fillStyle = "rgba(255,255,255,0.04)";
-              ctx.fillRect(x + 7, y + 8, 5, 9);
-            } else if (parity === 3) {
-              ctx.fillStyle = "rgba(48,93,31,0.14)";
-              ctx.fillRect(x + 12, y + 11, 4, 7);
-            }
-          } else if (s.zone === "ashlands" || s.zone === "ash fields") {
-            if (parity === 2 || parity === 8) {
-              ctx.fillStyle = "rgba(90,70,52,0.24)";
-              ctx.fillRect(x + 10, y + 11, 5, 5);
-            }
-          } else if (s.zone === "mountain" || s.zone === "stone flats") {
-            if (parity === 5 || parity === 9) {
-              ctx.fillStyle = "rgba(255,255,255,0.05)";
-              ctx.fillRect(x + 8, y + 8, 7, 7);
-            }
-          }
-        } else {
-          const depth = clamp(1 - s.river * 1.8, 0, 1);
-          if (((x / size + y / size) | 0) % 3 === 0) {
-            ctx.fillStyle = `rgba(142,211,246,${0.07 + depth * 0.10})`;
-            ctx.fillRect(x + 3, y + 7, size - 6, 2);
-          }
-        }
+        this._drawTileScenery(ctx, x, y, size, s, parity, relief, cellX, cellY, getCell);
       }
     }
 
+    this._drawMountainRanges(ctx, left, top, right, bottom);
     this._drawWorldAtmosphere(ctx, left, top, right, bottom);
     this._drawRiverOverlays(ctx, left, top, right, bottom);
     this._drawBridges(ctx, left, top, right, bottom);
     this._drawRoads(ctx);
     this._drawPOIs(ctx);
+  }
+
+  _drawTileScenery(ctx, x, y, size, s, parity, relief, cellX, cellY, getCell = null) {
+    const seed = hash2(cellX, cellY, this.seed ^ 0x51a3);
+    const n = (seed >>> 0) / 4294967296;
+    const px = x + 8 + (n * 24);
+    const py = y + 10 + (((seed >>> 7) & 15) * 1.1);
+
+    if (!s.isLake && (s.river < 0.105 || s.ground < 0.285) && parity % 2 === 0) {
+      ctx.fillStyle = "rgba(222,220,170,0.10)";
+      ctx.fillRect(x + 2, y + size - 5, size - 4, 2);
+    }
+
+    if (s.isLake) {
+      this._drawWaterScenery(ctx, x, y, size, s, parity, seed);
+      return;
+    }
+
+    if (s.zone === "forest" || s.zone === "greenwood" || s.zone === "deep wilds") {
+      this._drawForestScenery(ctx, px, py, size, parity, seed, s.zone === "deep wilds");
+      return;
+    }
+
+    if (s.zone === "meadow" || s.zone === "whisper grass" || s.zone === "old fields" || s.zone === "road") {
+      this._drawMeadowScenery(ctx, x, y, size, parity, seed, s.zone === "road");
+      return;
+    }
+
+    if (s.zone === "ashlands" || s.zone === "ash fields") {
+      this._drawAshScenery(ctx, x, y, size, parity, seed);
+      return;
+    }
+
+    if (s.zone === "highlands") {
+      this._drawHighlandScenery(ctx, x, y, size, parity, seed, relief);
+      return;
+    }
+
+    if (s.zone === "mountain" || s.zone === "stone flats") {
+      this._drawMountainScenery(ctx, x, y, size, parity, seed, relief, s.zone === "mountain", getCell);
+    }
+  }
+
+  _drawForestScenery(ctx, px, py, size, parity, seed, dense = false) {
+    const trunk = dense ? "#3b281d" : "#4a3222";
+    const canopyA = dense ? "rgba(22,56,22,0.42)" : "rgba(32,78,28,0.34)";
+    const canopyB = dense ? "rgba(108,156,94,0.18)" : "rgba(126,175,104,0.16)";
+    const scale = dense ? 1.18 : 1;
+
+    const drawTree = (x, y, tall = false) => {
+      ctx.fillStyle = "rgba(13,23,11,0.20)";
+      ctx.beginPath();
+      ctx.ellipse(x + 1.5, y + 10, 12 * scale, 4.6 * scale, -0.25, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = trunk;
+      ctx.fillRect(x - 1, y - 2, 3, tall ? 14 : 11);
+      ctx.fillStyle = canopyA;
+      ctx.beginPath();
+      ctx.moveTo(x, y - (tall ? 18 : 14));
+      ctx.lineTo(x + 10 * scale, y + 6);
+      ctx.lineTo(x - 10 * scale, y + 6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = canopyB;
+      ctx.beginPath();
+      ctx.moveTo(x, y - (tall ? 13 : 10));
+      ctx.lineTo(x + 7 * scale, y + 4);
+      ctx.lineTo(x - 7 * scale, y + 4);
+      ctx.closePath();
+      ctx.fill();
+    };
+
+    const drawGreatTree = (x, y) => {
+      ctx.fillStyle = "rgba(12,20,10,0.24)";
+      ctx.beginPath();
+      ctx.ellipse(x + 2, y + 14, 18, 6.5, -0.18, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = dense ? "#4b3425" : "#5a3d29";
+      ctx.fillRect(x - 2.5, y - 8, 5, 22);
+      ctx.fillStyle = dense ? "rgba(20,64,24,0.50)" : "rgba(34,88,34,0.42)";
+      ctx.beginPath();
+      ctx.arc(x, y - 12, 12, 0, Math.PI * 2);
+      ctx.arc(x - 10, y - 4, 10, 0, Math.PI * 2);
+      ctx.arc(x + 10, y - 4, 10, 0, Math.PI * 2);
+      ctx.arc(x, y + 2, 11, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = dense ? "rgba(124,182,110,0.16)" : "rgba(156,204,136,0.14)";
+      ctx.beginPath();
+      ctx.arc(x - 3, y - 10, 6, 0, Math.PI * 2);
+      ctx.arc(x + 7, y - 6, 5, 0, Math.PI * 2);
+      ctx.fill();
+    };
+
+    if (dense && ((seed >>> 20) & 15) >= 10) {
+      drawGreatTree(px + 2, py + 2);
+    } else if (parity === 0 || parity === 4 || dense) {
+      drawTree(px, py, ((seed >>> 4) & 1) === 1);
+    }
+    if (dense && ((seed >>> 9) & 3) >= 2) drawTree(px + 12, py + 4, false);
+    if (!dense && ((seed >>> 24) & 31) === 7) drawGreatTree(px + 1, py + 1);
+    if (((seed >>> 14) & 7) === 3) {
+      ctx.fillStyle = "rgba(86,72,44,0.22)";
+      ctx.fillRect(px - 6, py + 8, 10, 3);
+      ctx.fillStyle = "rgba(118,168,104,0.10)";
+      ctx.beginPath();
+      ctx.arc(px - 1, py + 6, 6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  _drawMeadowScenery(ctx, x, y, size, parity, seed, roadside = false) {
+    const tuftX = x + 7 + ((seed >>> 3) & 15);
+    const tuftY = y + 12 + ((seed >>> 8) & 11);
+    if (parity === 1 || parity === 3 || parity === 7) {
+      ctx.fillStyle = roadside ? "rgba(116,132,86,0.16)" : "rgba(58,108,40,0.18)";
+      for (let i = 0; i < 3; i++) {
+        ctx.fillRect(tuftX + i * 2, tuftY - i, 1.6, 7 + i);
+      }
+    }
+    if (!roadside && ((seed >>> 12) & 3) === 1) {
+      ctx.fillStyle = "rgba(255,240,205,0.16)";
+      ctx.beginPath();
+      ctx.arc(x + 12 + ((seed >>> 16) & 7), y + 14 + ((seed >>> 19) & 9), 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.14)";
+      ctx.fillRect(x + 9, y + 8, 4, 8);
+    }
+    if (roadside && ((seed >>> 20) & 3) === 2) {
+      ctx.fillStyle = "rgba(86,72,56,0.20)";
+      ctx.fillRect(x + 18, y + 18, 6, 2);
+    }
+    if (!roadside && ((seed >>> 22) & 7) === 5) {
+      ctx.fillStyle = "rgba(255,232,166,0.14)";
+      ctx.beginPath();
+      ctx.ellipse(x + 30, y + 15, 6, 3, 0.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(88,116,54,0.18)";
+      ctx.fillRect(x + 29, y + 12, 1.6, 7);
+    }
+  }
+
+  _drawAshScenery(ctx, x, y, size, parity, seed) {
+    if (parity === 2 || parity === 6 || parity === 8) {
+      const px = x + 10 + ((seed >>> 2) & 10);
+      const py = y + 14 + ((seed >>> 6) & 8);
+      ctx.fillStyle = "rgba(17,16,15,0.18)";
+      ctx.beginPath();
+      ctx.ellipse(px + 1, py + 7, 8, 3, -0.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(80,65,52,0.38)";
+      ctx.fillRect(px, py - 4, 3, 11);
+      ctx.beginPath();
+      ctx.moveTo(px + 1, py - 4);
+      ctx.lineTo(px - 4, py - 10);
+      ctx.lineTo(px - 2, py - 4);
+      ctx.lineTo(px + 6, py - 9);
+      ctx.lineTo(px + 2, py - 2);
+      ctx.closePath();
+      ctx.fill();
+    } else if (((seed >>> 9) & 3) === 1) {
+      ctx.fillStyle = "rgba(116,90,66,0.22)";
+      ctx.beginPath();
+      ctx.arc(x + 12, y + 17, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  _drawMountainScenery(ctx, x, y, size, parity, seed, relief, steep = false, getCell = null) {
+    if (parity !== 5 && parity !== 7 && parity !== 9 && !steep) return;
+    const north = getCell ? !!getCell(x, y - size)?.mountainBase : false;
+    const south = getCell ? !!getCell(x, y + size)?.mountainBase : false;
+    const west = getCell ? !!getCell(x - size, y)?.mountainBase : false;
+    const east = getCell ? !!getCell(x + size, y)?.mountainBase : false;
+    const peak = y + 2 + ((seed >>> 5) & 6);
+    const base = y + size - 4;
+    const left = x + 1;
+    const mid = x + 18 + ((seed >>> 11) & 11);
+    const right = x + size - 1;
+    const shoulderL = x + 10 + ((seed >>> 7) & 6);
+    const shoulderR = x + size - 12 - ((seed >>> 14) & 5);
+
+    ctx.fillStyle = "rgba(18,22,26,0.18)";
+    ctx.beginPath();
+    ctx.ellipse(x + size * 0.55, base + 3, 21, 7, -0.18, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = this._shadeColor(steep ? "#98a0a6" : "#7d858b", relief * 0.08);
+    ctx.beginPath();
+    ctx.moveTo(left, base);
+    ctx.lineTo(shoulderL, y + 18);
+    ctx.lineTo(mid - 7, peak + 10);
+    ctx.lineTo(mid, peak);
+    ctx.lineTo(mid + 9, peak + 12);
+    ctx.lineTo(shoulderR, y + 20);
+    ctx.lineTo(right, base);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = this._shadeColor(steep ? "#70787e" : "#61696f", -0.05 + relief * 0.03);
+    ctx.beginPath();
+    ctx.moveTo(mid - 1, peak + 1);
+    ctx.lineTo(mid + 10, peak + 14);
+    ctx.lineTo(right, base);
+    ctx.lineTo(mid + 10, base - 1);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(255,255,255,0.14)";
+    ctx.beginPath();
+    ctx.moveTo(mid, peak);
+    ctx.lineTo(mid - 9, peak + 13);
+    ctx.lineTo(mid - 1, peak + 10);
+    ctx.lineTo(mid + 7, peak + 18);
+    ctx.lineTo(mid + 12, peak + 11);
+    ctx.closePath();
+    ctx.fill();
+
+    if (steep || ((seed >>> 15) & 3) >= 1) {
+      const backPeak = x + 9 + ((seed >>> 18) & 10);
+      ctx.fillStyle = "rgba(74,80,88,0.40)";
+      ctx.beginPath();
+      ctx.moveTo(x + 1, base);
+      ctx.lineTo(backPeak, y + 8 + ((seed >>> 22) & 6));
+      ctx.lineTo(x + size * 0.76, base - 4);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    if (((seed >>> 24) & 3) >= 1) {
+      ctx.fillStyle = "rgba(52,58,64,0.26)";
+      ctx.beginPath();
+      ctx.moveTo(x + 6, y + 28);
+      ctx.lineTo(x + 14, y + 18);
+      ctx.lineTo(x + 21, y + 29);
+      ctx.lineTo(x + 12, y + 35);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    if (((seed >>> 17) & 3) >= 2) {
+      ctx.fillStyle = "rgba(255,255,255,0.08)";
+      ctx.fillRect(x + 7, y + 7, 9, 8);
+    }
+
+    if (!north) {
+      ctx.strokeStyle = "rgba(228,234,238,0.26)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x + 6, y + 8);
+      ctx.lineTo(x + size - 7, y + 8);
+      ctx.stroke();
+    }
+    if (!south) {
+      ctx.fillStyle = "rgba(36,40,44,0.26)";
+      ctx.fillRect(x + 4, y + size - 8, size - 8, 5);
+    }
+    if (!west) {
+      ctx.fillStyle = "rgba(52,58,64,0.22)";
+      ctx.beginPath();
+      ctx.moveTo(x + 3, y + size - 5);
+      ctx.lineTo(x + 10, y + 12);
+      ctx.lineTo(x + 13, y + size - 5);
+      ctx.closePath();
+      ctx.fill();
+    }
+    if (!east) {
+      ctx.fillStyle = "rgba(44,49,55,0.24)";
+      ctx.beginPath();
+      ctx.moveTo(x + size - 3, y + size - 5);
+      ctx.lineTo(x + size - 11, y + 12);
+      ctx.lineTo(x + size - 15, y + size - 5);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  _drawMountainRanges(ctx, left, top, right, bottom) {
+    if (!this._mountainRenderData?.length) return;
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    for (const range of this._mountainRenderData) {
+      const ridgeDx = -range.nx * 8;
+      const ridgeDy = -range.ny * 8 - 6;
+      const shadowDx = range.nx * 10;
+      const shadowDy = range.ny * 10 + 12;
+
+      for (const seg of range.segments) {
+        if (seg.maxX < left || seg.minX > right || seg.maxY < top || seg.minY > bottom) continue;
+
+        const crestPts = seg.pts.map((p, i) => {
+          const jag = (((range.seed >>> (i % 24)) & 3) - 1.5) * 5;
+          return { x: p.x + ridgeDx + range.tx * jag, y: p.y + ridgeDy - Math.abs(jag) * 0.25 };
+        });
+        const shadowPts = seg.pts.map((p, i) => {
+          const drift = Math.sin(i * 0.75 + range.seed * 0.0001) * 4;
+          return { x: p.x + shadowDx + range.tx * drift, y: p.y + shadowDy + Math.abs(drift) * 0.14 };
+        });
+
+        ctx.strokeStyle = "rgba(20,24,28,0.10)";
+        ctx.lineWidth = Math.max(8, range.width * 0.05);
+        ctx.beginPath();
+        this._traceSmoothPath(ctx, shadowPts);
+        ctx.stroke();
+
+        ctx.strokeStyle = "rgba(232,236,240,0.12)";
+        ctx.lineWidth = Math.max(3, range.width * 0.018);
+        ctx.beginPath();
+        this._traceSmoothPath(ctx, crestPts);
+        ctx.stroke();
+
+        for (let i = 2; i < seg.pts.length - 2; i += 5) {
+          ctx.strokeStyle = i % 2 === 0 ? "rgba(96,104,112,0.12)" : "rgba(48,54,60,0.10)";
+          ctx.lineWidth = Math.max(1.5, range.width * 0.012);
+          ctx.beginPath();
+          ctx.moveTo(crestPts[i].x, crestPts[i].y);
+          ctx.lineTo(shadowPts[i].x + range.nx * 2, shadowPts[i].y - 4);
+          ctx.stroke();
+        }
+      }
+    }
+
+    ctx.restore();
+  }
+
+  _drawMountainPassScenery(ctx, x, y, size, parity, seed, relief) {
+    ctx.fillStyle = "rgba(20,24,28,0.18)";
+    ctx.beginPath();
+    ctx.ellipse(x + size * 0.5, y + size - 8, size * 0.44, 6.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (((seed >>> 3) & 1) === 0) {
+      ctx.fillStyle = this._shadeColor("#5c6166", -0.06 + relief * 0.04);
+      ctx.beginPath();
+      ctx.moveTo(x, y + size - 4);
+      ctx.lineTo(x + 10, y + 14);
+      ctx.lineTo(x + 15, y + size - 6);
+      ctx.closePath();
+      ctx.fill();
+    }
+    if (((seed >>> 6) & 1) === 1) {
+      ctx.fillStyle = this._shadeColor("#676d72", -0.05 + relief * 0.03);
+      ctx.beginPath();
+      ctx.moveTo(x + size, y + size - 4);
+      ctx.lineTo(x + size - 11, y + 12);
+      ctx.lineTo(x + size - 17, y + size - 7);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    ctx.fillStyle = "rgba(108,96,76,0.22)";
+    ctx.beginPath();
+    ctx.moveTo(x + 8, y + size - 9);
+    ctx.lineTo(x + size - 8, y + size - 9);
+    ctx.lineTo(x + size - 12, y + size - 4);
+    ctx.lineTo(x + 12, y + size - 4);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(214,206,178,0.18)";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(x + 8, y + size - 12);
+    ctx.lineTo(x + size - 8, y + size - 12);
+    ctx.stroke();
+
+    ctx.strokeStyle = "rgba(82,66,46,0.16)";
+    ctx.beginPath();
+    ctx.moveTo(x + 8, y + size - 7);
+    ctx.lineTo(x + size - 8, y + size - 7);
+    ctx.stroke();
+
+    if (parity === 1 || parity === 6) {
+      ctx.fillStyle = "rgba(168,154,124,0.14)";
+      ctx.fillRect(x + size * 0.5 - 1, y + size - 13, 2, 5);
+    }
+  }
+
+  _drawHighlandScenery(ctx, x, y, size, parity, seed, relief) {
+    const ridge = y + 14 + ((seed >>> 5) & 7);
+    if (parity === 2 || parity === 4 || parity === 8) {
+      ctx.fillStyle = this._shadeColor("#6a7b58", relief * 0.06);
+      ctx.beginPath();
+      ctx.moveTo(x + 5, y + size - 6);
+      ctx.lineTo(x + 16, ridge);
+      ctx.lineTo(x + 26, y + size - 8);
+      ctx.lineTo(x + 38, ridge + 2);
+      ctx.lineTo(x + size - 4, y + size - 7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "rgba(214,226,186,0.08)";
+      ctx.beginPath();
+      ctx.moveTo(x + 16, ridge);
+      ctx.lineTo(x + 22, ridge + 7);
+      ctx.lineTo(x + 28, ridge + 2);
+      ctx.lineTo(x + 34, ridge + 8);
+      ctx.lineTo(x + 39, ridge + 3);
+      ctx.closePath();
+      ctx.fill();
+    }
+    if (((seed >>> 14) & 7) === 2) {
+      ctx.fillStyle = "rgba(74,92,54,0.24)";
+      ctx.fillRect(x + 11, y + 13, 2, 10);
+      ctx.fillRect(x + 15, y + 11, 2, 12);
+      ctx.fillStyle = "rgba(198,210,168,0.10)";
+      ctx.beginPath();
+      ctx.arc(x + 17, y + 13, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  _drawWaterScenery(ctx, x, y, size, s, parity, seed) {
+    const depth = clamp(1 - s.river * 1.8, 0, 1);
+    if (((x / size + y / size) | 0) % 3 === 0) {
+      ctx.fillStyle = `rgba(142,211,246,${0.07 + depth * 0.10})`;
+      ctx.fillRect(x + 3, y + 7, size - 6, 2);
+    }
+    if ((parity === 1 || parity === 6) && ((seed >>> 10) & 3) >= 1) {
+      ctx.fillStyle = "rgba(210,230,188,0.12)";
+      ctx.fillRect(x + 8, y + size - 12, 2, 7);
+      ctx.fillRect(x + 12, y + size - 14, 2, 9);
+      ctx.fillRect(x + 16, y + size - 11, 2, 6);
+    }
+    if (((seed >>> 17) & 7) === 4) {
+      ctx.fillStyle = "rgba(220,245,255,0.10)";
+      ctx.beginPath();
+      ctx.arc(x + 17, y + 18, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   _drawWorldAtmosphere(ctx, left, top, right, bottom) {
@@ -8100,6 +9350,45 @@ export default class World {
           }
         }
       }
+
+      if (pts.length >= 2) {
+        const a = pts[0];
+        const b = pts[1];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const nx = -dy / len;
+        const ny = dx / len;
+        for (let i = 1; i < pts.length; i += 2) {
+          const p = pts[i];
+          const wobble = ((hash2((p.x / 24) | 0, (p.y / 24) | 0, this.seed ^ 0x9911) >>> 0) / 4294967296 - 0.5) * 10;
+          const sx = p.x + nx * (road.width * 0.35 + wobble);
+          const sy = p.y + ny * (road.width * 0.35 + wobble);
+          ctx.fillStyle = "rgba(82,70,54,0.14)";
+          ctx.fillRect(sx - 1, sy - 7, 2, 9);
+          ctx.fillStyle = "rgba(166,150,122,0.12)";
+          ctx.fillRect(sx + 1, sy - 7, 5, 1.5);
+        }
+
+        for (let i = 1; i < pts.length; i++) {
+          const a = pts[i - 1];
+          const b = pts[i];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const len = Math.hypot(dx, dy) || 1;
+          const nx = -dy / len;
+          const ny = dx / len;
+          const mx = (a.x + b.x) * 0.5;
+          const my = (a.y + b.y) * 0.5;
+          const side = ((hash2((mx / 28) | 0, (my / 28) | 0, this.seed ^ 0x600d) >>> 0) / 4294967296 - 0.5) * 14;
+          if (((i + road.width) % 2) === 0) {
+            ctx.fillStyle = "rgba(58,52,42,0.14)";
+            ctx.beginPath();
+            ctx.ellipse(mx + nx * side, my + ny * side, 4.5, 2.4, Math.atan2(dy, dx), 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
     }
 
     ctx.restore();
@@ -8169,6 +9458,24 @@ export default class World {
       ctx.fillStyle = "rgba(255,235,190,0.20)";
       ctx.fillRect(-length * 0.5 + 4, -width * 0.5 + 5, length - 8, 2);
 
+      ctx.strokeStyle = "rgba(70,46,22,0.44)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-length * 0.5 + 6, -width * 0.5 + 6);
+      ctx.lineTo(-length * 0.5 + 6, width * 0.5 - 6);
+      ctx.moveTo(length * 0.5 - 6, -width * 0.5 + 6);
+      ctx.lineTo(length * 0.5 - 6, width * 0.5 - 6);
+      ctx.stroke();
+
+      ctx.strokeStyle = "rgba(210,178,132,0.20)";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(-length * 0.5 + 6, -width * 0.5 + 7);
+      ctx.lineTo(length * 0.5 - 6, -width * 0.5 + 7);
+      ctx.moveTo(-length * 0.5 + 6, width * 0.5 - 7);
+      ctx.lineTo(length * 0.5 - 6, width * 0.5 - 7);
+      ctx.stroke();
+
       ctx.restore();
     }
     ctx.restore();
@@ -8216,6 +9523,27 @@ export default class World {
       ctx.strokeStyle = "rgba(14,64,117,0.20)";
       ctx.lineWidth = Math.max(18, width * 0.38);
       ctx.stroke();
+
+      for (let i = 1; i < pts.length; i++) {
+        const a = pts[i - 1];
+        const b = pts[i];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const nx = -dy / len;
+        const ny = dx / len;
+        const foamCount = Math.max(1, Math.floor(len / 180));
+        for (let j = 0; j < foamCount; j++) {
+          const t = (j + 0.5) / foamCount;
+          const px = a.x + dx * t;
+          const py = a.y + dy * t;
+          const wobble = ((hash2((px / 34) | 0, (py / 34) | 0, band.seed ^ 0x4488) >>> 0) / 4294967296 - 0.5) * width * 0.25;
+          ctx.fillStyle = "rgba(214,244,255,0.12)";
+          ctx.beginPath();
+          ctx.ellipse(px + nx * wobble, py + ny * wobble, Math.max(4, width * 0.08), Math.max(1.6, width * 0.024), Math.atan2(dy, dx), 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
     }
 
     this._drawRiverConfluences(ctx, left, top, right, bottom);
@@ -8357,6 +9685,7 @@ export default class World {
     const tNow = performance.now() * 0.001;
 
     for (const t of this.towns || []) {
+      this._drawBeacon(ctx, t.x, t.y - 8, "#8be9ff", 64, 22, 0.10);
       this._drawDropShadow(ctx, t.x, t.y + 18, 34, 10, 0.24);
       ctx.fillStyle = "rgba(117,211,224,0.13)";
       ctx.beginPath();
@@ -8381,6 +9710,25 @@ export default class World {
         ctx.fillStyle = "rgba(255,232,156,0.72)";
         ctx.fillRect(t.x + ox + bw * 0.45, t.y + oy + bh - 8, 5, 8);
       }
+
+      ctx.strokeStyle = "rgba(150,130,92,0.42)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(t.x - 32, t.y + 22);
+      ctx.lineTo(t.x + 34, t.y + 22);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(255,236,190,0.18)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(t.x - 28, t.y + 22);
+      ctx.lineTo(t.x + 30, t.y + 22);
+      ctx.stroke();
+
+      ctx.fillStyle = "rgba(82,116,62,0.24)";
+      ctx.beginPath();
+      ctx.arc(t.x - 30, t.y + 10, 6, 0, Math.PI * 2);
+      ctx.arc(t.x + 31, t.y + 9, 6, 0, Math.PI * 2);
+      ctx.fill();
 
       ctx.strokeStyle = "rgba(139,235,255,0.56)";
       ctx.lineWidth = 2;
@@ -8417,10 +9765,30 @@ export default class World {
       ctx.beginPath();
       ctx.arc(c.x, c.y, 28, 0, Math.PI * 2);
       ctx.fill();
+      this._drawBeacon(ctx, c.x, c.y - 3, campStyle[1], 34, 12, 0.07);
+
+      ctx.strokeStyle = "rgba(255,255,255,0.10)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(c.x - 14, c.y + 12);
+      ctx.lineTo(c.x + 15, c.y + 12);
+      ctx.stroke();
+      if (c.type === "bandit" || c.type === "cult") {
+        ctx.fillStyle = "rgba(255,238,198,0.74)";
+        ctx.fillRect(c.x + 10, c.y - 10, 2, 10);
+        ctx.fillStyle = campStyle[1];
+        ctx.beginPath();
+        ctx.moveTo(c.x + 12, c.y - 10);
+        ctx.lineTo(c.x + 20, c.y - 7);
+        ctx.lineTo(c.x + 12, c.y - 3);
+        ctx.closePath();
+        ctx.fill();
+      }
     }
 
     for (const w of this.waystones) {
       const pulse = 1 + Math.sin(tNow * 2.1 + w.id) * 0.08;
+      this._drawBeacon(ctx, w.x, w.y - 8, "#7fe8ff", 78, 18, 0.13);
       this._drawDropShadow(ctx, w.x, w.y + 9, 17, 6, 0.24);
       ctx.fillStyle = "rgba(96,210,255,0.18)";
       ctx.beginPath();
@@ -8439,11 +9807,41 @@ export default class World {
       ctx.beginPath();
       ctx.arc(w.x, w.y, 25, 0, Math.PI * 2);
       ctx.fill();
+      ctx.strokeStyle = "rgba(180,240,255,0.22)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(w.x, w.y, 33, 0, Math.PI * 2);
+      ctx.stroke();
     }
 
     for (const d of this.dungeons) {
       const pulse = 1 + Math.sin(tNow * 1.7 + d.id) * 0.07;
+      const passSite =
+        this._sampleCellRaw(d.x - 120, d.y).isMountain &&
+        this._sampleCellRaw(d.x + 120, d.y).isMountain;
+      this._drawBeacon(ctx, d.x, d.y - 10, "#dc7cff", 82, 20, 0.12);
       this._drawDropShadow(ctx, d.x, d.y + 11, 23, 8, 0.32);
+      if (passSite) {
+        ctx.fillStyle = "rgba(66,72,78,0.34)";
+        ctx.beginPath();
+        ctx.moveTo(d.x - 34, d.y + 18);
+        ctx.lineTo(d.x - 20, d.y - 18);
+        ctx.lineTo(d.x - 8, d.y + 18);
+        ctx.closePath();
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(d.x + 34, d.y + 18);
+        ctx.lineTo(d.x + 20, d.y - 18);
+        ctx.lineTo(d.x + 8, d.y + 18);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = "rgba(220,124,255,0.24)";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(d.x - 16, d.y + 14);
+        ctx.lineTo(d.x + 16, d.y + 14);
+        ctx.stroke();
+      }
       ctx.fillStyle = "rgba(160,80,210,0.22)";
       ctx.beginPath();
       ctx.arc(d.x, d.y, 20 * pulse, 0, Math.PI * 2);
@@ -8465,6 +9863,11 @@ export default class World {
       ctx.lineTo(d.x - 8, d.y + 10);
       ctx.closePath();
       ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.10)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(d.x - 15.5, d.y - 1.5, 31, 22);
+      ctx.fillStyle = "rgba(74,56,42,0.20)";
+      ctx.fillRect(d.x - 24, d.y + 18, 48, 4);
     }
 
     for (const d of this.docks) {
@@ -8478,6 +9881,13 @@ export default class World {
       ctx.lineTo(d.x - 8, d.y + 10);
       ctx.moveTo(d.x + 5, d.y - 5);
       ctx.lineTo(d.x + 5, d.y + 10);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(210,230,242,0.18)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(d.x - 2, d.y - 9);
+      ctx.lineTo(d.x - 2, d.y + 6);
+      ctx.lineTo(d.x + 8, d.y - 1);
       ctx.stroke();
     }
 
@@ -8505,11 +9915,22 @@ export default class World {
       ctx.beginPath();
       ctx.arc(s.x, s.y, 30, 0, Math.PI * 2);
       ctx.fill();
+      ctx.strokeStyle = "rgba(240,220,255,0.18)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 36 * pulse, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(88,68,126,0.22)";
+      ctx.fillRect(s.x - 20, s.y + 15, 40, 3);
     }
 
     for (const c of this.caches) {
       const shine = Math.max(0, Math.sin(tNow * 2.8 + c.id));
       this._drawDropShadow(ctx, c.x, c.y + 3, 13, 5, 0.24);
+      ctx.fillStyle = "rgba(255,216,132,0.10)";
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, 18 + shine * 5, 0, Math.PI * 2);
+      ctx.fill();
       ctx.fillStyle = "#c49a4d";
       ctx.fillRect(c.x - 7, c.y - 7, 14, 10);
       ctx.fillStyle = "rgba(255,255,255,0.18)";
@@ -8520,6 +9941,8 @@ export default class World {
       ctx.fillRect(c.x - 2, c.y - 7, 4, 10);
       ctx.strokeStyle = "rgba(70,45,20,0.62)";
       ctx.strokeRect(c.x - 7.5, c.y - 7.5, 15, 11);
+      ctx.fillStyle = "rgba(96,78,42,0.18)";
+      ctx.fillRect(c.x - 14, c.y + 8, 28, 3);
     }
 
     for (const s of this.secrets || []) {
@@ -8539,10 +9962,16 @@ export default class World {
       ctx.stroke();
       ctx.fillStyle = "#ffeaa8";
       ctx.fillRect(s.x - 1.5, s.y - 5, 3, 10);
+      ctx.strokeStyle = "rgba(255,244,206,0.14)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 24 * pulse, 0, Math.PI * 2);
+      ctx.stroke();
     }
 
     for (const lair of this.dragonLairs) {
       const pulse = 1 + Math.sin(tNow * 1.45 + lair.id) * 0.06;
+      this._drawBeacon(ctx, lair.x, lair.y - 12, "#ff8a5c", 92, 24, 0.12);
       this._drawDropShadow(ctx, lair.x, lair.y + 14, 28, 10, 0.34);
       ctx.fillStyle = "rgba(130,18,28,0.24)";
       ctx.beginPath();
@@ -8555,9 +9984,55 @@ export default class World {
       ctx.lineTo(lair.x - 18, lair.y + 14);
       ctx.closePath();
       ctx.fill();
+      ctx.fillStyle = "rgba(255,196,150,0.14)";
+      ctx.beginPath();
+      ctx.moveTo(lair.x, lair.y - 10);
+      ctx.lineTo(lair.x + 8, lair.y + 5);
+      ctx.lineTo(lair.x - 8, lair.y + 5);
+      ctx.closePath();
+      ctx.fill();
       ctx.fillStyle = "#ffb06e";
       ctx.fillRect(lair.x - 3, lair.y - 3, 6, 12);
+      ctx.strokeStyle = "rgba(255,120,86,0.18)";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.arc(lair.x, lair.y, 34 * pulse, 0, Math.PI * 2);
+      ctx.stroke();
     }
+  }
+
+  _drawBeacon(ctx, x, y, color, height = 72, width = 18, alpha = 0.1) {
+    ctx.save();
+    const g = ctx.createLinearGradient(x, y - height, x, y + 8);
+    g.addColorStop(0, "rgba(255,255,255,0)");
+    g.addColorStop(0.22, this._colorAlpha(color, alpha));
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(x, y - height);
+    ctx.lineTo(x + width, y + 8);
+    ctx.lineTo(x - width, y + 8);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  _colorAlpha(color, alpha) {
+    if (typeof color !== "string") return `rgba(255,255,255,${alpha})`;
+    if (color.startsWith("#")) {
+      const hex = color.slice(1);
+      const full = hex.length === 3 ? hex.split("").map((c) => c + c).join("") : hex;
+      const int = Number.parseInt(full, 16);
+      if (Number.isFinite(int)) {
+        const r = (int >> 16) & 255;
+        const g = (int >> 8) & 255;
+        const b = int & 255;
+        return `rgba(${r},${g},${b},${alpha})`;
+      }
+    }
+    if (color.startsWith("rgb(")) return color.replace("rgb(", "rgba(").replace(")", `,${alpha})`);
+    if (color.startsWith("rgba(")) return color.replace(/,\s*[\d.]+\)$/, `,${alpha})`);
+    return `rgba(255,255,255,${alpha})`;
   }
 
   _drawDropShadow(ctx, x, y, rx, ry, alpha = 0.2) {
@@ -8592,6 +10067,9 @@ export default class World {
       isWater = isRiver;
     }
 
+    const mountainBase = this._mountainBaseAt(x, y, ground, isWater);
+    const isMountainWall = mountainBase;
+
     const moisture = this._moistureAt(x, y);
 
     const danger = this.getDangerLevel(x, y);
@@ -8610,6 +10088,9 @@ export default class World {
     } else if (danger === 3) {
       zone = moisture > 0.62 ? "deep wilds" : "stone flats";
       color = moisture > 0.62 ? "#2f7f39" : "#8f938f";
+    } else if (mountainBase) {
+      zone = "mountain";
+      color = ground > 0.84 ? "#c3c9ce" : "#9ca3a8";
     } else if (danger === 4) {
       zone = moisture < 0.36 ? "ashlands" : "highlands";
       color = moisture < 0.36 ? "#a79a69" : "#788b65";
@@ -8644,7 +10125,7 @@ export default class World {
       zone = "river";
     }
 
-    if (road && !isWater && !bridge) {
+    if (road && !isWater && !bridge && !mountainBase) {
       zone = "road";
     }
 
@@ -8659,6 +10140,8 @@ export default class World {
       isWater,
       isLake,
       isRiver,
+      isMountainWall,
+      mountainBase,
       road,
       bridge,
       zone,
@@ -8678,6 +10161,7 @@ export default class World {
 
     let isWater = ground < 0.245 || river < this._riverWaterLimit;
     if (spawnDist < this._spawnSafeRadius && river >= this._riverWaterLimit) isWater = false;
+    const mountainBase = this._mountainBaseAt(x, y, ground, isWater);
 
     let zone = "meadow";
     let color = "#6aa04f";
@@ -8686,6 +10170,9 @@ export default class World {
       zone = "river";
       const confluence = this._nearRiverConfluence(x, y);
       color = confluence ? "#216fa9" : river < this._riverWaterLimit ? (river < 0.78 ? "#2477b1" : "#2f86bd") : "#2c6a9a";
+    } else if (mountainBase) {
+      zone = "mountain";
+      color = ground > 0.84 ? "#c3c9ce" : "#9ca3a8";
     } else if (danger <= 1) {
       zone = moisture > 0.58 ? "greenwood" : "meadow";
       color = moisture > 0.58 ? "#5d9a4d" : "#76b45c";
@@ -8713,6 +10200,13 @@ export default class World {
     } else if (moisture < 0.24) {
       zone = "ashlands";
       color = "#a79a69";
+    }
+
+    const road = this._roadAt(x, y);
+    const bridge = this._bridgeAt(x, y);
+    if (road && !isWater && !bridge && !mountainBase) {
+      zone = "road";
+      color = "#9c8d6f";
     }
 
     return { color, zone, isWater };
@@ -8780,6 +10274,203 @@ export default class World {
     };
 
     return [main, tributary];
+  }
+
+  _makeMountainRanges() {
+    const ranges = [];
+    const count = 5;
+    for (let i = 0; i < count; i++) {
+      let angle = 0;
+      if (i % 3 === 0) angle = this._rng.range(-0.42, 0.42);
+      else if (i % 3 === 1) angle = this._rng.range(0.92, 1.42);
+      else angle = this._rng.range(-0.98, -0.46);
+
+      const normal = angle + Math.PI * 0.5;
+      const offset = this._rng.range(3000, 7600) * (this._rng.next() < 0.5 ? -1 : 1);
+      const cx = Math.cos(normal) * offset;
+      const cy = Math.sin(normal) * offset;
+      const half = this._rng.range(7000, 9800);
+
+      ranges.push({
+        ax: cx - Math.cos(angle) * half,
+        ay: cy - Math.sin(angle) * half,
+        bx: cx + Math.cos(angle) * half,
+        by: cy + Math.sin(angle) * half,
+        width: this._rng.range(620, 980),
+        seed: hash2(this.seed, 700 + i),
+      });
+    }
+    return ranges;
+  }
+
+  _makeMountainPasses() {
+    const passes = [];
+    for (const range of this._mountainRanges || []) {
+      const dx = range.bx - range.ax;
+      const dy = range.by - range.ay;
+      const len = Math.hypot(dx, dy) || 1;
+      const tx = dx / len;
+      const ty = dy / len;
+      const nx = -ty;
+      const ny = tx;
+      const passCount = (range.seed & 1) === 0 ? 2 : 1;
+
+      for (let i = 0; i < passCount; i++) {
+        const t = passCount === 1
+          ? 0.5
+          : i === 0
+            ? 0.28 + ((range.seed >>> 3) & 15) / 100
+            : 0.68 + ((range.seed >>> 7) & 11) / 100;
+        const px = range.ax + dx * t;
+        const py = range.ay + dy * t;
+        const drift = (((range.seed >>> (i ? 11 : 15)) & 15) - 7.5) * 28;
+        passes.push({
+          x: px + tx * drift,
+          y: py + ty * drift,
+          nx,
+          ny,
+          tx,
+          ty,
+          width: range.width * (0.34 + i * 0.04),
+          length: 420 + ((range.seed >>> (i ? 19 : 23)) & 15) * 22,
+          rangeSeed: range.seed,
+        });
+      }
+    }
+    return passes;
+  }
+
+  _buildMountainRenderData() {
+    const out = [];
+    for (const range of this._mountainRanges || []) {
+      const dx = range.bx - range.ax;
+      const dy = range.by - range.ay;
+      const len = Math.hypot(dx, dy) || 1;
+      const tx = dx / len;
+      const ty = dy / len;
+      const nx = -ty;
+      const ny = tx;
+      const steps = Math.max(18, Math.ceil(len / 440));
+      const pts = [];
+
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const baseX = range.ax + dx * t;
+        const baseY = range.ay + dy * t;
+        const wander = (fbm(baseX * 0.0011, baseY * 0.0011, range.seed + 81, 3) - 0.5) * range.width * 0.18;
+        pts.push({
+          x: baseX + nx * wander,
+          y: baseY + ny * wander,
+          t,
+        });
+      }
+
+      const passWindows = (this._mountainPasses || [])
+        .filter((pass) => pass.rangeSeed === range.seed)
+        .map((pass) => {
+          const ox = pass.x - range.ax;
+          const oy = pass.y - range.ay;
+          const t = clamp((ox * tx + oy * ty) / len, 0, 1);
+          const span = clamp((pass.length * 0.72) / len, 0.025, 0.09);
+          return { start: Math.max(0, t - span), end: Math.min(1, t + span) };
+        })
+        .sort((a, b) => a.start - b.start);
+
+      const windows = [];
+      let cursor = 0;
+      for (const gap of passWindows) {
+        if (gap.start > cursor + 0.02) windows.push({ start: cursor, end: gap.start });
+        cursor = Math.max(cursor, gap.end);
+      }
+      if (cursor < 0.98) windows.push({ start: cursor, end: 1 });
+
+      const segments = [];
+      for (const window of windows) {
+        const segPts = pts.filter((p) => p.t >= window.start && p.t <= window.end);
+        if (segPts.length < 2) continue;
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (const p of segPts) {
+          if (p.x < minX) minX = p.x;
+          if (p.y < minY) minY = p.y;
+          if (p.x > maxX) maxX = p.x;
+          if (p.y > maxY) maxY = p.y;
+        }
+        const slopeX = nx * (range.width * 0.18) + 34;
+        const slopeY = ny * (range.width * 0.18) + range.width * 0.92;
+        segments.push({
+          pts: segPts,
+          minX: minX - range.width - 80,
+          minY: minY - range.width * 0.32 - 40,
+          maxX: maxX + range.width + 80 + Math.max(0, slopeX),
+          maxY: maxY + range.width + 110 + Math.max(0, slopeY),
+        });
+      }
+
+      out.push({
+        width: range.width,
+        nx,
+        ny,
+        tx,
+        ty,
+        seed: range.seed,
+        segments,
+      });
+    }
+
+    return out;
+  }
+
+  _mountainInfluenceAt(x, y) {
+    let best = 0;
+    for (const range of this._mountainRanges || []) {
+      const dx = range.bx - range.ax;
+      const dy = range.by - range.ay;
+      const len2 = dx * dx + dy * dy || 1;
+      const t = clamp(((x - range.ax) * dx + (y - range.ay) * dy) / len2, 0, 1);
+      const qx = range.ax + dx * t;
+      const qy = range.ay + dy * t;
+      const dist = Math.hypot(x - qx, y - qy);
+      const noise = fbm(x * 0.00115 + range.seed * 0.000001, y * 0.00115 - range.seed * 0.000001, range.seed, 3);
+      const width = range.width * (0.72 + noise * 0.42);
+      if (dist > width) continue;
+
+      const edgeFade = 0.55 + Math.sin(t * Math.PI) * 0.45;
+      const ridge = clamp(1 - dist / width, 0, 1) * edgeFade;
+      if (ridge > best) best = ridge;
+    }
+    return best;
+  }
+
+  _mountainPassInfluenceAt(x, y) {
+    let best = 0;
+    for (const pass of this._mountainPasses || []) {
+      const ox = x - pass.x;
+      const oy = y - pass.y;
+      const along = Math.abs(ox * pass.tx + oy * pass.ty);
+      const across = Math.abs(ox * pass.nx + oy * pass.ny);
+      if (along > pass.length || across > pass.width) continue;
+
+      const alongFade = clamp(1 - along / pass.length, 0, 1);
+      const acrossFade = clamp(1 - across / pass.width, 0, 1);
+      const notch = alongFade * acrossFade;
+      if (notch > best) best = notch;
+    }
+    return best;
+  }
+
+  _mountainBaseAt(x, y, ground, isWater) {
+    if (isWater) return false;
+    const spawnDist = Math.hypot(x - this.spawn.x, y - this.spawn.y);
+    if (spawnDist <= this._spawnSafeRadius * 1.15) return false;
+
+    const ridge = this._mountainInfluenceAt(x, y);
+    const pass = this._mountainPassInfluenceAt(x, y);
+    const highland = clamp((ground - 0.74) / 0.16, 0, 1);
+    const effectiveRidge = ridge - pass * 0.95;
+    return effectiveRidge > 0.52 || (effectiveRidge > 0.24 && highland > 0.76);
   }
 
   _riverAt(x, y) {
@@ -8990,6 +10681,7 @@ export default class World {
     this.secrets = [];
 
     const findLand = (x, y, r = 300) => this._findSafeLandPatchNear(x, y, r);
+    const findMountainPass = (x, y, r = 540) => this._findMountainPassPatchNear(x, y, r) || findLand(x, y, r);
     const findShore = (x, y, r = 360) => this._findShorePatchNear(x, y, r);
 
     this.spawn = findLand(0, 0, 720) || { x: 0, y: 0 };
@@ -9091,7 +10783,7 @@ export default class World {
       if (p) this.waystones.push({ id: id++, x: p.x, y: p.y });
     }
     for (const [x, y] of dungeonSeeds) {
-      const p = findLand(x, y, 440);
+      const p = findMountainPass(x, y, 620);
       if (p) this.dungeons.push({ id: id++, x: p.x, y: p.y });
     }
     for (const [x, y] of dockSeeds) {
@@ -9351,6 +11043,23 @@ export default class World {
   }
 
   _sampleCellRaw(x, y) {
+    const cache = this._bootRawSampleCache;
+    if (cache) {
+      const qx = Math.round(x / 16);
+      const qy = Math.round(y / 16);
+      const key = `${qx}|${qy}`;
+      const cached = cache.get(key);
+      if (cached) return cached;
+
+      const sample = this._sampleCellRawUncached(qx * 16, qy * 16);
+      cache.set(key, sample);
+      return sample;
+    }
+
+    return this._sampleCellRawUncached(x, y);
+  }
+
+  _sampleCellRawUncached(x, y) {
     const ground = this._groundAt(x, y);
     const river = this._riverAt(x, y);
 
@@ -9360,11 +11069,13 @@ export default class World {
 
     let isWater = ground < 0.245 || river < this._riverWaterLimit;
     if (spawnDist < this._spawnSafeRadius && river >= this._riverWaterLimit) isWater = false;
+    const isMountain = this._mountainBaseAt(x, y, ground, isWater);
 
     return {
       ground,
       river,
       isWater,
+      isMountain,
     };
   }
 
@@ -9378,7 +11089,26 @@ export default class World {
         const px = x + Math.cos(a) * r;
         const py = y + Math.sin(a) * r;
         const s = this._sampleCellRaw(px, py);
-        if (!s.isWater) return { x: px, y: py };
+        if (!s.isWater && !s.isMountain) return { x: px, y: py };
+      }
+    }
+    return null;
+  }
+
+  _findMountainPassPatchNear(x, y, radius = 520) {
+    for (let r = 0; r <= radius; r += 20) {
+      for (let a = 0; a < Math.PI * 2; a += Math.PI / 18) {
+        const px = x + Math.cos(a) * r;
+        const py = y + Math.sin(a) * r;
+        const here = this._sampleCellRaw(px, py);
+        if (here.isWater || here.isMountain) continue;
+
+        const west = this._sampleCellRaw(px - 140, py).isMountain;
+        const east = this._sampleCellRaw(px + 140, py).isMountain;
+        const north = this._sampleCellRaw(px, py - 140).isMountain;
+        const south = this._sampleCellRaw(px, py + 140).isMountain;
+
+        if ((west && east) || (north && south)) return { x: px, y: py };
       }
     }
     return null;
@@ -9391,7 +11121,7 @@ export default class World {
         const py = y + Math.sin(a) * r;
 
         const here = this._sampleCellRaw(px, py);
-        if (here.isWater) continue;
+        if (here.isWater || here.isMountain) continue;
 
         const checks = [
           [22, 0], [-22, 0], [0, 22], [0, -22],
@@ -9415,6 +11145,144 @@ export default class World {
       if (dx * dx + dy * dy <= r2) return true;
     }
     return false;
+  }
+
+  _queueMapBuild() {
+    if (!this._mapDirty && this._mapInfo) return;
+    if (this._mapBuildQueued) return;
+    if (typeof window === "undefined" || typeof performance === "undefined") {
+      this._buildMapInfo();
+      return;
+    }
+
+    this._mapBuildQueued = true;
+    const run = () => this._buildMapInfoChunk();
+    window.requestAnimationFrame(run);
+  }
+
+  _buildMapPreview() {
+    if (this._mapInfo && this._mapCanvas) return;
+    const originalSize = this._mapSize;
+    this._mapSize = this._mapPreviewSize || 96;
+    this._buildMapInfo();
+    this._mapSize = originalSize;
+    this._mapDirty = true;
+  }
+
+  _buildMapInfoChunk() {
+    const size = this._mapSize || 320;
+    if (!this._mapBuildState) {
+      const canvas = typeof document !== "undefined" ? document.createElement("canvas") : null;
+      if (canvas) {
+        canvas.width = size;
+        canvas.height = size;
+      }
+      const ctx = canvas ? canvas.getContext("2d") : null;
+      this._mapBuildState = {
+        size,
+        canvas,
+        ctx,
+        colors: [],
+        tiles: [],
+        revealed: [],
+        row: 0,
+      };
+      this._mapCanvas = canvas;
+      this._mapInfo = {
+        size,
+        colors: this._mapBuildState.colors,
+        tiles: this._mapBuildState.tiles,
+        revealed: this._mapBuildState.revealed,
+      };
+    }
+
+    const state = this._mapBuildState;
+    const budgetEnd = performance.now() + 14;
+
+    while (state.row < state.size && performance.now() < budgetEnd) {
+      const r = state.row++;
+      const colorRow = [];
+      const revRow = [];
+      const tileRow = [];
+
+      for (let c = 0; c < state.size; c++) {
+        const wx = -this.mapHalfSize + (c + 0.5) * ((this.mapHalfSize * 2) / state.size);
+        const wy = -this.mapHalfSize + (r + 0.5) * ((this.mapHalfSize * 2) / state.size);
+        const s = this._sampleMapCell(wx, wy);
+
+        colorRow.push(s.color);
+        tileRow.push(s.color);
+        revRow.push(false);
+
+        if (state.ctx) {
+          state.ctx.fillStyle = s.color;
+          state.ctx.fillRect(c, r, 1, 1);
+        }
+      }
+
+      state.colors.push(colorRow);
+      state.tiles.push(tileRow);
+      state.revealed.push(revRow);
+    }
+
+    this._mapCanvas = state.canvas;
+    this._mapInfo = {
+      size,
+      colors: state.colors,
+      tiles: state.tiles,
+      revealed: state.revealed,
+    };
+
+    if (state.row < state.size) {
+      this._mapBuildQueued = false;
+      this._queueMapBuild();
+      return;
+    }
+
+    const { canvas, ctx } = state;
+    if (ctx) {
+      const toMap = (p) => ({
+        x: ((p.x + this.mapHalfSize) / (this.mapHalfSize * 2)) * size,
+        y: ((p.y + this.mapHalfSize) / (this.mapHalfSize * 2)) * size,
+      });
+
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+
+      for (const road of this.roads) {
+        if (road.visible === false) continue;
+        const pts = road.points;
+        if (!pts || pts.length < 2) continue;
+        const first = toMap(pts[0]);
+        ctx.beginPath();
+        ctx.moveTo(first.x, first.y);
+        for (let i = 1; i < pts.length; i++) {
+          const p = toMap(pts[i]);
+          ctx.lineTo(p.x, p.y);
+        }
+        ctx.strokeStyle = "rgba(45,34,22,0.45)";
+        ctx.lineWidth = 1.7;
+        ctx.stroke();
+        ctx.strokeStyle = "rgba(213,178,111,0.75)";
+        ctx.lineWidth = 0.85;
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    }
+
+    this._mapCanvas = canvas;
+    this._mapInfo = {
+      size,
+      colors: state.colors,
+      tiles: state.tiles,
+      revealed: state.revealed,
+    };
+    this._mapBuildState = null;
+    this._discoveryExportCache = null;
+    this._mapDirty = false;
+    this._mapBuildQueued = false;
   }
 
   _buildMapInfo() {
