@@ -55,49 +55,6 @@ Notes:
 Node.js was blocked in the Codex environment, so JavaScript syntax checks could not be run with node --check.
 The local server script works when launched from PowerShell and scans upward if the default port is busy.
 
-
-===== ./README.md =====
-# Broke Knight
-
-A browser RPG prototype built as plain JavaScript modules. Run it through the local server so module imports load correctly.
-
-## Run
-
-```powershell
-cd "C:\Users\Jimmy\Desktop\Broke Knight"
-powershell -NoProfile -ExecutionPolicy Bypass -File .\serve-broke-knight.ps1
-```
-
-Open the URL printed by the script. If the default port is busy, the server automatically scans upward for a free port.
-
-## Useful Commands
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\check-broke-knight.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\update-project-snapshot.ps1
-```
-
-`check-broke-knight.ps1` verifies required files, local module imports, and HTTP responses from the running server.
-
-`update-project-snapshot.ps1` refreshes `all-project.txt` from the current project files.
-
-## Controls
-
-- Arrow keys: move
-- Mouse or click: aim / attack
-- Q/W/E/R: skills
-- 1/2: health and mana potions
-- F: interact
-- B: dock or sail
-- M: map
-- I: inventory
-- K: skills
-- J: quests and tracking
-- O: status
-- G: dev tools
-- Esc: close menus or leave dungeon
-
-
 ===== ./index.html =====
 <!doctype html>
 <html lang="en">
@@ -205,6 +162,46 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\update-project-snaps
 </body>
 </html>
 
+===== ./README.md =====
+# Broke Knight
+
+A browser RPG prototype built as plain JavaScript modules. Run it through the local server so module imports load correctly.
+
+## Run
+
+```powershell
+cd "C:\Users\Jimmy\Desktop\Broke Knight"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\serve-broke-knight.ps1
+```
+
+Open the URL printed by the script. If the default port is busy, the server automatically scans upward for a free port.
+
+## Useful Commands
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\check-broke-knight.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\update-project-snapshot.ps1
+```
+
+`check-broke-knight.ps1` verifies required files, local module imports, and HTTP responses from the running server.
+
+`update-project-snapshot.ps1` refreshes `all-project.txt` from the current project files.
+
+## Controls
+
+- Arrow keys: move
+- Mouse or click: aim / attack
+- Q/W/E/R: skills
+- 1/2: health and mana potions
+- F: interact
+- B: dock or sail
+- M: map
+- I: inventory
+- K: skills
+- J: quests and tracking
+- O: status
+- G: dev tools
+- Esc: close menus or leave dungeon
 
 ===== ./serve-broke-knight.ps1 =====
 param(
@@ -306,7 +303,6 @@ try {
 } finally {
   $listener.Stop()
 }
-
 
 ===== ./src/entities.js =====
 // src/entities.js
@@ -2090,7 +2086,6 @@ export class Loot {
     ctx.restore();
   }
 }
-
 
 ===== ./src/game.js =====
 // src/game.js
@@ -5539,7 +5534,6 @@ export default class Game {
   }
 }
 
-
 ===== ./src/input.js =====
 // src/input.js
 // v105.6 INPUT (NO WASD MOVEMENT)
@@ -5660,7 +5654,6 @@ export default class Input {
     this.clearAll();
   }
 }
-
 
 ===== ./src/main.js =====
 // src/main.js
@@ -5950,7 +5943,6 @@ window.addEventListener("beforeunload", () => {
 canvas.addEventListener("mousedown", () => {
   focusCanvas();
 });
-
 
 ===== ./src/save.js =====
 // src/save.js
@@ -6332,7 +6324,6 @@ export default class Save {
     return i;
   }
 }
-
 
 ===== ./src/ui.js =====
 // src/ui.js
@@ -8395,7 +8386,6 @@ export default class UI {
   }
 }
 
-
 ===== ./src/util.js =====
 // src/util.js
 // v106.1 UTIL FIX
@@ -8537,16 +8527,15 @@ export function fbm(x, y, seed = 0, octaves = 4) {
   return value;
 }
 
-
 ===== ./src/world.js =====
 // src/world.js
-// v107 RPG WORLD PASS
-// - roads are real walkable corridors, not just decoration
-// - safer mainland-style spawn region with leveling rings
-// - stronger road network between camps / waystones / docks / dungeons
-// - wider bridges and readable trail rendering
-// - minimap + world map support
-// - compatible with current game.js / ui.js / util.js
+// FULL UPDATED VERSION - roads wider + no visible layering at intersections
+// Changes:
+// - Roads are now significantly wider (default 28-30 units)
+// - Drawing fixed: single clean dirt base for ALL roads first, then gravel center lines (no overlapping layers at crossings)
+// - Intersections now look natural and clean (no weird artifacts)
+// - All previous fixes kept (forests, stone flats unpassable, great map access, low lag, etc.)
+// Copy this ENTIRE file and replace your src/world.js completely.
 
 import { clamp, hash2, fbm, RNG } from "./util.js";
 
@@ -8571,7 +8560,7 @@ function quadPoint(ax, ay, bx, by, cx, cy, t) {
 
 export default class World {
   constructor(seed = 12345, opts = {}) {
-    this.buildId = "rpg-v127";
+    this.buildId = "rpg-v135";
     this.seed = (seed | 0) || 12345;
 
     this.tileSize = opts.tileSize || 24;
@@ -8596,15 +8585,16 @@ export default class World {
     this.bridges = [];
     this.roads = [];
     this.roadNodes = [];
-    this.showRoads = false;
+    this.showRoads = true;
+    this._trees = [];
 
     this._rng = new RNG(this.seed ^ 0x51f15eed);
 
     this._mapCanvas = null;
     this._mapInfo = null;
     this._mapDirty = true;
-    this._mapSize = 320;
-    this._mapPreviewSize = 96;
+    this._mapSize = 240;
+    this._mapPreviewSize = 120;
     this._discoveryExportCache = null;
     this._revealed = null;
     this._mapBuildQueued = false;
@@ -8626,6 +8616,7 @@ export default class World {
     this._buildRoadNetwork();
     this._finalizeBridges();
     this._ensureSpawnSafety();
+    this._trees = this._generateTrees();
     this._bootRawSampleCache = null;
   }
 
@@ -8839,10 +8830,11 @@ export default class World {
     }
 
     this._drawMountainRanges(ctx, left, top, right, bottom);
+    this._drawTrees(ctx, left, top, right, bottom);
     this._drawWorldAtmosphere(ctx, left, top, right, bottom);
     this._drawRiverOverlays(ctx, left, top, right, bottom);
     this._drawBridges(ctx, left, top, right, bottom);
-    this._drawRoads(ctx);
+    this._drawRoads(ctx);                     // wider + no layering at intersections
     this._drawPOIs(ctx);
   }
 
@@ -9118,6 +9110,27 @@ export default class World {
       ctx.closePath();
       ctx.fill();
     }
+
+    const highland = clamp((this._groundAt(x + size * 0.5, y + size * 0.5) - 0.74) / 0.16, 0, 1);
+    if (steep || highland > 0.85) {
+      ctx.fillStyle = "rgba(245,250,255,0.65)";
+      ctx.beginPath();
+      ctx.moveTo(mid - 8, peak + 2);
+      ctx.lineTo(mid + 8, peak + 2);
+      ctx.lineTo(mid + 4, peak - 6);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    const pass = this._mountainPassInfluenceAt(x + size * 0.5, y + size * 0.5);
+    if (pass > 0.6) this._drawMountainPathHighlight(ctx, x, y, size, seed);
+  }
+
+  _drawMountainPathHighlight(ctx, x, y, size, seed) {
+    ctx.fillStyle = "rgba(90,72,55,0.35)";
+    ctx.beginPath();
+    ctx.ellipse(x + size * 0.5, y + size - 12, 18, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   _drawMountainRanges(ctx, left, top, right, bottom) {
@@ -9169,59 +9182,6 @@ export default class World {
     }
 
     ctx.restore();
-  }
-
-  _drawMountainPassScenery(ctx, x, y, size, parity, seed, relief) {
-    ctx.fillStyle = "rgba(20,24,28,0.18)";
-    ctx.beginPath();
-    ctx.ellipse(x + size * 0.5, y + size - 8, size * 0.44, 6.5, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    if (((seed >>> 3) & 1) === 0) {
-      ctx.fillStyle = this._shadeColor("#5c6166", -0.06 + relief * 0.04);
-      ctx.beginPath();
-      ctx.moveTo(x, y + size - 4);
-      ctx.lineTo(x + 10, y + 14);
-      ctx.lineTo(x + 15, y + size - 6);
-      ctx.closePath();
-      ctx.fill();
-    }
-    if (((seed >>> 6) & 1) === 1) {
-      ctx.fillStyle = this._shadeColor("#676d72", -0.05 + relief * 0.03);
-      ctx.beginPath();
-      ctx.moveTo(x + size, y + size - 4);
-      ctx.lineTo(x + size - 11, y + 12);
-      ctx.lineTo(x + size - 17, y + size - 7);
-      ctx.closePath();
-      ctx.fill();
-    }
-
-    ctx.fillStyle = "rgba(108,96,76,0.22)";
-    ctx.beginPath();
-    ctx.moveTo(x + 8, y + size - 9);
-    ctx.lineTo(x + size - 8, y + size - 9);
-    ctx.lineTo(x + size - 12, y + size - 4);
-    ctx.lineTo(x + 12, y + size - 4);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.strokeStyle = "rgba(214,206,178,0.18)";
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.moveTo(x + 8, y + size - 12);
-    ctx.lineTo(x + size - 8, y + size - 12);
-    ctx.stroke();
-
-    ctx.strokeStyle = "rgba(82,66,46,0.16)";
-    ctx.beginPath();
-    ctx.moveTo(x + 8, y + size - 7);
-    ctx.lineTo(x + size - 8, y + size - 7);
-    ctx.stroke();
-
-    if (parity === 1 || parity === 6) {
-      ctx.fillStyle = "rgba(168,154,124,0.14)";
-      ctx.fillRect(x + size * 0.5 - 1, y + size - 13, 2, 5);
-    }
   }
 
   _drawHighlandScenery(ctx, x, y, size, parity, seed, relief) {
@@ -9305,87 +9265,90 @@ export default class World {
     ctx.restore();
   }
 
+  // UPDATED: wider roads + clean drawing order (base first, then center) = no visible layering at intersections
   _drawRoads(ctx) {
     if (!this.showRoads) return;
     if (!this.roads?.length) return;
 
     ctx.save();
 
+    const width = 28;   // much wider roads
+
+    // 1. Draw ALL dirt bases first (prevents layering at intersections)
+    ctx.strokeStyle = "#8b6f4a";
+    ctx.lineWidth = width + 14;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
     for (const road of this.roads) {
       if (road.visible === false) continue;
-
       const pts = road.points;
       if (!pts || pts.length < 2) continue;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.stroke();
+    }
 
+    // 2. Draw ALL gravel centers on top (clean intersections)
+    ctx.strokeStyle = "#c9b38a";
+    ctx.lineWidth = width - 4;
+    for (const road of this.roads) {
+      if (road.visible === false) continue;
+      const pts = road.points;
+      if (!pts || pts.length < 2) continue;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.stroke();
+    }
+
+    // 3. Light center highlight for definition
+    ctx.strokeStyle = "#e8d9b8";
+    ctx.lineWidth = width * 0.35;
+    for (const road of this.roads) {
+      if (road.visible === false) continue;
+      const pts = road.points;
+      if (!pts || pts.length < 2) continue;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.stroke();
+    }
+
+    // 4. Soft edge blend (very subtle)
+    ctx.strokeStyle = "rgba(139,110,74,0.35)";
+    ctx.lineWidth = width * 0.45;
+    for (const road of this.roads) {
+      if (road.visible === false) continue;
+      const pts = road.points;
+      if (!pts || pts.length < 2) continue;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.stroke();
+    }
+
+    // 5. Tiny texture speckles (natural look, no performance hit)
+    for (const road of this.roads) {
+      if (road.visible === false) continue;
+      const pts = road.points;
+      if (!pts || pts.length < 2) continue;
       for (let i = 1; i < pts.length; i++) {
         const a = pts[i - 1];
         const b = pts[i];
         const dx = b.x - a.x;
         const dy = b.y - a.y;
         const len = Math.hypot(dx, dy) || 1;
-        const steps = Math.max(1, Math.floor(len / 44));
+        const steps = Math.max(3, Math.floor(len / 32));
 
-        for (let s = 0; s < steps; s++) {
-          const t = (s + 0.35) / steps;
-          const x = a.x + dx * t;
-          const y = a.y + dy * t;
-          const wobble = hash2((x / 18) | 0, (y / 18) | 0, this.seed) / 4294967296;
-          const side = wobble - 0.5;
-          const nx = -dy / len;
-          const ny = dx / len;
-          const px = x + nx * side * 5;
-          const py = y + ny * side * 5;
-          const r = 3.2 + Math.abs(side) * 2.6;
-
-          ctx.fillStyle = "rgba(70,63,49,0.10)";
-          ctx.beginPath();
-          ctx.ellipse(px, py, r + 2, r * 0.75, Math.atan2(dy, dx), 0, Math.PI * 2);
-          ctx.fill();
-
-          if ((i + s) % 3 === 0) {
-            ctx.fillStyle = "rgba(210,200,165,0.05)";
-            ctx.beginPath();
-            ctx.ellipse(px + nx * 2, py + ny * 2, r * 0.7, r * 0.35, Math.atan2(dy, dx), 0, Math.PI * 2);
-            ctx.fill();
-          }
-        }
-      }
-
-      if (pts.length >= 2) {
-        const a = pts[0];
-        const b = pts[1];
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        const len = Math.hypot(dx, dy) || 1;
-        const nx = -dy / len;
-        const ny = dx / len;
-        for (let i = 1; i < pts.length; i += 2) {
-          const p = pts[i];
-          const wobble = ((hash2((p.x / 24) | 0, (p.y / 24) | 0, this.seed ^ 0x9911) >>> 0) / 4294967296 - 0.5) * 10;
-          const sx = p.x + nx * (road.width * 0.35 + wobble);
-          const sy = p.y + ny * (road.width * 0.35 + wobble);
-          ctx.fillStyle = "rgba(82,70,54,0.14)";
-          ctx.fillRect(sx - 1, sy - 7, 2, 9);
-          ctx.fillStyle = "rgba(166,150,122,0.12)";
-          ctx.fillRect(sx + 1, sy - 7, 5, 1.5);
-        }
-
-        for (let i = 1; i < pts.length; i++) {
-          const a = pts[i - 1];
-          const b = pts[i];
-          const dx = b.x - a.x;
-          const dy = b.y - a.y;
-          const len = Math.hypot(dx, dy) || 1;
-          const nx = -dy / len;
-          const ny = dx / len;
-          const mx = (a.x + b.x) * 0.5;
-          const my = (a.y + b.y) * 0.5;
-          const side = ((hash2((mx / 28) | 0, (my / 28) | 0, this.seed ^ 0x600d) >>> 0) / 4294967296 - 0.5) * 14;
-          if (((i + road.width) % 2) === 0) {
-            ctx.fillStyle = "rgba(58,52,42,0.14)";
-            ctx.beginPath();
-            ctx.ellipse(mx + nx * side, my + ny * side, 4.5, 2.4, Math.atan2(dy, dx), 0, Math.PI * 2);
-            ctx.fill();
+        for (let s = 1; s < steps; s++) {
+          const t = s / steps;
+          const x = a.x + dx * t + (Math.sin(t * 40) * 3);
+          const y = a.y + dy * t + (Math.cos(t * 40) * 3);
+          const speck = hash2(Math.floor(x / 9), Math.floor(y / 9), this.seed) / 4294967296;
+          if (speck < 0.65) {
+            ctx.fillStyle = speck < 0.35 ? "#a37e5c" : "#d4c2a0";
+            ctx.fillRect(x - 1.2, y - 1.2, 2.4, 2.4);
           }
         }
       }
@@ -9439,36 +9402,23 @@ export default class World {
       ctx.translate(b.cx, b.cy);
       ctx.rotate(angle);
 
-      ctx.fillStyle = "rgba(16,12,8,0.26)";
-      ctx.fillRect(-length * 0.5 + 4, -width * 0.5 + 5, length, width);
-
       ctx.fillStyle = "#7b5934";
       ctx.fillRect(-length * 0.5, -width * 0.5, length, width);
       ctx.fillStyle = "#9a7042";
       ctx.fillRect(-length * 0.5, -width * 0.5, length, width);
 
       ctx.fillStyle = "rgba(246,220,174,0.28)";
-      const plankStep = 8;
-      for (let x = -length * 0.5 + 5; x < length * 0.5 - 2; x += plankStep) {
-        ctx.fillRect(x, -width * 0.5 + 2, 2, width - 4);
+      const plankStep = 9;
+      for (let x = -length * 0.5 + 6; x < length * 0.5 - 4; x += plankStep) {
+        ctx.fillRect(x, -width * 0.5 + 3, 4, width - 6);
       }
+
       ctx.fillStyle = "rgba(44,28,15,0.34)";
-      ctx.fillRect(-length * 0.5, -width * 0.5 + 3, length, 2);
-      ctx.fillRect(-length * 0.5, width * 0.5 - 5, length, 2);
-      ctx.fillStyle = "rgba(255,235,190,0.20)";
-      ctx.fillRect(-length * 0.5 + 4, -width * 0.5 + 5, length - 8, 2);
+      ctx.fillRect(-length * 0.5, -width * 0.5 + 3, length, 4);
+      ctx.fillRect(-length * 0.5, width * 0.5 - 7, length, 4);
 
-      ctx.strokeStyle = "rgba(70,46,22,0.44)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(-length * 0.5 + 6, -width * 0.5 + 6);
-      ctx.lineTo(-length * 0.5 + 6, width * 0.5 - 6);
-      ctx.moveTo(length * 0.5 - 6, -width * 0.5 + 6);
-      ctx.lineTo(length * 0.5 - 6, width * 0.5 - 6);
-      ctx.stroke();
-
-      ctx.strokeStyle = "rgba(210,178,132,0.20)";
-      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = "rgba(210,178,132,0.65)";
+      ctx.lineWidth = 2.5;
       ctx.beginPath();
       ctx.moveTo(-length * 0.5 + 6, -width * 0.5 + 7);
       ctx.lineTo(length * 0.5 - 6, -width * 0.5 + 7);
@@ -10060,15 +10010,12 @@ export default class World {
     }
     let isWater = isLake || isRiver;
 
-    // absolute spawn safety basin for lakes/terrain water. Rivers are routed away
-    // during generation so collision, map, and visuals never disagree.
     if (spawnDist < this._spawnSafeRadius) {
       isLake = false;
       isWater = isRiver;
     }
 
     const mountainBase = this._mountainBaseAt(x, y, ground, isWater);
-    const isMountainWall = mountainBase;
 
     const moisture = this._moistureAt(x, y);
 
@@ -10114,7 +10061,6 @@ export default class World {
       color = "#6aa04f";
     }
 
-    // soften spawn meadow visually too
     if (spawnDist < this._spawnSafeRadius) {
       zone = "meadow";
       color = spawnDist < this._spawnSafeRadius * 0.68 ? "#76b45c" : "#6eaa57";
@@ -10132,6 +10078,8 @@ export default class World {
     if (bridge) {
       color = "#8a6a42";
     }
+
+    const isMountainWall = mountainBase || zone === "stone flats";
 
     return {
       ground,
@@ -10313,7 +10261,7 @@ export default class World {
       const ty = dy / len;
       const nx = -ty;
       const ny = tx;
-      const passCount = (range.seed & 1) === 0 ? 2 : 1;
+      const passCount = 1;
 
       for (let i = 0; i < passCount; i++) {
         const t = passCount === 1
@@ -10331,8 +10279,8 @@ export default class World {
           ny,
           tx,
           ty,
-          width: range.width * (0.34 + i * 0.04),
-          length: 420 + ((range.seed >>> (i ? 19 : 23)) & 15) * 22,
+          width: range.width * (0.48 + i * 0.08),
+          length: 480 + ((range.seed >>> (i ? 19 : 23)) & 15) * 22,
           rangeSeed: range.seed,
         });
       }
@@ -10469,8 +10417,9 @@ export default class World {
     const ridge = this._mountainInfluenceAt(x, y);
     const pass = this._mountainPassInfluenceAt(x, y);
     const highland = clamp((ground - 0.74) / 0.16, 0, 1);
-    const effectiveRidge = ridge - pass * 0.95;
-    return effectiveRidge > 0.52 || (effectiveRidge > 0.24 && highland > 0.76);
+
+    const effectiveRidge = ridge - pass * 1.28;
+    return effectiveRidge > 0.65 || (effectiveRidge > 0.35 && highland > 0.78);
   }
 
   _riverAt(x, y) {
@@ -10868,8 +10817,8 @@ export default class World {
       unlinked.splice(unlinked.indexOf(best.to), 1);
     }
 
-    for (const n of nearest(spawnNode, ["camp"], 2)) this._addRoadSegment(spawnNode, n, 20);
-    for (const n of nearest(spawnNode, ["waystone"], 1)) this._addRoadSegment(spawnNode, n, 17);
+    for (const n of nearest(spawnNode, ["camp"], 3)) this._addRoadSegment(spawnNode, n, 20);
+    for (const n of nearest(spawnNode, ["waystone"], 2)) this._addRoadSegment(spawnNode, n, 17);
 
     for (const n of this.roadNodes.filter((node) => node.type === "dock" || node.type === "dungeon")) {
       const target = nearest(n, ["town", "camp", "waystone"], 1)[0];
@@ -11069,7 +11018,9 @@ export default class World {
 
     let isWater = ground < 0.245 || river < this._riverWaterLimit;
     if (spawnDist < this._spawnSafeRadius && river >= this._riverWaterLimit) isWater = false;
-    const isMountain = this._mountainBaseAt(x, y, ground, isWater);
+    let isMountain = this._mountainBaseAt(x, y, ground, isWater);
+
+    if (!isMountain && ground > 0.70 && !isWater) isMountain = true;
 
     return {
       ground,
@@ -11163,14 +11114,14 @@ export default class World {
   _buildMapPreview() {
     if (this._mapInfo && this._mapCanvas) return;
     const originalSize = this._mapSize;
-    this._mapSize = this._mapPreviewSize || 96;
+    this._mapSize = this._mapPreviewSize || 120;
     this._buildMapInfo();
     this._mapSize = originalSize;
     this._mapDirty = true;
   }
 
   _buildMapInfoChunk() {
-    const size = this._mapSize || 320;
+    const size = this._mapSize || 240;
     if (!this._mapBuildState) {
       const canvas = typeof document !== "undefined" ? document.createElement("canvas") : null;
       if (canvas) {
@@ -11197,7 +11148,7 @@ export default class World {
     }
 
     const state = this._mapBuildState;
-    const budgetEnd = performance.now() + 14;
+    const budgetEnd = performance.now() + 28;
 
     while (state.row < state.size && performance.now() < budgetEnd) {
       const r = state.row++;
@@ -11286,7 +11237,7 @@ export default class World {
   }
 
   _buildMapInfo() {
-    const size = this._mapSize || 320;
+    const size = this._mapSize || 240;
     const canvas = typeof document !== "undefined" ? document.createElement("canvas") : null;
     if (canvas) {
       canvas.width = size;
@@ -11363,9 +11314,67 @@ export default class World {
     this._discoveryExportCache = null;
     this._mapDirty = false;
   }
+
+  _generateTrees() {
+    const trees = [];
+    const count = 2000;
+    for (let i = 0; i < count; i++) {
+      const tx = this._rng.range(-this.mapHalfSize + 500, this.mapHalfSize - 500);
+      const ty = this._rng.range(-this.mapHalfSize + 500, this.mapHalfSize - 500);
+      
+      const s = this._sampleCell(tx, ty);
+      if ((s.zone === "meadow" || s.zone === "greenwood" || s.zone === "forest" || s.zone === "deep wilds") 
+          && !s.isMountainWall && !s.isWater) {
+        const isForest = s.zone === "forest" || s.zone === "deep wilds";
+        trees.push({
+          x: tx,
+          y: ty,
+          seed: (this.seed + i * 123) >>> 0,
+          scale: isForest ? 1.1 + (this._rng.next() * 0.7) : 0.9 + (this._rng.next() * 0.6)
+        });
+      }
+    }
+    return trees;
+  }
+
+  _drawTree(ctx, x, y, seed, scale) {
+    const trunkH = 42 * scale;
+    const trunkW = 12 * scale;
+    
+    ctx.fillStyle = "#3f2a1e";
+    ctx.fillRect(x - trunkW / 2, y - trunkH + 8, trunkW, trunkH);
+    
+    ctx.fillStyle = "#2e6b2e";
+    const foliageY = y - trunkH - 8;
+    ctx.beginPath();
+    ctx.ellipse(x, foliageY, 24 * scale, 19 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+    
+    ctx.fillStyle = "#3a8c3a";
+    ctx.beginPath();
+    ctx.ellipse(x - 5, foliageY - 14, 19 * scale, 15 * scale, -0.2, 0, Math.PI * 2);
+    ctx.fill();
+    
+    if (((seed >>> 8) & 3) === 0) {
+      ctx.fillStyle = "#1e5a1e";
+      ctx.beginPath();
+      ctx.ellipse(x - 10, foliageY - 10, 10 * scale, 8 * scale, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  _drawTrees(ctx, left, top, right, bottom) {
+    const cullLeft = left - 100;
+    const cullRight = right + 100;
+    const cullTop = top - 100;
+    const cullBottom = bottom + 100;
+
+    for (const t of this._trees) {
+      if (t.x < cullLeft || t.x > cullRight || t.y < cullTop || t.y > cullBottom) continue;
+      this._drawTree(ctx, t.x, t.y, t.seed, t.scale);
+    }
+  }
 }
-
-
 ===== ./tools/check-broke-knight.ps1 =====
 param(
   [string]$BaseUrl = $env:BROKE_KNIGHT_URL
@@ -11438,7 +11447,6 @@ if ($failed) {
 
 Write-Host "Broke Knight checks passed"
 
-
 ===== ./tools/update-project-snapshot.ps1 =====
 $ErrorActionPreference = "Stop"
 
@@ -11478,3 +11486,4 @@ $text = $builder.ToString().TrimEnd()
 [System.IO.File]::WriteAllText($outPath, $text, $utf8NoBom)
 
 Write-Host "Updated $outPath"
+
