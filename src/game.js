@@ -19,7 +19,7 @@ import Save from "./save.js";
 const DEV_RESET_CONFIRM_MS = 2500;
 const DEV_TOOL_ACTION_COUNT = 9;
 const SHOP_ACTION_COUNT = 4;
-const TOWN_ACTION_COUNT = 8;
+const TOWN_ACTION_COUNT = 9;
 const EQUIPMENT_SLOTS = ["weapon", "armor", "helm", "boots", "ring", "trinket"];
 const SKILL_PANEL_ORDER = ["q", "w", "e", "r"];
 const QUEST_PANEL_HEIGHT = 420;
@@ -152,7 +152,7 @@ export default class Game {
     this.skillDefs = {
       q: { key: "q", name: "Spark", mana: 8, cd: 0.22, color: "#8be9ff" },
       w: { key: "w", name: "Nova", mana: 18, cd: 1.8, color: "#d6f5ff" },
-      e: { key: "e", name: "Dash", mana: 14, cd: 2.8, color: "#ffd36e" },
+      e: { key: "e", name: "Blink", mana: 14, cd: 2.8, color: "#ffd36e" },
       r: { key: "r", name: "Orb", mana: 22, cd: 3.4, color: "#c08cff" },
     };
 
@@ -195,6 +195,9 @@ export default class Game {
       floor: 0,
       origin: null,
       room: null,
+      roomIndex: 0,
+      totalRooms: 0,
+      roomRewarded: false,
     };
 
     this.dev = {
@@ -228,6 +231,7 @@ export default class Game {
     this.hero.state.hurtT = 0;
     this.hero.state.slowT = 0;
     this.hero.state.poisonT = 0;
+    this.hero.state.mountainPassAccess = !!this.progress?.storyMilestones?.mountainPassAccess;
 
     this._spawnInitialEnemies();
     this._ensureHeroSafe(true);
@@ -250,7 +254,9 @@ export default class Game {
     this._tickMessages(dt);
     this._tickCooldowns(dt);
     this._tickVisualEffects(dt);
+    this.world?.update?.(dt);
     this._updateMouseWorld();
+    this._applyTerrainEffects(dt);
     this.world?.revealAround?.(this.hero.x, this.hero.y, this.dungeon.active ? 460 : 720);
     this._updateNearbyPOIs(dt);
 
@@ -550,7 +556,7 @@ export default class Game {
   _triggerTouchButton(key) {
     if (key === "q") this._castSpark();
     else if (key === "w") this._castNova();
-    else if (key === "e") this._castDash();
+    else if (key === "e") this._castBlink();
     else if (key === "r") this._castOrb();
     else if (key === "f" && this._interactCd <= 0 && !this.menu.open) {
       this._interactCd = 0.18;
@@ -792,13 +798,13 @@ export default class Game {
       this._msg("Dev: dragon spawned", 0.9);
     }
     if (action === 6) {
-      const lair = this._nearest(this.world.dragonLairs);
-      if (lair) {
-        this.hero.x = lair.x - 120;
-        this.hero.y = lair.y;
+      const dock = this._nearest(this.world.docks);
+      if (dock) {
+        this.hero.x = dock.x - 56;
+        this.hero.y = dock.y + 18;
         this.camera.x = this.hero.x;
         this.camera.y = this.hero.y;
-        this._msg("Dev: nearest dragon lair", 0.9);
+        this._msg("Dev: nearest dock", 0.9);
       }
     }
     if (action === 7) {
@@ -830,7 +836,7 @@ export default class Game {
       "3 grant one level worth of XP",
       "4 reveal entire world map",
       "5 spawn a dragon nearby",
-      "6 teleport near closest dragon lair",
+      "6 teleport near closest dock",
       `7 god mode ${this.dev?.godMode ? "ON" : "OFF"}`,
       "8 equip mythic best gear",
       this._isDevResetConfirmLive() ? "9 reset to a new game (press again now)" : "9 reset to a new game (confirm)",
@@ -890,7 +896,7 @@ export default class Game {
           statusColor,
           affordable,
           xpText: `XP ${xp} / ${need}`,
-          infoText: this._classSkillInfo?.(key) || "Balanced scaling",
+          infoText: this._skillUpgradeSummary?.(key, s.level || 1) || "Balanced scaling",
           xpFrac: clamp(xp / Math.max(1, need), 0, 1),
         };
       }),
@@ -986,7 +992,7 @@ export default class Game {
       crossedBridges: new Set(),
     };
     this.hero.classId = "knight";
-    this.dungeon = { active: false, floor: 0, origin: null, room: null };
+    this.dungeon = { active: false, floor: 0, origin: null, room: null, roomIndex: 0, totalRooms: 0, roomRewarded: false };
     this.menu.open = null;
     this.menu.mapZoom = 1;
     this.trackedObjective = "story";
@@ -1042,6 +1048,27 @@ export default class Game {
     if (this._canHeroMoveTo(this.hero.x, ny)) this.hero.y = ny;
   }
 
+  _applyTerrainEffects(dt) {
+    if (this.dungeon.active || !this.world || !this.hero) return;
+    this._terrainFxT = Math.max(0, (this._terrainFxT || 0) - dt);
+    if (this._terrainFxT > 0) return;
+    this._terrainFxT = 0.42;
+
+    const info = this.world.getZoneInfo?.(this.hero.x, this.hero.y);
+    const zone = String(info?.zone || info?.name || "").toLowerCase();
+    if (!zone) return;
+
+    if (zone === "meadow" || zone === "whisper grass" || zone === "old fields") {
+      if ((this.hero.hp || 0) < (this.hero.maxHp || 0)) {
+        this.hero.hp = Math.min(this.hero.maxHp || 0, (this.hero.hp || 0) + 1);
+      }
+    } else if (zone === "greenwood" || zone === "forest" || zone === "deep wilds") {
+      if ((this.hero.mana || 0) < (this.hero.maxMana || 0)) {
+        this.hero.mana = Math.min(this.hero.maxMana || 0, (this.hero.mana || 0) + 1);
+      }
+    }
+  }
+
   _canHeroMoveTo(x, y) {
     if (this.dungeon.active) return this._canMoveInDungeon(x, y);
     return this.world.canWalk(x, y, this.hero);
@@ -1061,7 +1088,7 @@ export default class Game {
 
     if (this.input.wasPressed("q") || this.input.wasPressed("Q")) this._castSpark();
     if (this.input.wasPressed("w") || this.input.wasPressed("W")) this._castNova();
-    if (this.input.wasPressed("e") || this.input.wasPressed("E")) this._castDash();
+    if (this.input.wasPressed("e") || this.input.wasPressed("E")) this._castBlink();
     if (this.input.wasPressed("r") || this.input.wasPressed("R")) this._castOrb();
 
     if (this.mouse.down) this._castSpark();
@@ -1275,6 +1302,7 @@ export default class Game {
     else if (action === 6) this._townCycleOath();
     else if (action === 7) this._townTakeContract();
     else if (action === 8) this._townBuyMapClue();
+    else if (action === 9) this._townBuyPassage();
   }
 
   getTownMenuLines(town = this._cachedNearbyTown) {
@@ -1283,6 +1311,7 @@ export default class Game {
     const restCost = Math.max(0, Math.min(28, 8 + (this.hero?.level || 1) * 2));
     const forgeCost = 58 + (this.hero?.level || 1) * 9;
     const clueCost = 36 + (this.hero?.level || 1) * 4;
+    const passage = this._getTownPassageInfo(town);
     return {
       npcs,
       lines: [
@@ -1294,15 +1323,20 @@ export default class Game {
         "6 Change oath / class",
         "7 Take town contract",
         `8 Buy cartographer clue (${clueCost}g)`,
+        passage.available
+          ? `9 Pay passage to ${passage.destinationName} (${passage.cost}g)`
+          : town?.coastal
+            ? "9 Harbor route unavailable"
+            : "9 No harbor in this town",
         visited ? `${npcs[0]}: Roads are safer when camps are cleared.` : `${npcs[0]}: First visit supplies were added.`,
       ],
-      npcSummary: `${npcs.join(", ")} are available. Current oath: ${this._className?.() || "Knight"}.`,
+      npcSummary: `${npcs.join(", ")} are available. Current oath: ${this._className?.() || "Knight"}.${town?.coastal ? " Harbor passage is available here." : ""}`,
     };
   }
 
   getTownPanelLayout() {
     const w = Math.min(Math.max(this.w - 120, 430), 560);
-    const h = 354;
+    const h = 376;
     const x = ((this.w - w) / 2) | 0;
     const y = ((this.h - h) / 2) | 0;
     return {
@@ -1311,7 +1345,7 @@ export default class Game {
       x,
       y,
       actionTop: 82,
-      actionBottom: 280,
+      actionBottom: 304,
       rowStart: 91,
       rowStep: 21,
     };
@@ -1326,11 +1360,11 @@ export default class Game {
     const info = {
       knight: {
         w: "Nova radius +14%",
-        e: "Dash grants longer guard",
+        e: "Blink grants longer guard",
       },
       ranger: {
         q: "Spark speed +14%",
-        e: "Dash distance +18%",
+        e: "Blink distance +18%",
       },
       arcanist: {
         q: "Spark damage +12%",
@@ -1339,11 +1373,66 @@ export default class Game {
       },
       raider: {
         q: "Spark damage +8%",
-        e: "Dash distance +24%",
+        e: "Blink distance +24%",
         r: "Orb speed +12%",
       },
     };
     return info[classId]?.[key] || "Balanced scaling";
+  }
+
+  _skillUpgradeSummary(key, level = 1) {
+    const lines = {
+      q: [
+        "Single bolt",
+        "Single bolt",
+        "Single bolt",
+        "Single bolt",
+        "Two-shot spread",
+        "Two-shot spread",
+        "Two-shot spread",
+        "Two-shot spread",
+        "Two-shot spread",
+        "Three-shot spread",
+      ],
+      w: [
+        "Close shock ring",
+        "Close shock ring",
+        "Close shock ring",
+        "Close shock ring",
+        "Slow shock ring",
+        "Slow shock ring",
+        "Slow shock ring",
+        "Slow shock ring",
+        "Slow shock ring",
+        "Wide lingering shock ring",
+      ],
+      e: [
+        "Short blink",
+        "Short blink",
+        "Short blink",
+        "Short blink",
+        "Long river blink",
+        "Long river blink",
+        "Long river blink",
+        "Long river blink",
+        "Long river blink",
+        "Blink landing burst",
+      ],
+      r: [
+        "Arcane orb",
+        "Arcane orb",
+        "Arcane orb",
+        "Arcane orb",
+        "Piercing orb",
+        "Piercing orb",
+        "Piercing orb",
+        "Piercing orb",
+        "Piercing orb",
+        "Bursting orb",
+      ],
+    };
+    const bucket = lines[key] || [];
+    return bucket[Math.max(0, Math.min(bucket.length - 1, (level | 0) - 1))] || "Balanced scaling";
   }
 
   _usePotion(kind) {
@@ -1377,22 +1466,32 @@ export default class Game {
     this.cooldowns.q = def.cd;
 
     const dir = norm(this.hero.aimDir?.x || 1, this.hero.aimDir?.y || 0);
+    const sparkLevel = Math.max(1, this.skillProg.q?.level || 1);
     const hit = this._rollHeroDamage((this.hero.classId === "arcanist" ? 1.06 : this.hero.classId === "raider" ? 1.02 : 0.95));
-    const sparkSpeed = this.hero.classId === "ranger" ? 308 : 270;
+    const sparkSpeed = (this.hero.classId === "ranger" ? 308 : 270) * (1 + Math.min(0.12, Math.floor((sparkLevel - 1) / 5) * 0.06));
+    const pierce = sparkLevel >= 10 ? 1 : 0;
+    const shotCount = sparkLevel >= 10 ? 3 : sparkLevel >= 5 ? 2 : 1;
+    const angles = shotCount === 3 ? [0, -0.18, 0.18] : shotCount === 2 ? [-0.09, 0.09] : [0];
 
-    this.projectiles.push(
-      new Projectile(
-        this.hero.x + dir.x * 18,
-        this.hero.y + dir.y * 18,
-        dir.x * sparkSpeed,
-        dir.y * sparkSpeed,
-        hit.dmg,
-        1.25,
-        this.hero.level,
-        { friendly: true, color: "rgba(148,225,255,0.95)", radius: 4, hitRadius: 15 }
-      )
-    );
-    this.projectiles[this.projectiles.length - 1].crit = hit.crit;
+    for (const angleOffset of angles) {
+      const ca = Math.cos(angleOffset);
+      const sa = Math.sin(angleOffset);
+      const vx = dir.x * ca - dir.y * sa;
+      const vy = dir.x * sa + dir.y * ca;
+      this.projectiles.push(
+        new Projectile(
+          this.hero.x + vx * 18,
+          this.hero.y + vy * 18,
+          vx * sparkSpeed,
+          vy * sparkSpeed,
+          hit.dmg,
+          1.25 + (sparkLevel >= 10 ? 0.12 : 0),
+          this.hero.level,
+          { friendly: true, color: "rgba(148,225,255,0.95)", radius: 4, hitRadius: 15, pierce }
+        )
+      );
+      this.projectiles[this.projectiles.length - 1].crit = hit.crit;
+    }
 
     this.skillProg.q.xp += 1;
     this._checkSkillLevel("q");
@@ -1405,8 +1504,13 @@ export default class Game {
 
     this.cooldowns.w = def.cd;
 
+    const novaLevel = Math.max(1, this.skillProg.w?.level || 1);
     const hit = this._rollHeroDamage(this.hero.classId === "arcanist" ? 1.18 : 1.1);
-    const novaRadius = this.hero.classId === "arcanist" ? 103 : this.hero.classId === "knight" ? 98 : 86;
+    const baseRadius = this.hero.classId === "arcanist" ? 103 : this.hero.classId === "knight" ? 98 : 86;
+    const novaRadius = baseRadius + (novaLevel >= 10 ? 34 : novaLevel >= 5 ? 16 : 0);
+    const slow = novaLevel >= 10 ? 0.65 : novaLevel >= 5 ? 0.42 : 0;
+    const novaLife = novaLevel >= 10 ? 0.6 : novaLevel >= 5 ? 0.5 : 0.45;
+    const knockback = novaLevel >= 10 ? 96 : 0;
 
     this.projectiles.push(
       new Projectile(
@@ -1415,7 +1519,7 @@ export default class Game {
         0,
         0,
         hit.dmg,
-        0.45,
+        novaLife,
         this.hero.level,
         {
           friendly: true,
@@ -1424,6 +1528,8 @@ export default class Game {
           radius: 14,
           hitRadius: novaRadius,
           ignoreWalls: true,
+          slow,
+          knockback,
         }
       )
     );
@@ -1433,7 +1539,7 @@ export default class Game {
     this._checkSkillLevel("w");
   }
 
-  _castDash() {
+  _castBlink() {
     if (this.cooldowns.e > 0) return;
     const def = this.skillDefs.e;
     if (!this.hero.spendMana(def.mana)) return;
@@ -1445,19 +1551,26 @@ export default class Game {
       this.hero.aimDir?.y || this.hero.lastMove?.y || 0
     );
 
-    const dashLevel = Math.max(1, this.skillProg.e?.level || 1);
+    const blinkLevel = Math.max(1, this.skillProg.e?.level || 1);
     const classDashMul = this.hero.classId === "raider" ? 1.24 : this.hero.classId === "ranger" ? 1.18 : 1;
-    const dashDist = (54 + Math.min(126, (dashLevel - 1) * 18)) * classDashMul;
+    const dashDist = (blinkLevel >= 10 ? 182 : blinkLevel >= 5 ? 122 : 68) * classDashMul;
     const tx = this.hero.x + dir.x * dashDist;
     const ty = this.hero.y + dir.y * dashDist;
 
-    if (this._canDashTo(tx, ty, dir, dashDist, dashLevel)) {
+    if (this._canDashTo(tx, ty, dir, dashDist, blinkLevel)) {
       this.hero.x = tx;
       this.hero.y = ty;
-      if (dashLevel >= 4 && !this.dungeon.active) this._spawnFloatingText(this.hero.x, this.hero.y - 28, "River dash", "#ffd36e");
+      if (blinkLevel >= 5 && !this.dungeon.active) this._spawnFloatingText(this.hero.x, this.hero.y - 28, "River blink", "#ffd36e");
+      if (blinkLevel >= 10) {
+        const burstDmg = Math.max(1, Math.round((this.hero.getStats?.().dmg || 8) * 0.8));
+        this._spawnSpellBurst(this.hero.x, this.hero.y, 72, burstDmg, "rgba(255,211,110,0.88)", {
+          life: 0.26,
+          slow: 0.35,
+        });
+      }
     }
 
-    this.hero.state.dashT = (0.20 + Math.min(0.18, (dashLevel - 1) * 0.02)) + (this.hero.classId === "knight" ? 0.08 : 0);
+    this.hero.state.dashT = (0.20 + Math.min(0.18, (blinkLevel - 1) * 0.02)) + (this.hero.classId === "knight" ? 0.08 : 0);
     this.skillProg.e.xp += 2;
     this._checkSkillLevel("e");
   }
@@ -1465,7 +1578,7 @@ export default class Game {
   _canDashTo(tx, ty, dir, dashDist, dashLevel) {
     if (this.dungeon.active) return this._canMoveInDungeon(tx, ty);
 
-    const canCrossWater = dashLevel >= 4;
+    const canCrossWater = dashLevel >= 5;
     const steps = Math.max(2, Math.ceil(dashDist / 22));
     for (let i = 1; i <= steps; i++) {
       const px = this.hero.x + dir.x * dashDist * (i / steps);
@@ -1490,7 +1603,7 @@ export default class Game {
     ctx.fillRect(x - 900, y - 700, room.w + 1800, room.h + 1400);
 
     const floorLevel = Math.max(1, this.dungeon.floor || 1);
-    const bossDepth = floorLevel % 5 === 0;
+    const bossDepth = !!room.finalRoom;
     const theme = this._dungeonTheme(floorLevel);
     const aliveCount = this.enemies.reduce((n, e) => n + (e?.alive ? 1 : 0), 0);
     const clear = aliveCount <= 0;
@@ -1535,8 +1648,27 @@ export default class Game {
     ctx.lineWidth = 3;
     ctx.strokeRect(x + 33.5, y + 33.5, room.w - 67, room.h - 67);
 
+    const northGate = this._getDungeonExitAnchor("north", room);
+    const southGate = this._getDungeonExitAnchor("south", room);
+    const gateW = 118;
+    const gateH = 34;
+    const drawGate = (gate, label, active, topSide) => {
+      const gy = topSide ? y + 22 : y + room.h - 56;
+      ctx.fillStyle = active ? "rgba(139,233,255,0.18)" : "rgba(18,24,31,0.88)";
+      ctx.fillRect(gate.x - gateW * 0.5, gy, gateW, gateH);
+      ctx.strokeStyle = active ? (topSide && bossDepth ? "rgba(255,138,92,0.72)" : "rgba(139,233,255,0.72)") : "rgba(255,255,255,0.10)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(gate.x - gateW * 0.5 + 0.5, gy + 0.5, gateW - 1, gateH - 1);
+      ctx.fillStyle = active ? "#eaf8ff" : "#8493a6";
+      ctx.font = "bold 11px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(label, gate.x, gy + 21);
+    };
+    drawGate(northGate, clear ? (bossDepth ? "Victory Gate" : "Next Room") : "Locked Gate", clear, true);
+    drawGate(southGate, clear ? "Return Gate" : "Sealed Exit", clear, false);
+
     const rng = new RNG(room.seed || 1);
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 12; i++) {
       const px = x + 90 + rng.next() * (room.w - 180);
       const py = y + 80 + rng.next() * (room.h - 160);
       ctx.fillStyle = "rgba(0,0,0,0.26)";
@@ -1548,7 +1680,7 @@ export default class Game {
     }
 
     const sx = room.x;
-    const sy = y + 58;
+    const sy = y + 86;
     ctx.fillStyle = clear ? "rgba(139,233,255,0.22)" : "rgba(220,124,255,0.20)";
     ctx.beginPath();
     ctx.arc(sx, sy, 31, 0, Math.PI * 2);
@@ -1561,11 +1693,14 @@ export default class Game {
     ctx.fillStyle = "#f1d8ff";
     ctx.font = "bold 12px Arial";
     ctx.textAlign = "center";
-    ctx.fillText(clear ? "F" : `${aliveCount}`, sx, sy + 4);
+    ctx.fillText(clear ? "C" : `${aliveCount}`, sx, sy + 4);
 
     ctx.fillStyle = "rgba(240,226,255,0.88)";
     ctx.font = "bold 13px Arial";
-    ctx.fillText(`${theme.name} - Depth ${floorLevel}`, room.x, y + room.h - 18);
+    ctx.fillText(`${theme.name} - Room ${room.roomIndex || 1}/${room.totalRooms || 1}`, room.x, y + room.h - 18);
+    ctx.font = "11px Arial";
+    ctx.fillStyle = "rgba(214,225,239,0.76)";
+    ctx.fillText(clear ? (bossDepth ? "Use the north gate to finish or south gate to retreat" : "North gate goes deeper, south gate returns outside") : "Clear the room to open the gates", room.x, y + room.h - 36);
     ctx.restore();
   }
 
@@ -1626,9 +1761,12 @@ export default class Game {
 
     this.cooldowns.r = def.cd;
 
+    const orbLevel = Math.max(1, this.skillProg.r?.level || 1);
     const dir = norm(this.hero.aimDir?.x || 1, this.hero.aimDir?.y || 0);
     const hit = this._rollHeroDamage(this.hero.classId === "arcanist" ? 1.92 : 1.65);
-    const orbSpeed = this.hero.classId === "raider" ? 196 : 175;
+    const orbSpeed = (this.hero.classId === "raider" ? 196 : 175) + (orbLevel >= 10 ? 28 : orbLevel >= 5 ? 14 : 0);
+    const orbPierce = orbLevel >= 10 ? 2 : orbLevel >= 5 ? 1 : 0;
+    const burstRadius = orbLevel >= 10 ? 72 : orbLevel >= 5 ? 0 : 0;
 
     this.projectiles.push(
       new Projectile(
@@ -1637,15 +1775,47 @@ export default class Game {
         dir.x * orbSpeed,
         dir.y * orbSpeed,
         hit.dmg,
-        1.7,
+        1.7 + (orbLevel >= 3 ? 0.18 : 0),
         this.hero.level,
-        { friendly: true, color: "rgba(198,140,255,0.95)", radius: 8, hitRadius: 20 }
+        {
+          friendly: true,
+          color: "rgba(198,140,255,0.95)",
+          radius: 8 + (orbLevel >= 5 ? 1 : 0),
+          hitRadius: 20 + (orbLevel >= 5 ? 4 : 0),
+          pierce: orbPierce,
+          burstRadius,
+          burstColor: "rgba(214,176,255,0.92)",
+          burstSlow: orbLevel >= 10 ? 0.55 : 0.35,
+        }
       )
     );
     this.projectiles[this.projectiles.length - 1].crit = hit.crit;
 
     this.skillProg.r.xp += 3;
     this._checkSkillLevel("r");
+  }
+
+  _spawnSpellBurst(x, y, hitRadius, dmg, color, opts = {}) {
+    this.projectiles.push(
+      new Projectile(
+        x,
+        y,
+        0,
+        0,
+        dmg,
+        opts.life || 0.32,
+        this.hero.level,
+        {
+          friendly: true,
+          nova: true,
+          color: color || "rgba(214,245,255,0.92)",
+          radius: opts.radius || 12,
+          hitRadius,
+          ignoreWalls: true,
+          slow: opts.slow || 0,
+        }
+      )
+    );
   }
 
   _rollHeroDamage(mult = 1) {
@@ -1989,7 +2159,16 @@ export default class Game {
       }
 
       p.update?.(dt, this.world);
-      if (!p.alive) continue;
+      if (!p.alive) {
+        if (p.friendly && p.burstRadius && !p._burstDone) {
+          p._burstDone = true;
+          this._spawnSpellBurst(p.x, p.y, p.burstRadius, Math.max(1, Math.round((p.dmg || 1) * 0.55)), p.burstColor, {
+            life: 0.24,
+            slow: p.burstSlow || 0,
+          });
+        }
+        continue;
+      }
 
       if (p.friendly) {
         if (p.nova && !p._hitEnemies) p._hitEnemies = new Set();
@@ -2002,8 +2181,26 @@ export default class Game {
           if (dist2(p.x, p.y, e.x, e.y) <= rr * rr) {
             if (p.nova) p._hitEnemies.add(e);
             e.takeDamage?.(p.dmg || 1);
+            if (p.slow) e.slowT = Math.max(e.slowT || 0, p.slow);
+            if (p.knockback) {
+              const away = norm(e.x - p.x, e.y - p.y);
+              e.vx = (e.vx || 0) + away.x * p.knockback;
+              e.vy = (e.vy || 0) + away.y * p.knockback;
+            }
             this._spawnFloatingText(e.x, e.y - 12, p.crit ? `CRIT ${p.dmg || 1}` : `${p.dmg || 1}`, p.crit ? "#ffd86e" : "#ffffff");
-            if (!p.nova) p.alive = false;
+            if (!p.nova) {
+              if ((p.pierce || 0) > 0) {
+                p.pierce -= 1;
+              } else {
+                p.alive = false;
+                if (p.burstRadius) {
+                  this._spawnSpellBurst(p.x, p.y, p.burstRadius, Math.max(1, Math.round((p.dmg || 1) * 0.55)), p.burstColor, {
+                    life: 0.24,
+                    slow: p.burstSlow || 0,
+                  });
+                }
+              }
+            }
 
             if (!e.alive) {
               this.hero.giveXP?.(e.xpValue?.() || 4);
@@ -2018,7 +2215,7 @@ export default class Game {
               this._dropEnemyLoot(e);
               this._killFlashT = 0.22;
             }
-            if (!p.nova) break;
+            if (!p.nova && !p.alive) break;
           }
         }
       } else {
@@ -2166,8 +2363,25 @@ export default class Game {
       if (this._dungeonHasLivingEnemies()) {
         this._msg("Clear the floor first", 0.9);
       } else {
-        this._claimDungeonClearReward();
-        this._descendDungeon();
+        if (!this.dungeon.roomRewarded) {
+          this._claimDungeonClearReward();
+          this.dungeon.roomRewarded = true;
+        }
+        const finalRoom = !!this.dungeon.room?.finalRoom;
+        const nearNorth = this._isHeroNearDungeonExit("north");
+        const nearSouth = this._isHeroNearDungeonExit("south");
+        if (nearSouth) {
+          this._leaveDungeon();
+        } else if (nearNorth) {
+          if (finalRoom) {
+            this._msg("Dungeon cleared", 1.0);
+            this._leaveDungeon();
+          } else {
+            this._descendDungeon();
+          }
+        } else {
+          this._msg(finalRoom ? "North gate leaves victorious, south gate retreats" : "North gate deeper, south gate leaves", 1.1);
+        }
       }
       return;
     }
@@ -2383,6 +2597,65 @@ export default class Game {
     this.world?.revealAround?.(clue.target.x, clue.target.y, 520);
     this._spawnFloatingText(this.hero.x, this.hero.y - 42, "Map clue", "#8be9ff");
     this._msg(`Cartographer marked ${clue.label} -${cost}g`, 1.6);
+  }
+
+  _getTownPassageInfo(town = this._cachedNearbyTown) {
+    if (!town?.coastal || !town?.linkedDockId) {
+      return { available: false, destination: null, destinationName: "", cost: 0 };
+    }
+
+    const coastalTowns = (this.world?.towns || [])
+      .filter((t) => t?.coastal && t.id !== town.id && t.linkedDockId);
+    if (!coastalTowns.length) {
+      return { available: false, destination: null, destinationName: "", cost: 0 };
+    }
+
+    const unvisited = coastalTowns.filter((t) => !this.progress?.visitedTowns?.has?.(String(t.id)));
+    const pool = unvisited.length ? unvisited : coastalTowns;
+    pool.sort((a, b) => dist2(town.x, town.y, a.x, a.y) - dist2(town.x, town.y, b.x, b.y));
+    const destination = pool[0];
+    const travelDist = Math.sqrt(dist2(town.x, town.y, destination.x, destination.y));
+    const cost = Math.max(18, Math.min(90, 12 + Math.round(travelDist / 220)));
+    return {
+      available: true,
+      destination,
+      destinationName: destination.name || "Harbor town",
+      cost,
+    };
+  }
+
+  _townBuyPassage() {
+    const town = this._cachedNearbyTown;
+    const passage = this._getTownPassageInfo(town);
+    if (!passage.available || !passage.destination) {
+      this._msg(town?.coastal ? "No ship is sailing right now" : "This town has no harbor passage", 1.0);
+      return;
+    }
+    if ((this.hero.gold || 0) < passage.cost) {
+      this._msg(`Passage costs ${passage.cost}g`, 0.9);
+      return;
+    }
+
+    const destination = passage.destination;
+    const dock = (this.world?.docks || []).find((d) => d.id === destination.linkedDockId);
+    const arrival = dock || destination;
+
+    this.hero.gold -= passage.cost;
+    this.hero.state.sailing = false;
+    this.hero.x = arrival.x;
+    this.hero.y = arrival.y;
+    this.hero.vx = 0;
+    this.hero.vy = 0;
+    this.camera.x = this.hero.x;
+    this.camera.y = this.hero.y;
+
+    if (dock) this._rememberProgressId(this.progress.discoveredDocks, dock);
+    this._rememberProgressId(this.progress.visitedTowns, destination);
+    this.world?.revealAround?.(arrival.x, arrival.y, 760);
+    this._setTrackedObjective("town", null);
+    this.menu.open = null;
+    this._spawnFloatingText(this.hero.x, this.hero.y - 42, "Passage booked", "#8be9ff");
+    this._msg(`Sailed to ${destination.name} -${passage.cost}g`, 1.5);
   }
 
   _claimCampRestBonus(camp) {
@@ -2632,13 +2905,10 @@ export default class Game {
     this.dungeon.active = true;
     this.dungeon.floor = Math.max(1, (this.progress.dungeonBest || 0) + 1);
     this.dungeon.origin = { x: dungeonPoi.x, y: dungeonPoi.y };
-    this.dungeon.room = {
-      x: dungeonPoi.x,
-      y: dungeonPoi.y,
-      w: 780,
-      h: 540,
-      seed: hash2(this.seed, dungeonPoi.x | 0, dungeonPoi.y | 0, this.dungeon.floor),
-    };
+    this.dungeon.roomIndex = 1;
+    this.dungeon.totalRooms = 4;
+    this.dungeon.roomRewarded = false;
+    this.dungeon.room = this._makeDungeonRoom();
     this.hero.x = this.dungeon.room.x;
     this.hero.y = this.dungeon.room.y + 150;
     this.hero.vx = 0;
@@ -2650,7 +2920,7 @@ export default class Game {
     this.projectiles = [];
     this.loot = [];
 
-    this._msg(`${this._dungeonTheme(this.dungeon.floor).name} - Floor ${this.dungeon.floor}`, 1.2);
+    this._msg(`${this._dungeonTheme(this.dungeon.floor).name} - Room 1/${this.dungeon.totalRooms}`, 1.2);
     this._spawnDungeonWave();
   }
 
@@ -2658,12 +2928,9 @@ export default class Game {
     if (!this.dungeon.active) return;
     this.progress.dungeonBest = Math.max(this.progress.dungeonBest || 0, this.dungeon.floor || 0);
     this.dungeon.floor = Math.max(1, (this.dungeon.floor || 1) + 1);
-    this.dungeon.room = {
-      ...(this.dungeon.room || { x: this.hero.x, y: this.hero.y, w: 780, h: 540 }),
-      w: 780 + Math.min(180, this.dungeon.floor * 12),
-      h: 540 + Math.min(120, this.dungeon.floor * 8),
-      seed: hash2(this.seed, this.dungeon.floor, 4117),
-    };
+    this.dungeon.roomIndex = Math.min(this.dungeon.totalRooms || 4, (this.dungeon.roomIndex || 1) + 1);
+    this.dungeon.roomRewarded = false;
+    this.dungeon.room = this._makeDungeonRoom();
     this.hero.x = this.dungeon.room.x;
     this.hero.y = this.dungeon.room.y + this.dungeon.room.h * 0.28;
     this.camera.x = this.hero.x;
@@ -2675,7 +2942,43 @@ export default class Game {
     this.hero.mana = Math.min(this.hero.maxMana || 60, (this.hero.mana || 0) + 10);
     if (this.dungeon.floor % 3 === 0) this._awardRelicShards(1, "depths");
     this._spawnDungeonWave();
-    this._msg(`Descended: ${this._dungeonTheme(this.dungeon.floor).name} Floor ${this.dungeon.floor}`, 1.4);
+    this._msg(`Descended: ${this._dungeonTheme(this.dungeon.floor).name} Room ${this.dungeon.roomIndex}/${this.dungeon.totalRooms}`, 1.4);
+  }
+
+  _makeDungeonRoom() {
+    const floor = Math.max(1, this.dungeon.floor || 1);
+    const roomIndex = Math.max(1, this.dungeon.roomIndex || 1);
+    const totalRooms = Math.max(1, this.dungeon.totalRooms || 4);
+    const finalRoom = roomIndex >= totalRooms;
+    const seed = hash2(this.seed, floor, roomIndex, 4117);
+    const rng = new RNG(seed);
+    const baseW = finalRoom ? 920 : 680 + rng.range(0, 170);
+    const baseH = finalRoom ? 620 : 440 + rng.range(0, 130);
+    const scaleW = Math.min(170, floor * 8);
+    const scaleH = Math.min(110, floor * 6);
+    return {
+      x: this.dungeon.origin?.x || this.hero.x,
+      y: this.dungeon.origin?.y || this.hero.y,
+      w: baseW + scaleW,
+      h: baseH + scaleH,
+      seed,
+      finalRoom,
+      roomIndex,
+      totalRooms,
+    };
+  }
+
+  _getDungeonExitAnchor(which = "north", room = this.dungeon.room) {
+    const r = room || this.dungeon.room || { x: this.hero.x, y: this.hero.y, w: 780, h: 540 };
+    return which === "south"
+      ? { x: r.x, y: r.y + r.h * 0.5 - 52 }
+      : { x: r.x, y: r.y - r.h * 0.5 + 52 };
+  }
+
+  _isHeroNearDungeonExit(which = "north", radius = 82) {
+    if (!this.dungeon.active) return false;
+    const p = this._getDungeonExitAnchor(which);
+    return dist2(this.hero.x, this.hero.y, p.x, p.y) <= radius * radius;
   }
 
   _dungeonHasLivingEnemies() {
@@ -2684,6 +2987,7 @@ export default class Game {
 
   _claimDungeonClearReward() {
     const floor = Math.max(1, this.dungeon.floor || 1);
+    const room = this.dungeon.room || {};
     const gold = 16 + floor * 7 + Math.round((this.hero.level || 1) * 2.5);
     this.hero.gold += gold;
     this.hero.giveXP?.(8 + floor * 3);
@@ -2703,19 +3007,30 @@ export default class Game {
       this._spawnFloatingText(this.hero.x, this.hero.y - 58, `Gear PWR ${gear.score || "-"}`, gear.color || "#dc7cff");
     }
 
+    if (room.finalRoom) {
+      const done = this.progress.storyMilestones || (this.progress.storyMilestones = {});
+      if (!done.mountainPassAccess) {
+        done.mountainPassAccess = true;
+        this.hero.state.mountainPassAccess = true;
+        this._spawnFloatingText(this.hero.x, this.hero.y - 74, "Pass Sigil", "#8be9ff");
+        this._msg("Dungeon reward: mountain passes can now be crossed on foot", 2.0);
+      }
+    }
+
     this._spawnFloatingText(this.hero.x, this.hero.y - 38, `${this._dungeonTheme(floor).name} clear +${gold}g`, "#ffd86e");
   }
 
   _spawnDungeonWave() {
     const floor = Math.max(1, this.dungeon.floor || 1);
-    const count = Math.min(12, 4 + floor);
-    const bossFloor = floor % 3 === 0;
+    const room = this.dungeon.room;
+    const finalRoom = !!room?.finalRoom;
+    const count = finalRoom ? Math.min(8, 4 + Math.ceil(floor * 0.45)) : Math.min(10, 3 + Math.ceil(floor * 0.6));
+    const bossFloor = finalRoom;
     const theme = this._dungeonTheme(floor);
 
     for (let i = 0; i < count; i++) {
       const a = (i / count) * Math.PI * 2 + floor * 0.31;
       const r = 220 + (i % 3) * 65;
-      const room = this.dungeon.room;
       const rawX = this.hero.x + Math.cos(a) * r;
       const rawY = this.hero.y + Math.sin(a) * r;
       const x = room ? clamp(rawX, room.x - room.w * 0.5 + 80, room.x + room.w * 0.5 - 80) : rawX;
@@ -2725,7 +3040,7 @@ export default class Game {
       this.enemies.push(this._applyEnemyAffix(enemy));
     }
 
-    if (floor % 5 === 0) {
+    if (finalRoom && floor >= 5 && floor % 4 === 0) {
       const room = this.dungeon.room;
       const bx = room ? room.x + room.w * 0.30 : this.hero.x + 280;
       const by = room ? room.y - room.h * 0.18 : this.hero.y - 40;
@@ -2747,6 +3062,9 @@ export default class Game {
     this.progress.dungeonBest = Math.max(this.progress.dungeonBest || 0, this.dungeon.floor || 0);
     this.dungeon.active = false;
     this.dungeon.room = null;
+    this.dungeon.roomIndex = 0;
+    this.dungeon.totalRooms = 0;
+    this.dungeon.roomRewarded = false;
 
     this.camera.x = this.hero.x;
     this.camera.y = this.hero.y;
@@ -3204,7 +3522,7 @@ export default class Game {
   }
 
   _ensureHeroSafe(showMsg = false) {
-    const onSafeGround = this.world.canWalk?.(this.hero.x, this.hero.y, { state: { sailing: false } });
+    const onSafeGround = this.world.canWalk?.(this.hero.x, this.hero.y, { state: { sailing: false, mountainPassAccess: !!this.hero.state?.mountainPassAccess } });
     if (onSafeGround) {
       return;
     }
@@ -3385,6 +3703,8 @@ export default class Game {
           this.world?.importDiscovery?.(data.progress.exploredCells || []);
         }
       }
+
+      this.hero.state.mountainPassAccess = !!this.progress?.storyMilestones?.mountainPassAccess;
 
       if (typeof data.trackedObjective === "string") {
         this.trackedObjective = data.trackedObjective;

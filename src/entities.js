@@ -225,11 +225,14 @@ export class Hero {
     return out;
   }
 
-  getMoveSpeed() {
+  getMoveSpeed(env = null) {
     const st = this.getStats();
     let speed = 150 + st.move * 160;
     if ((this.state?.dashT || 0) > 0) speed *= 1.45;
     if (this.state?.sailing) speed *= 1.18;
+    const world = env?.world || env;
+    const terrainMod = world?.getMoveModifier?.(this.x, this.y) ?? 1;
+    speed *= terrainMod;
     return speed;
   }
 
@@ -292,9 +295,11 @@ export class Hero {
     const shape = weaponShapeFromRarity(rarity);
     const bladeColor = sword?.color || "#dce9f5";
     const a = Math.atan2(aim.y, aim.x);
+    const handX = 7;
+    const handY = -1.5;
 
     ctx.save();
-    ctx.translate(aim.x * 7, aim.y * 1);
+    ctx.translate(handX, handY);
     ctx.rotate(a);
 
     ctx.fillStyle = "#e2c3b0";
@@ -385,6 +390,11 @@ export class Hero {
     ctx.fillStyle = "rgba(0,0,0,0.18)";
     ctx.beginPath();
     ctx.ellipse(0, 14, 14, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(120,180,255,0.08)";
+    ctx.beginPath();
+    ctx.ellipse(0, 2, 18, 14, 0, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.strokeStyle = "rgba(230,240,255,0.18)";
@@ -580,6 +590,30 @@ export class Hero {
       ctx.fill();
     }
 
+    ctx.save();
+    ctx.translate(-8, 0);
+    ctx.rotate(-0.18);
+    ctx.fillStyle = alphaColor(mixColor(armorColor, "#2d394c", 0.45), 0.92);
+    ctx.beginPath();
+    ctx.moveTo(-5, -7);
+    ctx.lineTo(4, -5);
+    ctx.lineTo(6, 2);
+    ctx.lineTo(0, 9);
+    ctx.lineTo(-7, 3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "rgba(236,242,248,0.34)";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(-4, -4);
+    ctx.lineTo(2, -3);
+    ctx.lineTo(3, 1);
+    ctx.lineTo(-1, 5);
+    ctx.lineTo(-5, 2);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+
     if (armorItem?.rarity === "rare" || armorItem?.rarity === "epic") {
       ctx.strokeStyle = armorItem.rarity === "epic" ? "rgba(226,194,255,0.75)" : "rgba(185,225,255,0.68)";
       ctx.lineWidth = 1.5;
@@ -662,6 +696,7 @@ export class Enemy {
     this.specialCd = 0;
     this.hitFlashT = 0;
     this.staggerT = 0;
+    this.slowT = 0;
 
     this.colorA = "#d95b5b";
     this.colorB = "#8c2f38";
@@ -872,8 +907,11 @@ export class Enemy {
     this.specialCd = Math.max(0, (this.specialCd || 0) - dt);
     this.hitFlashT = Math.max(0, (this.hitFlashT || 0) - dt);
     this.staggerT = Math.max(0, (this.staggerT || 0) - dt);
+    this.slowT = Math.max(0, (this.slowT || 0) - dt);
     this.alertT = Math.max(0, this.alertT - dt);
     this.patrolTimer -= dt;
+
+    const slowMul = this.slowT > 0 ? 0.72 : 1;
 
     const dx = hero.x - this.x;
     const dy = hero.y - this.y;
@@ -894,8 +932,8 @@ export class Enemy {
     const shouldReturnHome = d > this.forgetRadius || homeDist > this.leashRadius;
 
     if (shouldReturnHome) {
-      this.vx = homeDir.x * this.moveSpeed * this.returnSpeedMul;
-      this.vy = homeDir.y * this.moveSpeed * this.returnSpeedMul;
+      this.vx = homeDir.x * this.moveSpeed * this.returnSpeedMul * slowMul;
+      this.vy = homeDir.y * this.moveSpeed * this.returnSpeedMul * slowMul;
 
       const nx = this.x + this.vx * dt;
       const ny = this.y + this.vy * dt;
@@ -923,7 +961,7 @@ export class Enemy {
       const pdy = this.patrolY - this.y;
       const pdir = norm(pdx, pdy);
 
-      const patrolSpeed = this.moveSpeed * (this.kind === "wolf" || this.kind === "duelist" ? 0.34 : this.kind === "brute" || this.kind === "sentinel" ? 0.22 : 0.28);
+      const patrolSpeed = this.moveSpeed * (this.kind === "wolf" || this.kind === "duelist" ? 0.34 : this.kind === "brute" || this.kind === "sentinel" ? 0.22 : 0.28) * slowMul;
 
       this.vx = pdir.x * patrolSpeed;
       this.vy = pdir.y * patrolSpeed;
@@ -943,15 +981,15 @@ export class Enemy {
       const close = preferred - 45;
 
       if (d > far) {
-        this.vx = dir.x * this.moveSpeed;
-        this.vy = dir.y * this.moveSpeed;
+        this.vx = dir.x * this.moveSpeed * slowMul;
+        this.vy = dir.y * this.moveSpeed * slowMul;
       } else if (d < close) {
-        this.vx = -dir.x * this.moveSpeed * 0.82;
-        this.vy = -dir.y * this.moveSpeed * 0.82;
+        this.vx = -dir.x * this.moveSpeed * 0.82 * slowMul;
+        this.vy = -dir.y * this.moveSpeed * 0.82 * slowMul;
       } else {
         const orbit = ((this.seed & 1) ? 1 : -1) * (this.kind === "wisp" ? 1.05 : 0.65);
-        this.vx = -dir.y * this.moveSpeed * orbit;
-        this.vy = dir.x * this.moveSpeed * orbit;
+        this.vx = -dir.y * this.moveSpeed * orbit * slowMul;
+        this.vy = dir.x * this.moveSpeed * orbit * slowMul;
       }
 
       if (this.kind === "mender" && this.specialCd <= 0 && game?.enemies) {
@@ -1003,24 +1041,24 @@ export class Enemy {
     } else {
       const meleeRange = (this.radius || 12) + (hero.radius || hero.r || 12) + 24;
       if (this.lungeT > 0) {
-        this.vx = dir.x * this.moveSpeed * 1.95;
-        this.vy = dir.y * this.moveSpeed * 1.95;
+        this.vx = dir.x * this.moveSpeed * 1.95 * slowMul;
+        this.vy = dir.y * this.moveSpeed * 1.95 * slowMul;
       } else if (this.recoverT > 0) {
-        this.vx = -dir.x * this.moveSpeed * 0.30;
-        this.vy = -dir.y * this.moveSpeed * 0.30;
+        this.vx = -dir.x * this.moveSpeed * 0.30 * slowMul;
+        this.vy = -dir.y * this.moveSpeed * 0.30 * slowMul;
       } else if (d <= meleeRange && this.attackCd <= 0) {
         this.lungeT = 0.20;
         this.recoverT = 0.44;
         this.attackCd = this.kind === "sentinel" ? 1.22 : this.kind === "brute" ? 1.05 : this.kind === "duelist" ? 0.58 : this.kind === "wolf" ? 0.72 : 0.86;
         const lungeMul = this.kind === "duelist" ? 2.35 : this.kind === "sentinel" ? 1.38 : 1.75;
-        this.vx = dir.x * this.moveSpeed * lungeMul;
-        this.vy = dir.y * this.moveSpeed * lungeMul;
+        this.vx = dir.x * this.moveSpeed * lungeMul * slowMul;
+        this.vy = dir.y * this.moveSpeed * lungeMul * slowMul;
       } else if (d < meleeRange * 0.78) {
-        this.vx = -dir.x * this.moveSpeed * 0.42;
-        this.vy = -dir.y * this.moveSpeed * 0.42;
+        this.vx = -dir.x * this.moveSpeed * 0.42 * slowMul;
+        this.vy = -dir.y * this.moveSpeed * 0.42 * slowMul;
       } else {
-        this.vx = dir.x * this.moveSpeed;
-        this.vy = dir.y * this.moveSpeed;
+        this.vx = dir.x * this.moveSpeed * slowMul;
+        this.vy = dir.y * this.moveSpeed * slowMul;
       }
     }
 
@@ -1073,6 +1111,12 @@ export class Enemy {
       ctx.arc(0, 0, r + 8, 0, Math.PI * 2);
       ctx.stroke();
     }
+
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(-r * 0.12, -r * 0.16, r * 0.78, Math.PI * 1.06, Math.PI * 1.92);
+    ctx.stroke();
 
     if ((this.attackCd || 0) <= 0.14 && (this.alertT || 0) > 0.05 && !this.boss) {
       ctx.strokeStyle = "rgba(255,168,120,0.42)";
@@ -1538,6 +1582,12 @@ export class Projectile {
     this.radius = opts.radius || 4;
     this.hitRadius = opts.hitRadius || this.radius + 2;
     this.ignoreWalls = !!opts.ignoreWalls;
+    this.pierce = opts.pierce || 0;
+    this.slow = opts.slow || 0;
+    this.knockback = opts.knockback || 0;
+    this.burstRadius = opts.burstRadius || 0;
+    this.burstColor = opts.burstColor || opts.color || "#ffffff";
+    this.burstSlow = opts.burstSlow || 0;
 
     this.alive = true;
   }
@@ -1742,11 +1792,29 @@ export class Loot {
       ctx.arc(0, 0, 6.5, 0, Math.PI * 2);
       ctx.fill();
 
+      ctx.strokeStyle = alphaColor(color, rarity === "epic" ? 0.80 : 0.52);
+      ctx.lineWidth = rarity === "epic" ? 2.2 : 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, -12);
+      ctx.lineTo(0, 12);
+      ctx.moveTo(-12, 0);
+      ctx.lineTo(12, 0);
+      ctx.stroke();
+
       ctx.strokeStyle = rarity === "epic" ? "rgba(255,240,170,0.88)" : "rgba(255,255,255,0.5)";
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(0, 0, 8.5, 0, Math.PI * 2);
       ctx.stroke();
+
+      ctx.fillStyle = "#f8fbff";
+      ctx.beginPath();
+      ctx.moveTo(0, -4);
+      ctx.lineTo(4, 0);
+      ctx.lineTo(0, 4);
+      ctx.lineTo(-4, 0);
+      ctx.closePath();
+      ctx.fill();
 
       if (rarity === "epic" || rarity === "rare" || rarity === "uncommon") {
         ctx.fillStyle = "rgba(5,8,12,0.72)";

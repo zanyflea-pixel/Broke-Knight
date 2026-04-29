@@ -10,6 +10,8 @@
 
 import { clamp, hash2, fbm, RNG } from "./util.js";
 
+const WORLD_ASSET_ROOT = new URL("../assets/ui/", import.meta.url);
+
 function distToSeg(px, py, ax, ay, bx, by) {
   const dx = bx - ax;
   const dy = by - ay;
@@ -31,7 +33,7 @@ function quadPoint(ax, ay, bx, by, cx, cy, t) {
 
 export default class World {
   constructor(seed = 12345, opts = {}) {
-    this.buildId = "rpg-v160";
+    this.buildId = "rpg-v161";
     this.seed = (seed | 0) || 12345;
 
     this.tileSize = opts.tileSize || 24;
@@ -58,15 +60,23 @@ export default class World {
     this.roads = [];
     this.roadNodes = [];
     this.showRoads = true;
+    this._roadPath = null;
     this._trees = [];
+    this._treeBuckets = new Map();
+    this._treeBuildState = null;
+    this._rocks = [];
+    this._rockBuckets = new Map();
+    this._rockBuildState = null;
+    this._warmupTasks = [];
 
     this._rng = new RNG(this.seed ^ 0x51f15eed);
+    this._assets = this._loadWorldAssets();
 
     this._mapCanvas = null;
     this._mapInfo = null;
     this._mapDirty = true;
-    this._mapSize = 60;            // even smaller for lightning loading
-    this._mapPreviewSize = 40;     // even smaller for lightning loading
+    this._mapSize = 128;
+    this._mapPreviewSize = 48;
     this._discoveryExportCache = null;
     this._revealed = null;
     this._mapBuildQueued = false;
@@ -81,15 +91,16 @@ export default class World {
     this._riverBands = this._makeRiverBands();
     this._mountainRanges = this._makeMountainRanges();
     this._mountainPasses = this._makeMountainPasses();
-    this._mountainRenderData = this._buildMountainRenderData();
+    this._mountainRenderData = [];
+    this._mountainRenderBuildIndex = 0;
     this._bootRawSampleCache = new Map();
 
     this._buildPOIs();
     this._buildRoadNetwork();
     this._finalizeBridges();
     this._ensureSpawnSafety();
-    this._trees = this._generateTrees();
     this._bootRawSampleCache = null;
+    this._queueWarmupTasks();
   }
 
   setViewSize(w, h) {
@@ -97,7 +108,29 @@ export default class World {
     this.viewH = h | 0;
   }
 
-  update() {}
+  update() {
+    this._runWarmupTasks();
+  }
+
+  _loadWorldAssets() {
+    return {
+      treeSprite: this._loadWorldImage("tree-sprite.png"),
+      mountainTexture: this._loadWorldImage("mountain-texture.png"),
+      rockSprite: this._loadWorldImage("rock-sprite.png"),
+    };
+  }
+
+  _loadWorldImage(name) {
+    if (typeof Image === "undefined") return null;
+    const img = new Image();
+    img.decoding = "async";
+    img.src = new URL(name, WORLD_ASSET_ROOT).href;
+    return img;
+  }
+
+  _hasWorldImage(img) {
+    return !!img && img.complete && img.naturalWidth > 0;
+  }
 
   toggleMapScale() {
     this.mapMode = this.mapMode === "small" ? "big" : "small";
@@ -106,12 +139,22 @@ export default class World {
   getMapInfo() {
     if (!this._mapInfo) this._buildMapPreview();
     if (this._mapDirty || !this._mapInfo) this._queueMapBuild();
-    return this._mapInfo || { size: this._mapSize || 320, colors: [], tiles: [], revealed: [] };
+    return this._mapInfo || { size: this._mapSize || 320, colors: [], tiles: [], zones: [], revealed: [] };
+  }
+
+  peekMapInfo() {
+    if (!this._mapInfo) this._buildMapPreview();
+    return this._mapInfo || { size: this._mapSize || 320, colors: [], tiles: [], zones: [], revealed: [] };
   }
 
   getMinimapCanvas() {
     if (!this._mapCanvas) this._buildMapPreview();
     if (this._mapDirty || !this._mapCanvas) this._queueMapBuild();
+    return this._mapCanvas;
+  }
+
+  peekMinimapCanvas() {
+    if (!this._mapCanvas) this._buildMapPreview();
     return this._mapCanvas;
   }
 
@@ -210,16 +253,27 @@ export default class World {
       return s.isWater || this._isNearDock(x, y, 34);
     }
 
-    return !s.isWater && !s.isMountainWall;
+    if (s.isWater) return false;
+    if (s.isMountainWall) {
+      if (actor?.state?.mountainPassAccess && this._mountainPassInfluenceAt(x, y) > 0.52) return true;
+      return false;
+    }
+    return true;
   }
 
   getMoveModifier(x, y) {
     const s = this._sampleCell(x, y);
 
     if (s.isWater) return 0.92;
-    if (s.bridge) return 1.12;
-    if (s.road) return 1.18;
-    if (s.zone === "mountain" || s.zone === "stone flats") return 0.93;
+    if (s.bridge) return 1.14;
+    if (s.road) return 1.24;
+    if (s.zone === "old fields") return 1.06;
+    if (s.zone === "meadow" || s.zone === "whisper grass") return 1.03;
+    if (s.zone === "greenwood" || s.zone === "forest") return 0.97;
+    if (s.zone === "deep wilds") return 0.94;
+    if (s.zone === "highlands") return 0.92;
+    if (s.zone === "ashlands" || s.zone === "ash fields") return 0.9;
+    if (s.zone === "mountain" || s.zone === "stone flats") return 0.88;
     return 1;
   }
 
@@ -301,12 +355,11 @@ export default class World {
       }
     }
 
-    this._drawMountainRanges(ctx, left, top, right, bottom);
     this._drawTrees(ctx, left, top, right, bottom);
     this._drawWorldAtmosphere(ctx, left, top, right, bottom);
     this._drawRiverOverlays(ctx, left, top, right, bottom);
-    this._drawBridges(ctx, left, top, right, bottom);
     this._drawRoads(ctx);
+    this._drawBridges(ctx, left, top, right, bottom);
     this._drawPOIs(ctx, camera);
   }
 
@@ -341,13 +394,18 @@ export default class World {
       return;
     }
 
+    if (s.zone === "mountain") {
+      this._drawMountainWallTile(ctx, x, y, size, seed, cellX, cellY, getCell);
+      return;
+    }
+
     if (s.zone === "highlands") {
       this._drawHighlandScenery(ctx, x, y, size, parity, seed, relief);
       return;
     }
 
-    if (s.zone === "mountain" || s.zone === "stone flats") {
-      this._drawMountainScenery(ctx, x, y, size, parity, seed, relief, s.zone === "mountain", getCell);
+    if (s.zone === "stone flats") {
+      this._drawMountainScenery(ctx, x, y, size, parity, seed, relief, false, getCell);
     }
   }
 
@@ -446,6 +504,11 @@ export default class World {
       ctx.fill();
       ctx.fillStyle = "rgba(88,116,54,0.18)";
       ctx.fillRect(x + 29, y + 12, 1.6, 7);
+    }
+    if (((seed >>> 25) & 7) === 2) {
+      ctx.fillStyle = roadside ? "rgba(94,88,72,0.18)" : "rgba(104,124,82,0.18)";
+      ctx.fillRect(x + 24, y + 20, 7, 2);
+      ctx.fillRect(x + 26, y + 18, 2, 5);
     }
   }
 
@@ -605,6 +668,111 @@ export default class World {
     ctx.fill();
   }
 
+  _drawMountainWallTile(ctx, x, y, size, seed, cellX, cellY, getCell = null) {
+    const isMountainAt = (wx, wy) => {
+      if (!getCell) return false;
+      const cell = getCell(wx, wy);
+      return cell?.zone === "mountain";
+    };
+
+    const north = isMountainAt(x, y - size);
+    const south = isMountainAt(x, y + size);
+    const west = isMountainAt(x - size, y);
+    const east = isMountainAt(x + size, y);
+
+    const crestY = north ? y + 16 : y + 10 + ((seed >>> 3) & 3);
+    const peakA = crestY - (north ? 7 : 16) - ((seed >>> 8) & 3);
+    const peakB = crestY - (north ? 5 : 12) - ((seed >>> 11) & 3);
+    const peakAX = x + size * 0.28;
+    const peakBX = x + size * 0.72;
+
+    ctx.fillStyle = "#5b6169";
+    ctx.beginPath();
+    ctx.moveTo(x, y + size);
+    ctx.lineTo(x, crestY + 4);
+    ctx.lineTo(peakAX - 8, crestY + 1);
+    ctx.lineTo(peakAX, peakA);
+    ctx.lineTo(peakAX + 8, crestY + 1);
+    ctx.lineTo(peakBX - 8, crestY + 2);
+    ctx.lineTo(peakBX, peakB);
+    ctx.lineTo(peakBX + 9, crestY + 2);
+    ctx.lineTo(x + size, crestY + 5);
+    ctx.lineTo(x + size, y + size);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "#495058";
+    ctx.beginPath();
+    ctx.moveTo(x + size * 0.5, crestY + 2);
+    ctx.lineTo(x + size, crestY + 5);
+    ctx.lineTo(x + size, y + size);
+    ctx.lineTo(x + size * 0.32, y + size);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(198,206,214,0.20)";
+    ctx.beginPath();
+    ctx.moveTo(x + 3, crestY + 5);
+    ctx.lineTo(peakAX - 6, crestY);
+    ctx.lineTo(peakAX, peakA + 2);
+    ctx.lineTo(peakAX + 5, crestY + 1);
+    ctx.lineTo(peakBX - 6, crestY + 2);
+    ctx.lineTo(peakBX, peakB + 3);
+    ctx.lineTo(peakBX + 4, crestY + 3);
+    ctx.lineTo(x + size - 4, crestY + 7);
+    ctx.lineTo(x + size - 10, crestY + 10);
+    ctx.lineTo(x + 7, crestY + 10);
+    ctx.closePath();
+    ctx.fill();
+
+    if (!north) {
+      ctx.fillStyle = "#22272d";
+      ctx.beginPath();
+      ctx.moveTo(x + 1, crestY + 5);
+      ctx.lineTo(peakAX - 7, crestY);
+      ctx.lineTo(peakAX, peakA);
+      ctx.lineTo(peakAX + 8, crestY + 1);
+      ctx.lineTo(peakBX - 8, crestY + 2);
+      ctx.lineTo(peakBX, peakB);
+      ctx.lineTo(peakBX + 9, crestY + 2);
+      ctx.lineTo(x + size - 1, crestY + 6);
+      ctx.lineTo(x + size - 1, crestY + 10);
+      ctx.lineTo(x + 1, crestY + 10);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    if (!west) {
+      ctx.fillStyle = "rgba(34,39,45,0.38)";
+      ctx.beginPath();
+      ctx.moveTo(x, y + size);
+      ctx.lineTo(x, crestY + 5);
+      ctx.lineTo(x + 9, crestY + 10);
+      ctx.lineTo(x + 13, y + size);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    if (!east) {
+      ctx.fillStyle = "rgba(26,30,35,0.34)";
+      ctx.beginPath();
+      ctx.moveTo(x + size, y + size);
+      ctx.lineTo(x + size, crestY + 6);
+      ctx.lineTo(x + size - 10, crestY + 10);
+      ctx.lineTo(x + size - 15, y + size);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    if (!south) {
+      ctx.fillStyle = "rgba(24,28,33,0.30)";
+      ctx.fillRect(x + 2, y + size - 8, size - 4, 6);
+    }
+
+    const pass = this._mountainPassInfluenceAt(x + size * 0.5, y + size * 0.5);
+    if (pass > 0.6) this._drawMountainPathHighlight(ctx, x, y, size, seed);
+  }
+
   _drawMountainRanges(ctx, left, top, right, bottom) {
     if (!this._mountainRenderData?.length) return;
 
@@ -613,43 +781,50 @@ export default class World {
     ctx.lineJoin = "round";
 
     for (const range of this._mountainRenderData) {
-      const ridgeDx = -range.nx * 8;
-      const ridgeDy = -range.ny * 8 - 6;
-      const shadowDx = range.nx * 10;
-      const shadowDy = range.ny * 10 + 12;
+      const ridgeDx = -range.nx * 10;
+      const ridgeDy = -range.ny * 10 - 8;
+      const baseDx = range.nx * 18;
+      const baseDy = range.ny * 18 + 28;
 
       for (const seg of range.segments) {
         if (seg.maxX < left || seg.minX > right || seg.maxY < top || seg.minY > bottom) continue;
 
         const crestPts = seg.pts.map((p, i) => {
-          const jag = (((range.seed >>> (i % 24)) & 3) - 1.5) * 5;
-          return { x: p.x + ridgeDx + range.tx * jag, y: p.y + ridgeDy - Math.abs(jag) * 0.25 };
+          const jag = (((range.seed >>> (i % 24)) & 3) - 1.5) * 6;
+          return { x: p.x + ridgeDx + range.tx * jag, y: p.y + ridgeDy - Math.abs(jag) * 0.45 };
         });
-        const shadowPts = seg.pts.map((p, i) => {
-          const drift = Math.sin(i * 0.75 + range.seed * 0.0001) * 4;
-          return { x: p.x + shadowDx + range.tx * drift, y: p.y + shadowDy + Math.abs(drift) * 0.14 };
+        const basePts = seg.pts.map((p, i) => {
+          const sway = Math.sin(i * 0.65 + range.seed * 0.0001) * 2.8;
+          return { x: p.x + baseDx + range.tx * sway, y: p.y + baseDy + Math.abs(sway) * 0.22 };
         });
 
-        ctx.strokeStyle = "rgba(20,24,28,0.10)";
-        ctx.lineWidth = Math.max(8, range.width * 0.05);
+        const minY = Math.min(...crestPts.map((p) => p.y));
+        const maxY = Math.max(...basePts.map((p) => p.y));
+        const grad = ctx.createLinearGradient(0, minY, 0, maxY);
+        grad.addColorStop(0, "rgba(124,132,142,0.995)");
+        grad.addColorStop(0.22, "rgba(102,110,120,0.995)");
+        grad.addColorStop(1, "rgba(52,57,64,0.998)");
+        ctx.fillStyle = grad;
         ctx.beginPath();
-        this._traceSmoothPath(ctx, shadowPts);
-        ctx.stroke();
+        ctx.moveTo(crestPts[0].x, crestPts[0].y);
+        for (let i = 1; i < crestPts.length; i++) ctx.lineTo(crestPts[i].x, crestPts[i].y);
+        for (let i = basePts.length - 1; i >= 0; i--) ctx.lineTo(basePts[i].x, basePts[i].y);
+        ctx.closePath();
+        ctx.fill();
 
-        ctx.strokeStyle = "rgba(232,236,240,0.12)";
-        ctx.lineWidth = Math.max(3, range.width * 0.018);
+        ctx.strokeStyle = "rgba(9,11,14,0.98)";
+        ctx.lineWidth = Math.max(7, range.width * 0.03);
         ctx.beginPath();
         this._traceSmoothPath(ctx, crestPts);
         ctx.stroke();
 
-        for (let i = 2; i < seg.pts.length - 2; i += 5) {
-          ctx.strokeStyle = i % 2 === 0 ? "rgba(96,104,112,0.12)" : "rgba(48,54,60,0.10)";
-          ctx.lineWidth = Math.max(1.5, range.width * 0.012);
-          ctx.beginPath();
-          ctx.moveTo(crestPts[i].x, crestPts[i].y);
-          ctx.lineTo(shadowPts[i].x + range.nx * 2, shadowPts[i].y - 4);
-          ctx.stroke();
-        }
+        ctx.fillStyle = "rgba(228,234,240,0.08)";
+        ctx.beginPath();
+        ctx.moveTo(crestPts[0].x + range.nx * 2, crestPts[0].y + 5);
+        for (let i = 1; i < crestPts.length; i++) ctx.lineTo(crestPts[i].x + range.nx * 2, crestPts[i].y + 5);
+        for (let i = crestPts.length - 1; i >= 0; i--) ctx.lineTo(crestPts[i].x + range.nx * 7, crestPts[i].y + 18);
+        ctx.closePath();
+        ctx.fill();
       }
     }
 
@@ -687,6 +862,14 @@ export default class World {
       ctx.arc(x + 17, y + 13, 5, 0, Math.PI * 2);
       ctx.fill();
     }
+    if (((seed >>> 20) & 7) === 4) {
+      ctx.fillStyle = "rgba(112,122,92,0.18)";
+      ctx.beginPath();
+      ctx.ellipse(x + 31, y + 24, 7, 4, -0.22, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(72,84,62,0.22)";
+      ctx.fillRect(x + 30, y + 17, 2, 6);
+    }
   }
 
   _drawWaterScenery(ctx, x, y, size, s, parity, seed) {
@@ -710,7 +893,7 @@ export default class World {
   }
 
   _drawWorldAtmosphere(ctx, left, top, right, bottom) {
-    const step = 144;
+    const step = 196;
     const startX = Math.floor(left / step) * step;
     const startY = Math.floor(top / step) * step;
 
@@ -743,13 +926,15 @@ export default class World {
 
     ctx.save();
 
-    const width = 20;
+    const width = 28;
+    const path = this._roadPath;
 
-    ctx.strokeStyle = "#7a5f3e";
-    ctx.lineWidth = width;
+    ctx.strokeStyle = "#5c3f22";
+    ctx.lineWidth = width + 4;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    for (const road of this.roads) {
+    if (path) ctx.stroke(path);
+    else for (const road of this.roads) {
       if (road.visible === false) continue;
       const pts = road.points;
       if (!pts || pts.length < 2) continue;
@@ -759,9 +944,10 @@ export default class World {
       ctx.stroke();
     }
 
-    ctx.strokeStyle = "#b8a06f";
-    ctx.lineWidth = width - 8;
-    for (const road of this.roads) {
+    ctx.strokeStyle = "#c4a066";
+    ctx.lineWidth = width - 5;
+    if (path) ctx.stroke(path);
+    else for (const road of this.roads) {
       if (road.visible === false) continue;
       const pts = road.points;
       if (!pts || pts.length < 2) continue;
@@ -770,20 +956,6 @@ export default class World {
       for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
       ctx.stroke();
     }
-
-    ctx.strokeStyle = "#f5f0d8";
-    ctx.lineWidth = 2;
-    ctx.setLineDash([13, 24]);
-    for (const road of this.roads) {
-      if (road.visible === false) continue;
-      const pts = road.points;
-      if (!pts || pts.length < 2) continue;
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-      ctx.stroke();
-    }
-    ctx.setLineDash([]);
 
     ctx.restore();
   }
@@ -805,90 +977,112 @@ export default class World {
         ctx.save();
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
-        ctx.strokeStyle = "rgba(35,22,13,0.30)";
-        ctx.lineWidth = width + 6;
+
+        ctx.strokeStyle = "rgba(22,16,10,0.30)";
+        ctx.lineWidth = width + 10;
         ctx.beginPath();
         ctx.moveTo(path[0].x, path[0].y);
         for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y);
         ctx.stroke();
 
-        ctx.strokeStyle = "rgba(139,96,54,0.96)";
-        ctx.lineWidth = width - 2;
+        ctx.strokeStyle = "#6d4c2c";
+        ctx.lineWidth = width;
         ctx.beginPath();
         ctx.moveTo(path[0].x, path[0].y);
         for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y);
         ctx.stroke();
 
-        ctx.strokeStyle = "rgba(246,220,174,0.28)";
-        ctx.lineWidth = 2;
-        ctx.setLineDash([7, 7]);
+        ctx.strokeStyle = "#b9854f";
+        ctx.lineWidth = Math.max(9, width - 12);
         ctx.beginPath();
         ctx.moveTo(path[0].x, path[0].y);
         for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y);
         ctx.stroke();
+
+        const deckInset = Math.max(6, width * 0.28);
+        const deckLeft = [];
+        const deckRight = [];
+        for (let i = 0; i < path.length; i++) {
+          const prev = path[Math.max(0, i - 1)];
+          const next = path[Math.min(path.length - 1, i + 1)];
+          const dx = next.x - prev.x;
+          const dy = next.y - prev.y;
+          const segLen = Math.hypot(dx, dy) || 1;
+          const nx = -dy / segLen;
+          const ny = dx / segLen;
+          deckLeft.push({ x: path[i].x - nx * deckInset, y: path[i].y - ny * deckInset });
+          deckRight.push({ x: path[i].x + nx * deckInset, y: path[i].y + ny * deckInset });
+        }
+
+        ctx.fillStyle = "rgba(255,220,176,0.18)";
+        ctx.beginPath();
+        ctx.moveTo(deckLeft[0].x, deckLeft[0].y);
+        for (let i = 1; i < deckLeft.length; i++) ctx.lineTo(deckLeft[i].x, deckLeft[i].y);
+        for (let i = deckRight.length - 1; i >= 0; i--) ctx.lineTo(deckRight[i].x, deckRight[i].y);
+        ctx.closePath();
+        ctx.fill();
+
+        const railInset = Math.max(4, width * 0.42);
+        ctx.strokeStyle = "#4f341f";
+        ctx.lineWidth = 2.5;
+        for (let i = 1; i < path.length; i++) {
+          const a = path[i - 1];
+          const c = path[i];
+          const dx = c.x - a.x;
+          const dy = c.y - a.y;
+          const segLen = Math.hypot(dx, dy) || 1;
+          const nx = -dy / segLen;
+          const ny = dx / segLen;
+          ctx.beginPath();
+          ctx.moveTo(a.x - nx * railInset, a.y - ny * railInset);
+          ctx.lineTo(c.x - nx * railInset, c.y - ny * railInset);
+          ctx.moveTo(a.x + nx * railInset, a.y + ny * railInset);
+          ctx.lineTo(c.x + nx * railInset, c.y + ny * railInset);
+          ctx.stroke();
+        }
+
+        ctx.strokeStyle = "#5b3e25";
+        ctx.lineWidth = 2.5;
+        for (let i = 1; i < path.length; i++) {
+          const a = path[i - 1];
+          const c = path[i];
+          const dx = c.x - a.x;
+          const dy = c.y - a.y;
+          const segLen = Math.hypot(dx, dy) || 1;
+          const nx = -dy / segLen;
+          const ny = dx / segLen;
+          const step = 16;
+          for (let dist = 8; dist < segLen; dist += step) {
+            const t = dist / segLen;
+            const px = a.x + dx * t;
+            const py = a.y + dy * t;
+            ctx.beginPath();
+            ctx.moveTo(px - nx * deckInset, py - ny * deckInset);
+            ctx.lineTo(px + nx * deckInset, py + ny * deckInset);
+            ctx.stroke();
+          }
+        }
+
+        ctx.strokeStyle = "rgba(241,212,171,0.42)";
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(path[0].x, path[0].y);
+        for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y);
+        ctx.stroke();
+
+        const endCaps = [path[0], path[path.length - 1]];
+        for (const cap of endCaps) {
+          ctx.fillStyle = "rgba(110,84,56,0.18)";
+          ctx.beginPath();
+          ctx.ellipse(cap.x, cap.y + 1, width * 0.22, width * 0.12, angle, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "rgba(196,154,102,0.22)";
+          ctx.beginPath();
+          ctx.ellipse(cap.x, cap.y, width * 0.16, width * 0.08, angle, 0, Math.PI * 2);
+          ctx.fill();
+        }
         ctx.restore();
       }
-
-      ctx.save();
-      ctx.translate(b.cx, b.cy);
-      ctx.rotate(angle);
-
-      ctx.fillStyle = "#9a7042";
-      ctx.fillRect(-length * 0.5, -width * 0.5, length, width);
-
-      ctx.fillStyle = "#7b5934";
-      const plankStep = 11;
-      for (let x = -length * 0.5 + 6; x < length * 0.5 - 4; x += plankStep) {
-        ctx.fillRect(x, -width * 0.5 + 4, 5, width - 8);
-        ctx.fillStyle = "#3d2a1c";
-        ctx.fillRect(x + 1, -width * 0.5 + 7, 1, 1);
-        ctx.fillRect(x + 4, -width * 0.5 + 7, 1, 1);
-        ctx.fillStyle = "#9a7042";
-      }
-
-      ctx.fillStyle = "#5e4428";
-      ctx.fillRect(-length * 0.5, -width * 0.5, length, 9);
-      ctx.fillRect(-length * 0.5, width * 0.5 - 9, length, 9);
-
-      ctx.shadowColor = "rgba(0,0,0,0.45)";
-      ctx.shadowBlur = 4;
-      ctx.shadowOffsetY = 2;
-      ctx.strokeStyle = "#d2b38a";
-      ctx.lineWidth = 5;
-      ctx.beginPath();
-      ctx.moveTo(-length * 0.5 + 8, -width * 0.5 + 9);
-      ctx.quadraticCurveTo(-length * 0.25, -width * 0.5 - 9, 0, -width * 0.5 + 9);
-      ctx.quadraticCurveTo(length * 0.25, -width * 0.5 - 9, length * 0.5 - 8, -width * 0.5 + 9);
-      ctx.stroke();
-
-      ctx.shadowBlur = 0;
-      ctx.shadowOffsetY = 0;
-      ctx.strokeStyle = "#f5d9a8";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(-length * 0.5 + 8, -width * 0.5 + 9);
-      ctx.quadraticCurveTo(-length * 0.25, -width * 0.5 - 9, 0, -width * 0.5 + 9);
-      ctx.quadraticCurveTo(length * 0.25, -width * 0.5 - 9, length * 0.5 - 8, -width * 0.5 + 9);
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.moveTo(-length * 0.5 + 8, width * 0.5 - 9);
-      ctx.quadraticCurveTo(-length * 0.25, width * 0.5 + 9, 0, width * 0.5 - 9);
-      ctx.quadraticCurveTo(length * 0.25, width * 0.5 + 9, length * 0.5 - 8, width * 0.5 - 9);
-      ctx.stroke();
-
-      ctx.strokeStyle = "#5e4428";
-      ctx.lineWidth = 2.5;
-      for (let x = -length * 0.5 + 14; x < length * 0.5; x += 22) {
-        ctx.beginPath();
-        ctx.moveTo(x, -width * 0.5 + 9);
-        ctx.lineTo(x, -width * 0.5 - 7);
-        ctx.moveTo(x, width * 0.5 - 9);
-        ctx.lineTo(x, width * 0.5 + 7);
-        ctx.stroke();
-      }
-
-      ctx.restore();
     }
     ctx.restore();
   }
@@ -944,7 +1138,7 @@ export default class World {
         const len = Math.hypot(dx, dy) || 1;
         const nx = -dy / len;
         const ny = dx / len;
-        const foamCount = Math.max(1, Math.floor(len / 180));
+        const foamCount = Math.max(1, Math.floor(len / 280));
         for (let j = 0; j < foamCount; j++) {
           const t = (j + 0.5) / foamCount;
           const px = a.x + dx * t;
@@ -961,6 +1155,9 @@ export default class World {
     this._drawRiverConfluences(ctx, left, top, right, bottom);
     this._drawRiverMouths(ctx, left, top, right, bottom);
     ctx.restore();
+
+    this._drawRocks(ctx, left, top, right, bottom);
+    this._drawTrees(ctx, left, top, right, bottom);
   }
 
   _drawRiverMouths(ctx, left, top, right, bottom) {
@@ -1143,22 +1340,22 @@ export default class World {
       ctx.stroke();
 
       const bigBuildings = [
-        [-82, -78, 38, 44, "#5b4b3f"],
-        [28, -88, 48, 52, "#4a5260"],
-        [-68, 12, 44, 38, "#6a5744"],
-        [52, 18, 42, 46, "#8b6f52"],
-        [-112, 48, 32, 34, "#5b4b3f"],
-        [92, -42, 34, 40, "#4a5260"],
-        [-22, 72, 46, 32, "#6a5744"],
-        [78, 68, 36, 38, "#8b6f52"],
-        [-98, -18, 28, 30, "#5b4b3f"],
-        [112, 22, 30, 32, "#4a5260"],
-        [-48, -48, 26, 28, "#6a5744"],
-        [68, -68, 28, 30, "#8b6f52"],
-        [-8, -12, 24, 26, "#5b4b3f"],
-        [18, 48, 22, 24, "#4a5260"],
+        ...(t.buildings || []),
+        { x: -22, y: 72, w: 46, h: 32, color: "#6a5744" },
+        { x: 78, y: 68, w: 36, h: 38, color: "#8b6f52" },
+        { x: -98, y: -18, w: 28, h: 30, color: "#5b4b3f" },
+        { x: 112, y: 22, w: 30, h: 32, color: "#4a5260" },
+        { x: -48, y: -48, w: 26, h: 28, color: "#6a5744" },
+        { x: 68, y: -68, w: 28, h: 30, color: "#8b6f52" },
+        { x: -8, y: -12, w: 24, h: 26, color: "#5b4b3f" },
+        { x: 18, y: 48, w: 22, h: 24, color: "#4a5260" },
       ];
-      for (const [ox, oy, bw, bh, color] of bigBuildings) {
+      for (const building of bigBuildings) {
+        const ox = building.x;
+        const oy = building.y;
+        const bw = building.w;
+        const bh = building.h;
+        const color = building.color;
         ctx.fillStyle = color;
         ctx.fillRect(t.x + ox, t.y + oy, bw, bh);
         ctx.fillStyle = "#d3aa68";
@@ -1169,7 +1366,11 @@ export default class World {
         ctx.closePath();
         ctx.fill();
         ctx.fillStyle = "rgba(255,232,156,0.78)";
-        ctx.fillRect(t.x + ox + bw * 0.42, t.y + oy + bh - 10, 8, 10);
+        ctx.fillRect(t.x + ox + bw * 0.22, t.y + oy + 8, 7, 7);
+        ctx.fillRect(t.x + ox + bw * 0.62, t.y + oy + 8, 7, 7);
+        ctx.fillStyle = "#3f2c1f";
+        ctx.fillRect(t.x + ox + bw * 0.5 - 4, t.y + oy + bh - 12, 8, 12);
+        if (building.name) drawText(building.name, t.x + ox + bw * 0.5, t.y + oy - 14, 9, "#f5e8c4");
       }
 
       ctx.fillStyle = "rgba(180,160,120,0.28)";
@@ -1189,6 +1390,7 @@ export default class World {
       ctx.fill();
 
       drawText(t.name || "Crossroads Haven", t.x, t.y - 148, 22, "#fff8d0");
+      drawText("Inn  Smithy  Vendor  Stable", t.x, t.y + 126, 11, "#ecd7aa");
     }
 
     for (const t of this.towns || []) {
@@ -1379,24 +1581,67 @@ export default class World {
 
     for (const d of this.docks) {
       if (!drawIfNear(d)) continue;
-      this._drawDropShadow(ctx, d.x, d.y + 8, 16, 4, 0.18);
-      ctx.strokeStyle = "rgba(245,245,230,0.75)";
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.moveTo(d.x - 12, d.y + 7);
-      ctx.lineTo(d.x + 12, d.y + 7);
-      ctx.moveTo(d.x - 8, d.y - 5);
-      ctx.lineTo(d.x - 8, d.y + 10);
-      ctx.moveTo(d.x + 5, d.y - 5);
-      ctx.lineTo(d.x + 5, d.y + 10);
-      ctx.stroke();
-      ctx.strokeStyle = "rgba(210,230,242,0.18)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(d.x - 2, d.y - 9);
-      ctx.lineTo(d.x - 2, d.y + 6);
-      ctx.lineTo(d.x + 8, d.y - 1);
-      ctx.stroke();
+      const dockSeed = hash2(d.x | 0, d.y | 0, this.seed);
+      const boatRight = ((dockSeed >>> 3) & 1) === 0;
+      const secondBoat = ((dockSeed >>> 5) & 3) >= 2;
+      this._drawDropShadow(ctx, d.x, d.y + 10, 22, 5, 0.18);
+      ctx.fillStyle = "rgba(63,48,34,0.26)";
+      ctx.fillRect(d.x - 18, d.y + 11, 36, 5);
+
+      ctx.fillStyle = "#7d5a38";
+      ctx.fillRect(d.x - 5, d.y - 12, 10, 26);
+      ctx.fillStyle = "#966b43";
+      ctx.fillRect(d.x - 16, d.y + 5, 32, 7);
+      ctx.fillStyle = "#5a4028";
+      for (let px = -14; px <= 10; px += 8) {
+        ctx.fillRect(d.x + px, d.y + 6, 2, 5);
+      }
+      ctx.fillStyle = "#4a3622";
+      ctx.fillRect(d.x - 13, d.y - 10, 3, 18);
+      ctx.fillRect(d.x + 10, d.y - 10, 3, 18);
+
+      const drawBoat = (bx, by, flip = 1, hue = "#d8e5f2") => {
+        ctx.fillStyle = "rgba(12,18,24,0.18)";
+        ctx.beginPath();
+        ctx.ellipse(bx, by + 7, 10, 3, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#6d4b2e";
+        ctx.beginPath();
+        ctx.moveTo(bx - 10 * flip, by + 2);
+        ctx.lineTo(bx - 4 * flip, by + 7);
+        ctx.lineTo(bx + 6 * flip, by + 7);
+        ctx.lineTo(bx + 10 * flip, by + 2);
+        ctx.lineTo(bx + 4 * flip, by - 2);
+        ctx.lineTo(bx - 5 * flip, by - 2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = hue;
+        ctx.beginPath();
+        ctx.moveTo(bx, by - 10);
+        ctx.lineTo(bx, by + 1);
+        ctx.lineTo(bx + 8 * flip, by - 3);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = "rgba(236,242,248,0.34)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(bx, by - 10);
+        ctx.lineTo(bx, by + 1);
+        ctx.lineTo(bx + 8 * flip, by - 3);
+        ctx.stroke();
+        ctx.strokeStyle = "rgba(210,220,230,0.18)";
+        ctx.beginPath();
+        ctx.moveTo(d.x + (flip > 0 ? 12 : -12), d.y + 8);
+        ctx.lineTo(bx - 3 * flip, by + 2);
+        ctx.stroke();
+      };
+
+      if (boatRight) drawBoat(d.x + 26, d.y + 1, 1, "#d7e4f0");
+      else drawBoat(d.x - 26, d.y + 1, -1, "#d7e4f0");
+      if (secondBoat) {
+        if (boatRight) drawBoat(d.x - 24, d.y + 8, -1, "#c9d5e2");
+        else drawBoat(d.x + 24, d.y + 8, 1, "#c9d5e2");
+      }
     }
 
     for (const s of this.shrines) {
@@ -1578,6 +1823,8 @@ export default class World {
     }
 
     const mountainBase = this._mountainBaseAt(x, y, ground, isWater);
+    const mountainVisual = this._mountainVisualAt(x, y, ground, isWater);
+    const mountainBody = this._mountainBodyAt(x, y, ground, isWater);
 
     const moisture = this._moistureAt(x, y);
 
@@ -1594,12 +1841,12 @@ export default class World {
     } else if (danger === 2) {
       zone = moisture > 0.56 ? "forest" : "old fields";
       color = moisture > 0.56 ? "#4f8a46" : "#789f4f";
+    } else if (mountainVisual) {
+      zone = "mountain";
+      color = ground > 0.84 ? "#b1bac4" : "#717a84";
     } else if (danger === 3) {
       zone = moisture > 0.62 ? "deep wilds" : "stone flats";
-      color = moisture > 0.62 ? "#2f7f39" : "#8f938f";
-    } else if (mountainBase) {
-      zone = "mountain";
-      color = ground > 0.84 ? "#c3c9ce" : "#9ca3a8";
+      color = moisture > 0.62 ? "#2f7f39" : "#7e858d";
     } else if (danger === 4) {
       zone = moisture < 0.36 ? "ashlands" : "highlands";
       color = moisture < 0.36 ? "#a79a69" : "#788b65";
@@ -1641,7 +1888,7 @@ export default class World {
       color = "#8a6a42";
     }
 
-    const isMountainWall = mountainBase || zone === "stone flats";
+    const isMountainWall = mountainBody && !road && !bridge;
 
     return {
       ground,
@@ -1652,6 +1899,7 @@ export default class World {
       isRiver,
       isMountainWall,
       mountainBase,
+      mountainBody,
       road,
       bridge,
       zone,
@@ -1672,51 +1920,57 @@ export default class World {
     let isWater = ground < 0.245 || river < this._riverWaterLimit;
     if (spawnDist < this._spawnSafeRadius && river >= this._riverWaterLimit) isWater = false;
     const mountainBase = this._mountainBaseAt(x, y, ground, isWater);
+    const mountainVisual = this._mountainVisualAt(x, y, ground, isWater);
 
     let zone = "meadow";
-    let color = "#6aa04f";
+    let color = "#7f9f61";
 
     if (isWater) {
       zone = "river";
       const confluence = this._nearRiverConfluence(x, y);
-      color = confluence ? "#216fa9" : river < this._riverWaterLimit ? (river < 0.78 ? "#2477b1" : "#2f86bd") : "#2c6a9a";
-    } else if (mountainBase) {
+      color = confluence ? "#2e8fbe" : river < this._riverWaterLimit ? (river < 0.78 ? "#3393cf" : "#57b7e3") : "#4a86ad";
+    } else if (mountainVisual) {
       zone = "mountain";
-      color = ground > 0.84 ? "#c3c9ce" : "#9ca3a8";
+      color = ground > 0.84 ? "#d5dde4" : "#87909a";
     } else if (danger <= 1) {
       zone = moisture > 0.58 ? "greenwood" : "meadow";
-      color = moisture > 0.58 ? "#5d9a4d" : "#76b45c";
+      color = moisture > 0.58 ? "#5d9550" : "#86ab60";
     } else if (danger === 2) {
       zone = moisture > 0.56 ? "forest" : "old fields";
-      color = moisture > 0.56 ? "#4f8a46" : "#789f4f";
+      color = moisture > 0.56 ? "#4f8750" : "#93985e";
     } else if (danger === 3) {
       zone = moisture > 0.62 ? "deep wilds" : "stone flats";
-      color = moisture > 0.62 ? "#2f7f39" : "#8f938f";
+      color = moisture > 0.62 ? "#356f3d" : "#808891";
     } else if (danger === 4) {
       zone = moisture < 0.36 ? "ashlands" : "highlands";
-      color = moisture < 0.36 ? "#a79a69" : "#788b65";
+      color = moisture < 0.36 ? "#aa8f62" : "#7d8b62";
     } else if (ground > 0.82) {
       zone = "mountain";
-      color = "#c3c9ce";
+      color = "#d9e0e6";
     } else if (ground > 0.70) {
       zone = "stone flats";
-      color = "#8f938f";
+      color = "#808891";
     } else if (moisture > 0.72) {
       zone = "deep wilds";
-      color = "#2f7f39";
+      color = "#356f3d";
     } else if (moisture > 0.56) {
       zone = "forest";
-      color = "#4f8a46";
+      color = "#4f8750";
     } else if (moisture < 0.24) {
       zone = "ashlands";
-      color = "#a79a69";
+      color = "#aa8f62";
     }
 
     const road = this._roadAt(x, y);
     const bridge = this._bridgeAt(x, y);
     if (road && !isWater && !bridge && !mountainBase) {
       zone = "road";
-      color = "#9c8d6f";
+      color = "#cfb27a";
+    }
+
+    if (bridge) {
+      zone = "bridge";
+      color = "#dfc194";
     }
 
     return { color, zone, isWater };
@@ -1850,9 +2104,8 @@ export default class World {
     return passes;
   }
 
-  _buildMountainRenderData() {
-    const out = [];
-    for (const range of this._mountainRanges || []) {
+  _buildMountainRenderDataForRange(range) {
+      const out = [];
       const dx = range.bx - range.ax;
       const dy = range.by - range.ay;
       const len = Math.hypot(dx, dy) || 1;
@@ -1928,8 +2181,6 @@ export default class World {
         seed: range.seed,
         segments,
       });
-    }
-
     return out;
   }
 
@@ -1982,6 +2233,32 @@ export default class World {
 
     const effectiveRidge = ridge - pass * 1.28;
     return effectiveRidge > 0.65 || (effectiveRidge > 0.35 && highland > 0.78);
+  }
+
+  _mountainVisualAt(x, y, ground, isWater) {
+    if (isWater) return false;
+    const spawnDist = Math.hypot(x - this.spawn.x, y - this.spawn.y);
+    if (spawnDist <= this._spawnSafeRadius * 1.15) return false;
+
+    const ridge = this._mountainInfluenceAt(x, y);
+    const pass = this._mountainPassInfluenceAt(x, y);
+    const highland = clamp((ground - 0.74) / 0.16, 0, 1);
+    const effectiveRidge = ridge - pass * 1.18;
+
+    return effectiveRidge > 0.2 || (effectiveRidge > 0.1 && highland > 0.58);
+  }
+
+  _mountainBodyAt(x, y, ground, isWater) {
+    if (isWater) return false;
+    const spawnDist = Math.hypot(x - this.spawn.x, y - this.spawn.y);
+    if (spawnDist <= this._spawnSafeRadius * 1.15) return false;
+
+    const ridge = this._mountainInfluenceAt(x, y);
+    const pass = this._mountainPassInfluenceAt(x, y);
+    const highland = clamp((ground - 0.74) / 0.16, 0, 1);
+    const effectiveRidge = ridge - pass * 1.12;
+
+    return effectiveRidge > 0.34 || (effectiveRidge > 0.20 && highland > 0.56);
   }
 
   _riverAt(x, y) {
@@ -2197,14 +2474,22 @@ export default class World {
 
     this.spawn = findLand(0, 0, 720) || { x: 0, y: 0 };
 
-    this.startTown = {
-      id: 999,
-      name: "Crossroads Haven",
-      x: this.spawn.x,
-      y: this.spawn.y,
-      isStarting: true,
-      npcs: ["Innkeeper", "Blacksmith", "Merchant", "Guard Captain", "Healer", "Mayor", "Cartographer"],
-    };
+      this.startTown = {
+        id: 999,
+        name: "Crossroads Haven",
+        x: this.spawn.x,
+        y: this.spawn.y,
+        isStarting: true,
+        npcs: ["Innkeeper", "Smith", "Vendor", "Stablemaster", "Healer", "Warden", "Cartographer"],
+        buildings: [
+          { name: "Inn", x: -94, y: -82, w: 52, h: 48, color: "#6c5847" },
+          { name: "Smithy", x: 22, y: -90, w: 54, h: 54, color: "#505866" },
+          { name: "Vendor", x: -74, y: 12, w: 48, h: 40, color: "#7b654f" },
+          { name: "Stable", x: 48, y: 18, w: 52, h: 46, color: "#8b6f52" },
+          { name: "Healer", x: -118, y: 46, w: 36, h: 36, color: "#5f5244" },
+          { name: "Cartography", x: 84, y: -44, w: 38, h: 42, color: "#4b5464" },
+        ],
+      };
 
     const campSeeds = [
       [620, 120], [-720, 260], [240, 1180],
@@ -2214,14 +2499,14 @@ export default class World {
       [7200, 420], [-7400, -260], [820, 7040], [-980, -7220],
     ];
     const townSeeds = [
-      [180, 620, "Stonewake"],
-      [-1420, 1540, "Ashford"],
-      [2260, -1500, "Rivergate"],
-      [-3380, -860, "Ironmere"],
-      [4860, 3360, "Dawnwatch"],
-      [-5520, 4320, "Frostfen"],
-      [6120, -5160, "Emberhold"],
-      [-6420, -5660, "Nightmarket"],
+      [180, 620, "Stonewake", false],
+      [-1420, 1540, "Ashford", false],
+      [2260, -1500, "Rivergate", true],
+      [-3380, -860, "Ironmere", false],
+      [4860, 3360, "Dawnwatch", false],
+      [-5520, 4320, "Frostfen", true],
+      [6120, -5160, "Emberhold", false],
+      [-6420, -5660, "Nightmarket", true],
     ];
     const waystoneSeeds = [
       [-1180, 40], [1260, -20], [0, -1450], [40, 1800],
@@ -2286,15 +2571,16 @@ export default class World {
         this.camps.push({ id: id++, type: picked[0], name: picked[1], x: p.x, y: p.y });
       }
     }
-    for (const [x, y, name] of townSeeds) {
-      const p = findLand(x, y, 560);
+    for (const [x, y, name, coastal] of townSeeds) {
+      const p = coastal ? findShore(x, y, 620) : findLand(x, y, 560);
       if (p) {
         this.towns.push({
           id: id++,
           name,
           x: p.x,
           y: p.y,
-          npcs: ["Warden", "Smith", "Archivist"],
+          coastal: !!coastal,
+          npcs: coastal ? ["Harbormaster", "Smith", "Vendor", "Archivist"] : ["Warden", "Smith", "Archivist"],
         });
       }
     }
@@ -2309,6 +2595,29 @@ export default class World {
     for (const [x, y] of dockSeeds) {
       const p = findShore(x, y, 520);
       if (p) this.docks.push({ id: id++, x: p.x, y: p.y });
+    }
+
+    for (const town of this.towns) {
+      if (!town?.coastal) continue;
+      let bestDock = null;
+      let bestD2 = Infinity;
+      for (const dock of this.docks) {
+        const d2 = (dock.x - town.x) ** 2 + (dock.y - town.y) ** 2;
+        if (d2 < bestD2) {
+          bestD2 = d2;
+          bestDock = dock;
+        }
+      }
+      if (bestDock && bestD2 <= 1400 * 1400) {
+        town.linkedDockId = bestDock.id;
+      } else {
+        const harbor = this._findShorePatchNear(town.x, town.y, 760);
+        if (harbor) {
+          const dock = { id: id++, x: harbor.x, y: harbor.y };
+          this.docks.push(dock);
+          town.linkedDockId = dock.id;
+        }
+      }
     }
     for (const [x, y] of shrineSeeds) {
       const p = findLand(x, y, 460);
@@ -2345,8 +2654,8 @@ export default class World {
     for (const p of this.docks) add(p, "dock");
     for (const p of this.dungeons) add(p, "dungeon");
 
-    const starterDistances = [720, 850, 980];
-    const starterAngles = [0, Math.PI/6, Math.PI/3, Math.PI/2, 2*Math.PI/3, 5*Math.PI/6, Math.PI, 7*Math.PI/6, 4*Math.PI/3, 3*Math.PI/2, 5*Math.PI/3, 11*Math.PI/6];
+    const starterDistances = [760];
+    const starterAngles = [0, Math.PI * 0.5, Math.PI, Math.PI * 1.5];
     for (let dist of starterDistances) {
       for (let ang of starterAngles) {
         const sx = this.spawn.x + Math.cos(ang) * dist;
@@ -2359,34 +2668,61 @@ export default class World {
     }
 
     const mainNodes = this.roadNodes.filter((n) => (
-      n.type === "spawn" || n.type === "town" || n.type === "waystone" || 
+      n.type === "spawn" || n.type === "town" || n.type === "waystone" ||
       n.type === "camp" || n.type === "dock" || n.type === "dungeon" || n.type === "starter"
     ));
-    const spawnNode = mainNodes.find(n => n.type === "spawn");
-    let others = mainNodes.filter(n => n !== spawnNode);
+    const spawnNode = mainNodes.find((n) => n.type === "spawn");
+    const starters = mainNodes.filter((n) => n.type === "starter");
+    const remaining = mainNodes
+      .filter((n) => n !== spawnNode && n.type !== "starter")
+      .sort((a, b) => Math.hypot(a.x - spawnNode.x, a.y - spawnNode.y) - Math.hypot(b.x - spawnNode.x, b.y - spawnNode.y));
 
-    others.sort((a, b) => {
-      const angleA = Math.atan2(a.y - spawnNode.y, a.x - spawnNode.x);
-      const angleB = Math.atan2(b.y - spawnNode.y, b.x - spawnNode.x);
-      return angleA - angleB;
-    });
+    const connected = [spawnNode];
 
-    let current = spawnNode;
-
-    for (const next of others.filter(n => n.type === "starter")) {
-      this._addRoadSegment(current, next, 20, true);
+    for (const next of starters) {
+        this._addRoadSegment(spawnNode, next, 24, true);
+      connected.push(next);
     }
 
-    const remaining = others.filter(n => n.type !== "starter");
     for (const next of remaining) {
-      this._addRoadSegment(current, next, 20, true);
-      current = next;
+      let best = spawnNode;
+      let bestScore = Infinity;
+      for (const candidate of connected) {
+        const dist = Math.hypot(next.x - candidate.x, next.y - candidate.y);
+        const fromSpawn = Math.hypot(candidate.x - spawnNode.x, candidate.y - spawnNode.y);
+        const score = dist + fromSpawn * 0.16;
+        if (score < bestScore) {
+          bestScore = score;
+          best = candidate;
+        }
+      }
+
+        this._addRoadSegment(best, next, next.type === "dock" || next.type === "dungeon" ? 24 : 26, true);
+      connected.push(next);
     }
 
     this._mapDirty = true;
+    this._rebuildRoadPath();
   }
 
-  _addRoadSegment(a, b, width = 20, visible = true) {
+  _rebuildRoadPath() {
+    if (typeof Path2D === "undefined") {
+      this._roadPath = null;
+      return;
+    }
+
+    const path = new Path2D();
+    for (const road of this.roads || []) {
+      if (road.visible === false) continue;
+      const pts = road.points;
+      if (!pts || pts.length < 2) continue;
+      path.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) path.lineTo(pts[i].x, pts[i].y);
+    }
+    this._roadPath = path;
+  }
+
+  _addRoadSegment(a, b, width = 24, visible = true) {
     const keyA = `${a.x | 0},${a.y | 0}:${b.x | 0},${b.y | 0}`;
     const keyB = `${b.x | 0},${b.y | 0}:${a.x | 0},${a.y | 0}`;
 
@@ -2396,7 +2732,7 @@ export default class World {
     this._addRoad(a.x, a.y, b.x, b.y, width, visible);
   }
 
-  _addRoad(ax, ay, bx, by, width = 20, visible = true) {
+  _addRoad(ax, ay, bx, by, width = 24, visible = true) {
     const midX = (ax + bx) * 0.5;
     const midY = (ay + by) * 0.5;
     const dx = bx - ax;
@@ -2407,8 +2743,23 @@ export default class World {
     const ny = dx / len;
 
     const bend = (fbm(midX * 0.0006, midY * 0.0006, hash2(ax | 0, ay | 0, this.seed), 2) - 0.5) * Math.min(90, len * 0.08);
-    const cx = midX + nx * bend;
-    const cy = midY + ny * bend;
+    let cx = midX + nx * bend;
+    let cy = midY + ny * bend;
+
+    const river = this._nearestRiverInfo(midX, midY);
+    if (river?.band) {
+      let delta = Math.abs(Math.atan2(dy, dx) - (river.tangent || 0)) % (Math.PI * 2);
+      if (delta > Math.PI) delta = Math.PI * 2 - delta;
+      delta = Math.min(delta, Math.abs(delta - Math.PI));
+      const riverWidth = this._riverVisualWidth(river.band);
+      const riverDist = Math.sqrt(river.dist2 || 0);
+      if (riverDist < riverWidth * 1.55 && delta < 0.34) {
+        const side = Math.sign((midX - river.x) * river.nx + (midY - river.y) * river.ny) || 1;
+        const push = Math.max(60, riverWidth * 0.85 - riverDist + 52);
+        cx += river.nx * side * push;
+        cy += river.ny * side * push;
+      }
+    }
 
     const points = [];
     const steps = Math.max(14, Math.ceil(len / 42));
@@ -2442,14 +2793,35 @@ export default class World {
     return false;
   }
 
+  _makeRoadPiece(points, width, visible = true) {
+    if (!points || points.length < 2) return null;
+    const first = points[0];
+    const last = points[points.length - 1];
+    const mid = points[(points.length / 2) | 0] || points[0];
+    return {
+      ax: first.x,
+      ay: first.y,
+      bx: last.x,
+      by: last.y,
+      cx: mid.x,
+      cy: mid.y,
+      width,
+      visible,
+      points,
+    };
+  }
+
   _finalizeBridges() {
-    this.bridges = [];
+    const candidates = [];
+    const rebuiltRoads = [];
 
     for (const road of this.roads) {
       const pts = road.points;
       let prevWater = false;
       let enter = null;
       let enterIndex = -1;
+      let sliceStart = 0;
+      let splitRoad = false;
 
       for (let i = 0; i < pts.length; i++) {
         const p = pts[i];
@@ -2471,29 +2843,47 @@ export default class World {
           const midX = (enter.x + exit.x) * 0.5;
           const midY = (enter.y + exit.y) * 0.5;
           const river = this._nearestRiverInfo(midX, midY);
-          const span = clamp((river ? this._riverVisualWidth(river.band) : Math.hypot(dx, dy)) + roadWidth * 1.35, roadWidth + 28, 190);
-          const cx = river?.x ?? midX;
-          const cy = river?.y ?? midY;
-          const angle = (river?.tangent ?? Math.atan2(dy, dx)) + Math.PI * 0.5;
-          const pathStart = Math.max(0, enterIndex - 2);
-          const pathEnd = Math.min(pts.length - 1, exitIndex + 2);
-          const path = pts.slice(pathStart, pathEnd + 1).map((pt) => ({ x: pt.x, y: pt.y }));
-          const centerPoint = path[Math.floor(path.length * 0.5)] || { x: cx, y: cy };
-          const roadAngle = Math.atan2(
-            (path[path.length - 1]?.y ?? exit.y) - (path[0]?.y ?? enter.y),
-            (path[path.length - 1]?.x ?? exit.x) - (path[0]?.x ?? enter.x)
-          );
+          const angle = Math.atan2(dy, dx);
+          const dirX = Math.cos(angle);
+          const dirY = Math.sin(angle);
+          const baseSpan = Math.hypot(dx, dy);
+          const riverWidth = river?.band ? this._riverVisualWidth(river.band) : baseSpan;
+          const tooLongForBridge = baseSpan > 108 || riverWidth > 88;
 
-          this.bridges.push({
-            cx: centerPoint.x,
-            cy: centerPoint.y,
+          if (tooLongForBridge) {
+            const beforePts = pts.slice(sliceStart, Math.max(sliceStart, enterIndex));
+            const beforeRoad = this._makeRoadPiece(beforePts, road.width, road.visible);
+            if (beforeRoad) rebuiltRoads.push(beforeRoad);
+            sliceStart = exitIndex;
+            splitRoad = true;
+            enter = null;
+            enterIndex = -1;
+            prevWater = s.isWater;
+            continue;
+          }
+
+          const extend = Math.min(10, roadWidth * 0.18);
+          const span = clamp(baseSpan + extend * 2, roadWidth + 22, 190);
+          const bridgeStart = { x: enter.x - dirX * extend, y: enter.y - dirY * extend };
+          const bridgeEnd = { x: exit.x + dirX * extend, y: exit.y + dirY * extend };
+          const cx = (bridgeStart.x + bridgeEnd.x) * 0.5;
+          const cy = (bridgeStart.y + bridgeEnd.y) * 0.5;
+
+          const path = [bridgeStart, bridgeEnd];
+
+          candidates.push({
+            cx,
+            cy,
             length: span,
             width: roadWidth + 10,
-            angle: roadAngle,
+            angle,
             riverAngle: angle,
-            roadAngle,
+            roadAngle: angle,
             path,
             vertical,
+            start: bridgeStart,
+            end: bridgeEnd,
+            riverBandSeed: river?.band?.seed ?? 0,
           });
 
           enter = null;
@@ -2502,9 +2892,120 @@ export default class World {
 
         prevWater = s.isWater;
       }
+
+      if (splitRoad) {
+        const tailPts = pts.slice(sliceStart);
+        const tailRoad = this._makeRoadPiece(tailPts, road.width, road.visible);
+        if (tailRoad) rebuiltRoads.push(tailRoad);
+      } else {
+        rebuiltRoads.push(road);
+      }
     }
 
+    this.roads = rebuiltRoads;
+    this._rebuildRoadPath();
+    this.bridges = this._dedupeBridgeClusters(this._mergeBridgeCandidates(candidates));
     this._mapDirty = true;
+  }
+
+  _mergeBridgeCandidates(candidates) {
+    const merged = [];
+
+    const angleDelta = (a, b) => {
+      let d = Math.abs(a - b) % (Math.PI * 2);
+      if (d > Math.PI) d = Math.PI * 2 - d;
+      return Math.min(d, Math.abs(d - Math.PI));
+    };
+
+    for (const candidate of candidates || []) {
+      let target = null;
+      let targetIndex = -1;
+      for (const existing of merged) {
+        targetIndex += 1;
+        const dist = Math.hypot(candidate.cx - existing.cx, candidate.cy - existing.cy);
+        const sameRiver = !candidate.riverBandSeed || !existing.riverBandSeed || candidate.riverBandSeed === existing.riverBandSeed;
+        if (
+          sameRiver &&
+          dist <= Math.max(candidate.length, existing.length, candidate.width * 4.5, existing.width * 4.5) &&
+          angleDelta(candidate.angle, existing.angle) < 0.42
+        ) {
+          target = existing;
+          break;
+        }
+      }
+
+      if (!target) {
+        merged.push({ ...candidate });
+        continue;
+      }
+
+      const targetScore = target.length + target.width * 2;
+      const candidateScore = candidate.length + candidate.width * 2;
+      if (candidateScore > targetScore) {
+        merged[targetIndex] = { ...candidate };
+      } else {
+        target.width = Math.max(target.width, candidate.width);
+      }
+    }
+
+    return merged;
+  }
+
+  _dedupeBridgeClusters(bridges) {
+    const remaining = [...(bridges || [])];
+    const clusters = [];
+
+    while (remaining.length) {
+      const root = remaining.shift();
+      const cluster = [root];
+      let changed = true;
+
+      while (changed) {
+        changed = false;
+        for (let i = remaining.length - 1; i >= 0; i--) {
+          const candidate = remaining[i];
+          const closeToCluster = cluster.some((existing) => {
+            const dist = Math.hypot(candidate.cx - existing.cx, candidate.cy - existing.cy);
+            return dist <= Math.max(candidate.length, existing.length, candidate.width * 5, existing.width * 5);
+          });
+          if (closeToCluster) {
+            cluster.push(candidate);
+            remaining.splice(i, 1);
+            changed = true;
+          }
+        }
+      }
+
+      clusters.push(cluster);
+    }
+
+    return clusters.map((cluster) => {
+      if (cluster.length === 1) return cluster[0];
+
+      let centerX = 0;
+      let centerY = 0;
+      let maxWidth = 0;
+      for (const bridge of cluster) {
+        centerX += bridge.cx;
+        centerY += bridge.cy;
+        maxWidth = Math.max(maxWidth, bridge.width);
+      }
+      centerX /= cluster.length;
+      centerY /= cluster.length;
+
+      const anchor = cluster.reduce((best, bridge) => {
+        const bestDist = Math.hypot(best.cx - centerX, best.cy - centerY);
+        const bridgeDist = Math.hypot(bridge.cx - centerX, bridge.cy - centerY);
+        const bestScore = best.length + best.width * 2 - bestDist * 0.35;
+        const bridgeScore = bridge.length + bridge.width * 2 - bridgeDist * 0.35;
+        return bridgeScore > bestScore ? bridge : best;
+      }, cluster[0]);
+
+      return {
+        ...anchor,
+        width: maxWidth,
+      };
+    });
   }
 
   _bridgeAt(x, y) {
@@ -2657,6 +3158,41 @@ export default class World {
     window.requestAnimationFrame(run);
   }
 
+  _queueWarmupTasks() {
+    this._warmupTasks = [
+      () => this._generateTreesChunk(),
+      () => this._generateRocksChunk(),
+    ];
+  }
+
+  _runWarmupTasks() {
+    if (!this._warmupTasks?.length) return;
+
+    if (typeof performance === "undefined") {
+      while (this._warmupTasks.length) {
+        if (this._warmupTasks[0]()) this._warmupTasks.shift();
+        else break;
+      }
+      return;
+    }
+
+    const end = performance.now() + 2.5;
+    while (this._warmupTasks.length && performance.now() < end) {
+      if (this._warmupTasks[0]()) this._warmupTasks.shift();
+      else break;
+    }
+  }
+
+  _buildMountainRenderDataChunk() {
+    const ranges = this._mountainRanges || [];
+    if (this._mountainRenderBuildIndex >= ranges.length) return true;
+
+    const range = ranges[this._mountainRenderBuildIndex++];
+    const built = this._buildMountainRenderDataForRange(range);
+    if (built?.length) this._mountainRenderData.push(...built);
+    return this._mountainRenderBuildIndex >= ranges.length;
+  }
+
   _buildMapPreview() {
     if (this._mapInfo && this._mapCanvas) return;
     const originalSize = this._mapSize;
@@ -2681,6 +3217,7 @@ export default class World {
         ctx,
         colors: [],
         tiles: [],
+        zones: [],
         revealed: [],
         row: 0,
       };
@@ -2689,6 +3226,7 @@ export default class World {
         size,
         colors: this._mapBuildState.colors,
         tiles: this._mapBuildState.tiles,
+        zones: this._mapBuildState.zones,
         revealed: this._mapBuildState.revealed,
       };
     }
@@ -2701,6 +3239,7 @@ export default class World {
       const colorRow = [];
       const revRow = [];
       const tileRow = [];
+      const zoneRow = [];
 
       for (let c = 0; c < state.size; c++) {
         const wx = -this.mapHalfSize + (c + 0.5) * ((this.mapHalfSize * 2) / state.size);
@@ -2709,6 +3248,7 @@ export default class World {
 
         colorRow.push(s.color);
         tileRow.push(s.color);
+        zoneRow.push(s.zone || "");
         revRow.push(false);
 
         if (state.ctx) {
@@ -2719,6 +3259,7 @@ export default class World {
 
       state.colors.push(colorRow);
       state.tiles.push(tileRow);
+      state.zones.push(zoneRow);
       state.revealed.push(revRow);
     }
 
@@ -2727,6 +3268,7 @@ export default class World {
       size,
       colors: state.colors,
       tiles: state.tiles,
+      zones: state.zones,
       revealed: state.revealed,
     };
 
@@ -2737,43 +3279,12 @@ export default class World {
     }
 
     const { canvas, ctx } = state;
-    if (ctx) {
-      const toMap = (p) => ({
-        x: ((p.x + this.mapHalfSize) / (this.mapHalfSize * 2)) * size,
-        y: ((p.y + this.mapHalfSize) / (this.mapHalfSize * 2)) * size,
-      });
-
-      ctx.save();
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-
-      for (const road of this.roads) {
-        if (road.visible === false) continue;
-        const pts = road.points;
-        if (!pts || pts.length < 2) continue;
-        const first = toMap(pts[0]);
-        ctx.beginPath();
-        ctx.moveTo(first.x, first.y);
-        for (let i = 1; i < pts.length; i++) {
-          const p = toMap(pts[i]);
-          ctx.lineTo(p.x, p.y);
-        }
-        ctx.strokeStyle = "rgba(45,34,22,0.45)";
-        ctx.lineWidth = 1.7;
-        ctx.stroke();
-        ctx.strokeStyle = "rgba(213,178,111,0.75)";
-        ctx.lineWidth = 0.85;
-        ctx.stroke();
-      }
-
-      ctx.restore();
-    }
-
     this._mapCanvas = canvas;
     this._mapInfo = {
       size,
       colors: state.colors,
       tiles: state.tiles,
+      zones: state.zones,
       revealed: state.revealed,
     };
     this._mapBuildState = null;
@@ -2794,11 +3305,13 @@ export default class World {
     const colors = [];
     const revealed = [];
     const tiles = [];
+    const zones = [];
 
     for (let r = 0; r < size; r++) {
       const colorRow = [];
       const revRow = [];
       const tileRow = [];
+      const zoneRow = [];
 
       for (let c = 0; c < size; c++) {
         const wx = -this.mapHalfSize + (c + 0.5) * ((this.mapHalfSize * 2) / size);
@@ -2807,6 +3320,7 @@ export default class World {
 
         colorRow.push(s.color);
         tileRow.push(s.color);
+        zoneRow.push(s.zone || "");
         revRow.push(false);
 
         if (ctx) {
@@ -2817,96 +3331,183 @@ export default class World {
 
       colors.push(colorRow);
       tiles.push(tileRow);
+      zones.push(zoneRow);
       revealed.push(revRow);
     }
 
-    if (ctx) {
-      const toMap = (p) => ({
-        x: ((p.x + this.mapHalfSize) / (this.mapHalfSize * 2)) * size,
-        y: ((p.y + this.mapHalfSize) / (this.mapHalfSize * 2)) * size,
-      });
-
-      ctx.save();
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-
-      for (const road of this.roads) {
-        if (road.visible === false) continue;
-
-        const pts = road.points;
-        if (!pts || pts.length < 2) continue;
-
-        const first = toMap(pts[0]);
-        ctx.beginPath();
-        ctx.moveTo(first.x, first.y);
-        for (let i = 1; i < pts.length; i++) {
-          const p = toMap(pts[i]);
-          ctx.lineTo(p.x, p.y);
-        }
-        ctx.strokeStyle = "rgba(45,34,22,0.45)";
-        ctx.lineWidth = 1.7;
-        ctx.stroke();
-
-        ctx.strokeStyle = "rgba(213,178,111,0.75)";
-        ctx.lineWidth = 0.85;
-        ctx.stroke();
-      }
-
-      ctx.restore();
-    }
-
     this._mapCanvas = canvas;
-    this._mapInfo = { size, colors, tiles, revealed };
+    this._mapInfo = { size, colors, tiles, zones, revealed };
     this._discoveryExportCache = null;
     this._mapDirty = false;
   }
 
-  _generateTrees() {
-    const trees = [];
-    const count = 240;   // reduced for speed while keeping "better" density near spawn
-    const spawnBias = 1.8; // make trees denser near start area so map feels richer
-    for (let i = 0; i < count; i++) {
+  _addTree(tree) {
+    this._trees.push(tree);
+    const bucketSize = 320;
+    const bx = Math.floor(tree.x / bucketSize);
+    const by = Math.floor(tree.y / bucketSize);
+    const key = `${bx},${by}`;
+    let bucket = this._treeBuckets.get(key);
+    if (!bucket) {
+      bucket = [];
+      this._treeBuckets.set(key, bucket);
+    }
+    bucket.push(tree);
+  }
+
+  _generateTreesChunk() {
+    if (!this._treeBuildState) {
+      this._treeBuildState = {
+        index: 0,
+        count: 1760,
+        spawnBias: 1.45,
+      };
+    }
+
+    const state = this._treeBuildState;
+    const chunkSize = 42;
+    const stop = Math.min(state.count, state.index + chunkSize);
+
+    for (; state.index < stop; state.index++) {
       let tx = this._rng.range(-this.mapHalfSize + 500, this.mapHalfSize - 500);
       let ty = this._rng.range(-this.mapHalfSize + 500, this.mapHalfSize - 500);
-      
-      // bias toward spawn for better visual quality where player starts
+
       if (this._rng.next() < 0.65) {
-        tx = this.spawn.x + (tx - this.spawn.x) * (1 / spawnBias);
-        ty = this.spawn.y + (ty - this.spawn.y) * (1 / spawnBias);
+        tx = this.spawn.x + (tx - this.spawn.x) * (1 / state.spawnBias);
+        ty = this.spawn.y + (ty - this.spawn.y) * (1 / state.spawnBias);
       }
-      
+
       const s = this._sampleCell(tx, ty);
-      if ((s.zone === "meadow" || s.zone === "greenwood" || s.zone === "forest" || s.zone === "deep wilds") 
+      if ((s.zone === "meadow" || s.zone === "greenwood" || s.zone === "forest" || s.zone === "deep wilds" || s.zone === "old fields" || s.zone === "highlands")
           && !s.isMountainWall && !s.isWater) {
-        const isForest = s.zone === "forest" || s.zone === "deep wilds";
-        trees.push({
+        const isForest = s.zone === "forest" || s.zone === "deep wilds" || s.zone === "greenwood";
+        this._addTree({
           x: tx,
           y: ty,
-          seed: (this.seed + i * 123) >>> 0,
-          scale: isForest ? 1.1 + (this._rng.next() * 0.7) : 0.9 + (this._rng.next() * 0.6)
+          seed: (this.seed + state.index * 123) >>> 0,
+          scale: isForest ? 0.58 + (this._rng.next() * 0.46) : 0.48 + (this._rng.next() * 0.34)
         });
+        if (isForest && this._rng.next() < 0.74) {
+          this._addTree({
+            x: tx + this._rng.range(-34, 34),
+            y: ty + this._rng.range(-30, 30),
+            seed: (this.seed + state.index * 197 + 17) >>> 0,
+            scale: 0.42 + (this._rng.next() * 0.28)
+          });
+        }
+        if (this._rng.next() < 0.42) {
+          this._addTree({
+            x: tx + this._rng.range(-52, 52),
+            y: ty + this._rng.range(-44, 44),
+            seed: (this.seed + state.index * 257 + 29) >>> 0,
+            scale: 0.36 + (this._rng.next() * 0.24)
+          });
+        }
       }
     }
-    return trees;
+
+    if (state.index >= state.count) {
+      this._treeBuildState = null;
+      return true;
+    }
+    return false;
+  }
+
+  _addRock(rock) {
+    this._rocks.push(rock);
+    const bucketSize = 320;
+    const bx = Math.floor(rock.x / bucketSize);
+    const by = Math.floor(rock.y / bucketSize);
+    const key = `${bx},${by}`;
+    let bucket = this._rockBuckets.get(key);
+    if (!bucket) {
+      bucket = [];
+      this._rockBuckets.set(key, bucket);
+    }
+    bucket.push(rock);
+  }
+
+  _generateRocksChunk() {
+    if (!this._rockBuildState) {
+      this._rockBuildState = {
+        index: 0,
+        count: 620,
+      };
+    }
+
+    const state = this._rockBuildState;
+    const chunkSize = 34;
+    const stop = Math.min(state.count, state.index + chunkSize);
+
+    for (; state.index < stop; state.index++) {
+      const tx = this._rng.range(-this.mapHalfSize + 420, this.mapHalfSize - 420);
+      const ty = this._rng.range(-this.mapHalfSize + 420, this.mapHalfSize - 420);
+      const s = this._sampleCell(tx, ty);
+      if ((s.zone === "stone flats" || s.zone === "highlands" || s.zone === "mountain") && !s.isWater && !s.bridge && !s.road) {
+        this._addRock({
+          x: tx,
+          y: ty,
+          seed: (this.seed + state.index * 311 + 41) >>> 0,
+          scale: s.zone === "mountain" ? 1.1 + this._rng.next() * 0.55 : 0.7 + this._rng.next() * 0.45,
+          zone: s.zone,
+        });
+        if (this._rng.next() < 0.34) {
+          this._addRock({
+            x: tx + this._rng.range(-34, 34),
+            y: ty + this._rng.range(-28, 28),
+            seed: (this.seed + state.index * 367 + 59) >>> 0,
+            scale: 0.42 + this._rng.next() * 0.26,
+            zone: s.zone,
+          });
+        }
+      }
+    }
+
+    if (state.index >= state.count) {
+      this._rockBuildState = null;
+      return true;
+    }
+    return false;
   }
 
   _drawTree(ctx, x, y, seed, scale) {
+    const treeSprite = this._assets?.treeSprite;
+    if (this._hasWorldImage(treeSprite)) {
+      const mirror = ((seed >>> 3) & 1) === 0 ? 1 : -1;
+      const sway = (((seed >>> 9) & 7) - 3) * 0.4;
+      const w = 66 * scale;
+      const h = 82 * scale;
+      ctx.save();
+      ctx.translate(x + sway, y + 4);
+      ctx.scale(mirror, 1);
+      ctx.drawImage(treeSprite, -w * 0.5, -h, w, h);
+      ctx.restore();
+      return;
+    }
+
     const trunkH = 42 * scale;
     const trunkW = 12 * scale;
+    const broad = ((seed >>> 5) & 3) === 1;
+    const lean = (((seed >>> 9) & 7) - 3) * 0.02;
     
     ctx.fillStyle = "#3f2a1e";
     ctx.fillRect(x - trunkW / 2, y - trunkH + 8, trunkW, trunkH);
     
     const foliageY = y - trunkH - 8;
-    ctx.fillStyle = "#2e6b2e";
+    ctx.fillStyle = broad ? "#356f31" : "#2e6b2e";
     ctx.beginPath();
-    ctx.ellipse(x, foliageY, 24 * scale, 19 * scale, 0, 0, Math.PI * 2);
+    ctx.ellipse(x, foliageY, (broad ? 28 : 24) * scale, (broad ? 21 : 19) * scale, lean, 0, Math.PI * 2);
     ctx.fill();
     
-    ctx.fillStyle = "#3a8c3a";
+    ctx.fillStyle = broad ? "#468d42" : "#3a8c3a";
     ctx.beginPath();
-    ctx.ellipse(x - 5, foliageY - 14, 19 * scale, 15 * scale, -0.2, 0, Math.PI * 2);
+    ctx.ellipse(x - 5, foliageY - 14, (broad ? 22 : 19) * scale, (broad ? 17 : 15) * scale, -0.2 + lean, 0, Math.PI * 2);
     ctx.fill();
+    if (broad) {
+      ctx.beginPath();
+      ctx.ellipse(x + 8, foliageY - 8, 16 * scale, 12 * scale, 0.16 + lean, 0, Math.PI * 2);
+      ctx.fill();
+    }
     
     if (((seed >>> 8) & 3) === 0) {
       ctx.fillStyle = "#1e5a1e";
@@ -2922,9 +3523,99 @@ export default class World {
     const cullTop = top - 30;
     const cullBottom = bottom + 30;
 
-    for (const t of this._trees) {
-      if (t.x < cullLeft || t.x > cullRight || t.y < cullTop || t.y > cullBottom) continue;
-      this._drawTree(ctx, t.x, t.y, t.seed, t.scale);
+    const bucketSize = 320;
+    const bx0 = Math.floor(cullLeft / bucketSize);
+    const bx1 = Math.floor(cullRight / bucketSize);
+    const by0 = Math.floor(cullTop / bucketSize);
+    const by1 = Math.floor(cullBottom / bucketSize);
+
+    for (let by = by0; by <= by1; by++) {
+      for (let bx = bx0; bx <= bx1; bx++) {
+        const bucket = this._treeBuckets.get(`${bx},${by}`);
+        if (!bucket) continue;
+        for (const t of bucket) {
+          if (t.x < cullLeft || t.x > cullRight || t.y < cullTop || t.y > cullBottom) continue;
+          this._drawTree(ctx, t.x, t.y, t.seed, t.scale);
+        }
+      }
+    }
+  }
+
+  _drawRock(ctx, x, y, seed, scale, zone = "stone flats") {
+    const rockSprite = this._assets?.rockSprite;
+    if (this._hasWorldImage(rockSprite)) {
+      const w = 48 * scale;
+      const h = 32 * scale;
+      const mirror = ((seed >>> 2) & 1) === 0 ? 1 : -1;
+      ctx.save();
+      ctx.translate(x, y + 3);
+      ctx.scale(mirror, 1);
+      ctx.drawImage(rockSprite, -w * 0.5, -h, w, h);
+      ctx.restore();
+      return;
+    }
+
+    const dark = zone === "mountain" ? "#4f545d" : "#666c74";
+    const mid = zone === "mountain" ? "#767d87" : "#888f98";
+    const light = zone === "mountain" ? "#a5aeb8" : "#b0b7bf";
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.fillStyle = "rgba(0,0,0,0.16)";
+    ctx.beginPath();
+    ctx.ellipse(0, 4, 11 * scale, 4 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = dark;
+    ctx.beginPath();
+    ctx.moveTo(-12 * scale, 2 * scale);
+    ctx.lineTo(-7 * scale, -8 * scale);
+    ctx.lineTo(0, -11 * scale);
+    ctx.lineTo(10 * scale, -7 * scale);
+    ctx.lineTo(13 * scale, 2 * scale);
+    ctx.lineTo(3 * scale, 8 * scale);
+    ctx.lineTo(-9 * scale, 7 * scale);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = mid;
+    ctx.beginPath();
+    ctx.moveTo(-6 * scale, -5 * scale);
+    ctx.lineTo(1 * scale, -9 * scale);
+    ctx.lineTo(8 * scale, -5 * scale);
+    ctx.lineTo(2 * scale, 2 * scale);
+    ctx.lineTo(-5 * scale, 1 * scale);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = light;
+    ctx.beginPath();
+    ctx.moveTo(-3 * scale, -6 * scale);
+    ctx.lineTo(1 * scale, -8 * scale);
+    ctx.lineTo(5 * scale, -5 * scale);
+    ctx.lineTo(0, -2 * scale);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  _drawRocks(ctx, left, top, right, bottom) {
+    const cullLeft = left - 30;
+    const cullRight = right + 30;
+    const cullTop = top - 30;
+    const cullBottom = bottom + 30;
+
+    const bucketSize = 320;
+    const bx0 = Math.floor(cullLeft / bucketSize);
+    const bx1 = Math.floor(cullRight / bucketSize);
+    const by0 = Math.floor(cullTop / bucketSize);
+    const by1 = Math.floor(cullBottom / bucketSize);
+
+    for (let by = by0; by <= by1; by++) {
+      for (let bx = bx0; bx <= bx1; bx++) {
+        const bucket = this._rockBuckets.get(`${bx},${by}`);
+        if (!bucket) continue;
+        for (const r of bucket) {
+          if (r.x < cullLeft || r.x > cullRight || r.y < cullTop || r.y > cullBottom) continue;
+          this._drawRock(ctx, r.x, r.y, r.seed, r.scale, r.zone);
+        }
+      }
     }
   }
 }

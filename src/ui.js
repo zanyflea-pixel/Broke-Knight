@@ -7,6 +7,9 @@
 
 import { clamp } from "./util.js";
 
+const UI_PURPLE = "rgba(201,167,255,0.48)";
+const UI_ASSET_ROOT = new URL("../assets/ui/", import.meta.url);
+
 export default class UI {
   constructor(canvas) {
     this.canvas = canvas;
@@ -28,6 +31,9 @@ export default class UI {
     this._miniFrameT = 0;
     this._lastMiniHeroX = 0;
     this._lastMiniHeroY = 0;
+    this._controlsCollapsed = false;
+    this._controlsToggleRect = null;
+    this._assets = this._loadUiAssets();
   }
 
   setViewSize(w, h) {
@@ -56,9 +62,9 @@ export default class UI {
     }
 
     this._miniT += dt;
-    if (this._miniT >= 0.28) {
+    if (this._miniT >= 0.45) {
       this._miniT = 0;
-      this._mini = game?.world?.getMinimapCanvas?.() || null;
+      this._mini = game?.world?.peekMinimapCanvas?.() || game?.world?.getMinimapCanvas?.() || null;
       this._miniFrameDirty = true;
     }
 
@@ -67,11 +73,20 @@ export default class UI {
     const hy = game?.hero?.y || 0;
     const heroShift = Math.abs(hx - this._lastMiniHeroX) + Math.abs(hy - this._lastMiniHeroY);
 
-    if (heroShift > 42 || this._miniFrameT >= 0.12) {
+    if (heroShift > 64 || this._miniFrameT >= 0.18) {
       this._miniFrameT = 0;
       this._lastMiniHeroX = hx;
       this._lastMiniHeroY = hy;
       this._miniFrameDirty = true;
+    }
+
+    if (game?.mouse?.clicked && this._controlsToggleRect) {
+      const { x, y, w, h } = this._controlsToggleRect;
+      const mx = game.mouse.x;
+      const my = game.mouse.y;
+      if (mx >= x && mx <= x + w && my >= y && my <= y + h) {
+        this._controlsCollapsed = !this._controlsCollapsed;
+      }
     }
   }
 
@@ -112,27 +127,68 @@ export default class UI {
     this.h = Math.max(1, Math.round(rect?.height || c.clientHeight || c.height || this.h));
   }
 
+  _loadUiAssets() {
+    return {
+      heroPortrait: this._loadUiImage("hero-portrait-knight.png"),
+      spellIcons: this._loadUiImage("spell-icons.png"),
+      mapParchment: this._loadUiImage("map-parchment.png"),
+    };
+  }
+
+  _loadUiImage(name) {
+    const img = new Image();
+    img.decoding = "async";
+    img.src = new URL(name, UI_ASSET_ROOT).href;
+    return img;
+  }
+
+  _hasUiImage(img) {
+    return !!img && img.complete && img.naturalWidth > 0;
+  }
+
+  _drawTextureOverlay(ctx, img, x, y, w, h, alpha = 0.16) {
+    if (!this._hasUiImage(img)) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(img, x, y, w, h);
+    ctx.restore();
+  }
+
   _drawPanel(ctx, x, y, w, h, opts = {}) {
     const alpha = opts.alpha ?? 0.84;
-    const accent = opts.accent || "rgba(230,190,104,0.48)";
+    const accent = opts.accent || UI_PURPLE;
 
     ctx.save();
-    ctx.fillStyle = "rgba(0,0,0,0.34)";
-    ctx.fillRect(x + 4, y + 5, w, h);
+    ctx.fillStyle = "rgba(0,0,0,0.30)";
+    ctx.fillRect(x + 5, y + 6, w, h);
+
+    const outerGlow = ctx.createLinearGradient(x, y, x, y + h);
+    outerGlow.addColorStop(0, "rgba(255,255,255,0.03)");
+    outerGlow.addColorStop(1, "rgba(0,0,0,0.14)");
+    ctx.fillStyle = outerGlow;
+    ctx.fillRect(x - 1, y - 1, w + 2, h + 2);
 
     const g = ctx.createLinearGradient(x, y, x, y + h);
-    g.addColorStop(0, `rgba(19,25,32,${alpha})`);
-    g.addColorStop(1, `rgba(7,10,15,${Math.min(0.96, alpha + 0.08)})`);
+    g.addColorStop(0, `rgba(23,31,40,${alpha})`);
+    g.addColorStop(0.48, `rgba(12,18,24,${Math.min(0.94, alpha + 0.04)})`);
+    g.addColorStop(1, `rgba(7,10,15,${Math.min(0.98, alpha + 0.10)})`);
     ctx.fillStyle = g;
     ctx.fillRect(x, y, w, h);
 
-    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.fillStyle = "rgba(255,255,255,0.04)";
+    ctx.fillRect(x + 1, y + 1, w - 2, Math.max(8, h * 0.14));
+    ctx.fillStyle = "rgba(0,0,0,0.10)";
+    ctx.fillRect(x + 1, y + h - 12, w - 2, 11);
+
+    ctx.strokeStyle = "rgba(255,255,255,0.14)";
     ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-    ctx.strokeStyle = "rgba(0,0,0,0.34)";
+    ctx.strokeStyle = "rgba(0,0,0,0.42)";
     ctx.strokeRect(x + 2.5, y + 2.5, w - 5, h - 5);
 
     ctx.fillStyle = accent;
     ctx.fillRect(x + 1, y + 1, w - 2, 2);
+    ctx.fillStyle = accent.replace("0.48", "0.24").replace("0.54", "0.26").replace("0.44", "0.22");
+    ctx.fillRect(x + 1, y + 1, 3, h - 2);
     ctx.restore();
   }
 
@@ -161,7 +217,7 @@ export default class UI {
       ctx.font = "bold 11px 'Segoe UI', Arial";
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
-      ctx.fillText(label, x + 8, y + h * 0.5 + 0.5);
+      this._drawFitText(ctx, label, x + 12, y + h * 0.5 + 0.5, Math.max(40, w - 24), 8);
     }
     ctx.restore();
   }
@@ -175,25 +231,46 @@ export default class UI {
     ctx.save();
     ctx.fillStyle = fill;
     ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = "rgba(255,255,255,0.05)";
+    ctx.fillRect(x + 1, y + 1, w - 2, Math.max(2, h * 0.34));
     ctx.strokeStyle = stroke;
     ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
     ctx.fillStyle = textColor;
     ctx.font = font;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    this._drawFitText(ctx, text, x + w * 0.5 - (w - 12) * 0.5, y + h * 0.5 + 0.5, w - 12, 8);
+    const raw = String(text ?? "");
+    const match = font.match(/(\d+(?:\.\d+)?)px/);
+    const base = match ? Number.parseFloat(match[1]) : 11;
+    const prefix = font.replace(/(\d+(?:\.\d+)?)px/, "__SIZE__px");
+    let size = base;
+    const maxWidth = Math.max(12, w - 14);
+
+    while (size > 8 && ctx.measureText(raw).width > maxWidth) {
+      size -= 1;
+      ctx.font = prefix.replace("__SIZE__", String(size));
+    }
+
+    let out = raw;
+    if (ctx.measureText(out).width > maxWidth) {
+      while (out.length > 1 && ctx.measureText(`${out}...`).width > maxWidth) out = out.slice(0, -1);
+      out = out.length < raw.length ? `${out}...` : out;
+    }
+
+    ctx.fillText(out, x + w * 0.5 + 2, y + h * 0.5 + 0.5);
+    ctx.font = font;
     ctx.restore();
   }
 
   _getHudLayout() {
-    const x = 16;
+    const x = 30;
     const y = 16;
-    const w = Math.min(Math.max(this.w * 0.34, 300), 382);
+    const w = Math.min(Math.max(this.w * 0.36, 320), 404);
     return {
       x,
       y,
       w,
-      panelH: 126,
+      panelH: 164,
       hpH: 18,
       manaH: 12,
       xpH: 8,
@@ -207,31 +284,28 @@ export default class UI {
       178;
     return {
       size,
-      x: this.w - size - 16,
+      x: this.w - size - 30,
       y: 16,
     };
   }
 
   _getObjectiveLayout() {
     const hud = this._getHudLayout();
-    const minimap = this._getMinimapLayout();
-    const x = 16;
-    const y = hud.y + hud.panelH + 14;
-    const rightLimit = minimap.x - 18;
-    const maxW = Math.max(248, rightLimit - x);
+    const x = hud.x;
+    const y = hud.y + hud.panelH + 22;
     return {
       x,
       y,
-      w: Math.min(380, Math.max(248, maxW)),
-      h: 108,
+      w: hud.w,
+      h: 118,
     };
   }
 
   _getBossLayout() {
     const hud = this._getHudLayout();
     const minimap = this._getMinimapLayout();
-    const left = hud.x + hud.w + 18;
-    const right = minimap.x - 18;
+    const left = hud.x + hud.w + 22;
+    const right = minimap.x - 22;
     const available = right - left;
     const w = Math.min(420, Math.max(240, available > 240 ? available : this.w * 0.32));
     return {
@@ -348,72 +422,208 @@ export default class UI {
     const hpFrac = clamp((hero.hp || 0) / hpMax, 0, 1);
     const manaFrac = clamp((hero.mana || 0) / manaMax, 0, 1);
     const xpFrac = clamp((hero.xp || 0) / xpNeed, 0, 1);
+    const insetX = 10;
+    const innerX = x + insetX;
+    const innerW = w - insetX * 2;
+    const levelW = godMode ? 54 : 62;
+    const goldW = 96;
+    const topGap = 8;
+    const topRightW = (godMode ? 58 + topGap : 0) + levelW + topGap + goldW;
+    const titleW = Math.max(132, innerW - topRightW - 8);
+    const potionW = 60;
+    const barGap = 10;
+    const barW = innerW - potionW - barGap;
+    const potionX = innerX + barW + barGap;
+    const hpBarY = y + 39;
+    const manaBarY = y + 63;
+    const xpBarY = y + 84;
 
     ctx.save();
 
-    this._drawPanel(ctx, x - 8, y - 8, w + 16, panelH, { accent: godMode ? "rgba(92,210,255,0.54)" : "rgba(232,190,96,0.54)" });
+    this._drawPanel(ctx, x - 8, y - 8, w + 16, panelH, { accent: UI_PURPLE });
 
     ctx.fillStyle = "#f4f7fc";
     ctx.font = "bold 16px 'Segoe UI', Arial";
     ctx.textAlign = "left";
-    this._drawFitText(ctx, `${className}`, x, y + 2, w - 184, 11);
-    this._drawPill(ctx, x + w - 176, y - 11, 68, 20, `Lv ${hero.level || 1}`, {
-      fill: "rgba(255,255,255,0.08)",
-      stroke: "rgba(255,255,255,0.16)",
-      textColor: "#f3f0dc",
-    });
-    this._drawPill(ctx, x + w - 100, y - 11, 100, 20, `Gold ${hero.gold || 0}`, {
+    this._drawFitText(ctx, `${className}`, innerX, y + 14, titleW, 11);
+    ctx.fillStyle = "#8ea7c3";
+    ctx.font = "11px 'Segoe UI', Arial";
+    this._drawFitText(ctx, godMode ? "Ascended Vanguard" : "Frontline Adventurer", innerX, y + 29, titleW, 9);
+
+    let pillX = innerX + innerW - goldW;
+    this._drawPill(ctx, pillX, y + 4, goldW, 18, `Gold ${hero.gold || 0}`, {
       fill: "rgba(255,215,121,0.10)",
       stroke: "rgba(255,215,121,0.20)",
       textColor: "#ffd779",
+      font: "bold 10px 'Segoe UI', Arial",
+    });
+    pillX -= topGap + levelW;
+    this._drawPill(ctx, pillX, y + 4, levelW, 18, `Lv ${hero.level || 1}`, {
+      fill: "rgba(255,255,255,0.08)",
+      stroke: "rgba(255,255,255,0.16)",
+      textColor: "#f3f0dc",
+      font: "bold 10px 'Segoe UI', Arial",
     });
     if (godMode) {
-      this._drawPill(ctx, x + w - 236, y - 11, 52, 20, "GOD", {
+      pillX -= topGap + 58;
+      this._drawPill(ctx, pillX, y + 4, 58, 18, "GOD", {
         fill: "rgba(92,210,255,0.16)",
         stroke: "rgba(128,224,255,0.35)",
         textColor: "#8fd8ff",
+        font: "bold 10px 'Segoe UI', Arial",
       });
     }
 
-    this._drawBar(ctx, x, y + 12, w, hpH, hpFrac, "#b53045", "#f06d73", `HP ${Math.round(hero.hp || 0)} / ${hpMax}`);
-    this._drawBar(ctx, x, y + 38, w, manaH, manaFrac, "#2f65be", "#6db8ff", `Mana ${Math.round(hero.mana || 0)} / ${manaMax}`);
-    this._drawBar(ctx, x, y + 58, w, xpH, xpFrac, "#a9852d", "#efd072");
+    this._drawBar(ctx, innerX, hpBarY, barW, hpH, hpFrac, "#9f223d", "#ff6f7f", `HP ${Math.round(hero.hp || 0)} / ${hpMax}`);
+    this._drawBar(ctx, innerX, manaBarY, barW, manaH, manaFrac, "#2258b8", "#71c1ff", `Mana ${Math.round(hero.mana || 0)} / ${manaMax}`);
+    this._drawBar(ctx, innerX, xpBarY, innerW, xpH, xpFrac, "#89621a", "#f1d57f");
 
     ctx.fillStyle = "#c8d2df";
     ctx.font = "11px 'Segoe UI', Arial";
-    ctx.fillText(`XP ${hero.xp || 0} / ${xpNeed}`, x + 8, y + 74);
+    this._drawFitText(ctx, `XP ${hero.xp || 0} / ${xpNeed}`, innerX + 8, y + 102, innerW - 16, 8);
 
-    this._drawPill(ctx, x + w - 108, y + 18, 100, 18, `1  HP ${hero?.potions?.hp || 0}`, {
-      fill: "rgba(240,109,115,0.10)",
-      stroke: "rgba(240,109,115,0.22)",
+    this._drawPill(ctx, potionX, hpBarY + 1, potionW, 16, `1 HP ${hero?.potions?.hp || 0}`, {
+      fill: "rgba(240,109,115,0.14)",
+      stroke: "rgba(240,109,115,0.28)",
       textColor: "#ffd3d7",
       font: "bold 10px 'Segoe UI', Arial",
     });
-    this._drawPill(ctx, x + w - 108, y + 40, 100, 18, `2  MP ${hero?.potions?.mana || 0}`, {
-      fill: "rgba(109,184,255,0.10)",
-      stroke: "rgba(109,184,255,0.22)",
+    this._drawPill(ctx, potionX, manaBarY + 1, potionW, 16, `2 MP ${hero?.potions?.mana || 0}`, {
+      fill: "rgba(109,184,255,0.14)",
+      stroke: "rgba(109,184,255,0.28)",
       textColor: "#d7ebff",
       font: "bold 10px 'Segoe UI', Arial",
     });
 
-    const statY = y + 86;
+    const statY = y + 118;
     const statGap = 8;
-    const statW = Math.floor((w - statGap * 2) / 3);
-    this._drawPill(ctx, x, statY, statW, 22, `DMG ${stats.dmg || 0}`, {
+    const statW = Math.floor((innerW - statGap * 2) / 3);
+    this._drawPill(ctx, innerX, statY, statW, 22, `DMG ${stats.dmg || 0}`, {
       fill: "rgba(255,255,255,0.06)",
       stroke: "rgba(255,255,255,0.12)",
       textColor: "#9fb1c7",
     });
-    this._drawPill(ctx, x + statW + statGap, statY, statW, 22, `ARM ${stats.armor || 0}`, {
+    this._drawPill(ctx, innerX + statW + statGap, statY, statW, 22, `ARM ${stats.armor || 0}`, {
       fill: "rgba(255,255,255,0.06)",
       stroke: "rgba(255,255,255,0.12)",
       textColor: "#9fb1c7",
     });
-    this._drawPill(ctx, x + (statW + statGap) * 2, statY, statW, 22, `CRIT ${Math.round((stats.crit || 0) * 100)}%`, {
+    this._drawPill(ctx, innerX + (statW + statGap) * 2, statY, statW, 22, `CRIT ${Math.round((stats.crit || 0) * 100)}%`, {
       fill: "rgba(255,255,255,0.06)",
       stroke: "rgba(255,255,255,0.12)",
       textColor: "#9fb1c7",
     });
+
+    ctx.restore();
+  }
+
+  _drawSkillGlyph(ctx, row, x, y, size) {
+    const name = String(row?.name || row?.key || "").toLowerCase();
+    const spellIcons = this._assets?.spellIcons;
+    let iconIndex = -1;
+    if (name.includes("spark")) iconIndex = 0;
+    else if (name.includes("nova")) iconIndex = 1;
+    else if (name.includes("dash") || name.includes("blink")) iconIndex = 2;
+    else if (name.includes("orb")) iconIndex = 3;
+    if (iconIndex >= 0 && this._hasUiImage(spellIcons)) {
+      const sprite = 64;
+      const drawSize = size * 0.68;
+      const dx = x + (size - drawSize) * 0.5;
+      const dy = y + size * 0.14;
+      ctx.save();
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(spellIcons, iconIndex * sprite, 0, sprite, sprite, dx, dy, drawSize, drawSize);
+      ctx.restore();
+      return;
+    }
+
+    const cx = x + size * 0.5;
+    const cy = y + size * 0.5 - 3;
+    const r = size * 0.18;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.strokeStyle = "rgba(245,250,255,0.88)";
+    ctx.fillStyle = row?.color || "#dbe7ff";
+    ctx.lineWidth = 1.8;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    if (name.includes("spark")) {
+      ctx.beginPath();
+      ctx.moveTo(-1, -10);
+      ctx.lineTo(6, -2);
+      ctx.lineTo(1, -2);
+      ctx.lineTo(7, 8);
+      ctx.lineTo(-5, 0);
+      ctx.lineTo(0, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.45)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(0, -8);
+      ctx.lineTo(3, -2);
+      ctx.stroke();
+    } else if (name.includes("nova")) {
+      ctx.strokeStyle = "rgba(230,248,255,0.95)";
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 8; i++) {
+        const a = (Math.PI * 2 * i) / 8;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * 4, Math.sin(a) * 4);
+        ctx.lineTo(Math.cos(a) * 10, Math.sin(a) * 10);
+        ctx.stroke();
+      }
+      ctx.fillStyle = "rgba(230,248,255,0.92)";
+      ctx.beginPath();
+      ctx.arc(0, 0, 4, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (name.includes("dash") || name.includes("blink")) {
+      ctx.fillStyle = "rgba(255,211,110,0.95)";
+      ctx.beginPath();
+      ctx.moveTo(-10, 0);
+      ctx.lineTo(1, -7);
+      ctx.lineTo(2, -3);
+      ctx.lineTo(10, -3);
+      ctx.lineTo(10, 3);
+      ctx.lineTo(2, 3);
+      ctx.lineTo(1, 7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,243,209,0.72)";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(-12, -6);
+      ctx.lineTo(-4, -2);
+      ctx.moveTo(-12, 0);
+      ctx.lineTo(-4, 0);
+      ctx.moveTo(-12, 6);
+      ctx.lineTo(-4, 2);
+      ctx.stroke();
+    } else if (name.includes("orb")) {
+      const orb = ctx.createRadialGradient(-2, -3, 1, 0, 0, 11);
+      orb.addColorStop(0, "rgba(255,255,255,0.95)");
+      orb.addColorStop(0.35, "rgba(227,201,255,0.96)");
+      orb.addColorStop(1, "rgba(192,140,255,0.92)");
+      ctx.fillStyle = orb;
+      ctx.beginPath();
+      ctx.arc(0, 0, 9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(248,236,255,0.72)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, 11, Math.PI * 0.15, Math.PI * 1.1);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(167,118,232,0.70)";
+      ctx.beginPath();
+      ctx.arc(0, 0, 13, Math.PI * 1.2, Math.PI * 1.95);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.arc(0, 0, r + 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     ctx.restore();
   }
@@ -430,32 +640,34 @@ export default class UI {
     };
 
     ctx.save();
-    this._drawPanel(ctx, layout.x - 12, layout.y - 16, layout.total + 24, layout.box + 30, {
-      alpha: 0.58,
-      accent: "rgba(132,170,255,0.26)",
-    });
 
     for (let i = 0; i < spellRows.length; i++) {
       const row = spellRows[i];
       const x = layout.x + i * (layout.box + layout.gap);
       const y = layout.y;
       const accent = row.cooldownValue > 0 ? "#ffd98a" : row.affordable ? row.color || "#94e48d" : "#ff9c9c";
-      this._drawPanel(ctx, x, y, layout.box, layout.box, { alpha: 0.82, accent });
+      this._drawPanel(ctx, x, y, layout.box, layout.box, { alpha: 0.78, accent: UI_PURPLE });
 
-      ctx.fillStyle = row.color || "#a9c3ff";
-      ctx.globalAlpha = 0.22;
+      const core = ctx.createLinearGradient(x, y, x, y + layout.box);
+      core.addColorStop(0, "rgba(255,255,255,0.06)");
+      core.addColorStop(1, "rgba(0,0,0,0.22)");
+      ctx.fillStyle = core;
       ctx.fillRect(x + layout.inset, y + layout.inset, layout.box - layout.inset * 2, layout.box - layout.inset * 2);
+      ctx.fillStyle = row.color || "#a9c3ff";
+      ctx.globalAlpha = 0.11;
+      ctx.beginPath();
+      ctx.arc(x + layout.box * 0.5, y + layout.box * 0.5 - 4, layout.box * 0.26, 0, Math.PI * 2);
+      ctx.fill();
       ctx.globalAlpha = 1;
 
-      ctx.fillStyle = "#eef4ff";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.font = "bold 16px 'Segoe UI', Arial";
-      ctx.fillText((row.key || "?").toUpperCase(), x + layout.box * 0.5, y + layout.box * 0.5 - 3);
+      this._drawSkillGlyph(ctx, row, x, y, layout.box);
 
       ctx.font = "10px 'Segoe UI', Arial";
       ctx.fillStyle = "#9ab2cf";
-      ctx.fillText(`${row.manaCost || 0} MP`, x + layout.box * 0.5, y + layout.box - 8);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText((row.key || "?").toUpperCase(), x + 10, y + 10);
+      ctx.fillText(`${row.manaCost || 0}`, x + layout.box * 0.5, y + layout.box - 8);
 
       ctx.fillStyle = accent;
       ctx.globalAlpha = row.cooldownValue > 0 ? 0.22 : row.affordable ? 0.16 : 0.18;
@@ -468,7 +680,7 @@ export default class UI {
 
         ctx.fillStyle = "#ffffff";
         ctx.font = "bold 11px 'Segoe UI', Arial";
-        ctx.fillText((row.cooldownValue || 0).toFixed(1), x + layout.box * 0.5, y + layout.box * 0.5 + 9);
+        ctx.fillText((row.cooldownValue || 0).toFixed(1), x + layout.box * 0.5, y + layout.box * 0.5 + 10);
       }
 
       if (!row.affordable) {
@@ -549,14 +761,14 @@ export default class UI {
 
     c.clearRect(0, 0, w, h);
 
-    if (this._mini) {
-      this._drawMinimapFromCanvas(c, game, this._mini, 0, 0, w);
+    const info = game?.world?.peekMapInfo?.() || game?.world?.getMapInfo?.();
+    if (info?.revealed?.length) {
+      this._drawMinimapFromMapInfo(c, game, 0, 0, w, h, info);
       return;
     }
 
-    const info = game?.world?.getMapInfo?.();
-    if (info?.revealed?.length) {
-      this._drawMinimapFromMapInfo(c, game, 0, 0, w, h);
+    if (this._mini) {
+      this._drawMinimapFromCanvas(c, game, this._mini, 0, 0, w);
       return;
     }
 
@@ -593,11 +805,11 @@ export default class UI {
     this._drawHeroCrosshair(ctx, x, y, size, size, x + size * 0.5, y + size * 0.5, false);
   }
 
-  _drawMinimapFromMapInfo(ctx, game, x, y, w, h) {
-    const info = game.world.getMapInfo();
+  _drawMinimapFromMapInfo(ctx, game, x, y, w, h, infoOverride = null) {
+    const info = infoOverride || game.world.peekMapInfo?.() || game.world.getMapInfo();
     const hero = game.hero;
 
-    const worldSpan = 1100;
+    const worldSpan = 760;
     const half = worldSpan * 0.5;
     const pxPerWorld = w / worldSpan;
 
@@ -632,6 +844,12 @@ export default class UI {
     ctx.rect(x, y, w, h);
     ctx.clip();
 
+    const bg = ctx.createLinearGradient(x, y, x, y + h);
+    bg.addColorStop(0, "rgba(9,15,20,0.98)");
+    bg.addColorStop(1, "rgba(4,8,12,0.98)");
+    ctx.fillStyle = bg;
+    ctx.fillRect(x, y, w, h);
+
     for (let r = r0; r <= r1; r++) {
       for (let c = c0; c <= c1; c++) {
         if (!revealed[r]?.[c]) continue;
@@ -653,10 +871,89 @@ export default class UI {
       }
     }
 
-    this._drawMapPoiMarkers(ctx, game, x, y, w, h, left, top, worldSpan, 2.4);
+    this._drawMapZoneWash(ctx, info, x, y, left, top, pxPerWorld, pxPerWorld, mapHalf, cellWorldW, cellWorldH, c0, c1, r0, r1, 0.28);
+    this._drawMapFeatureContours(ctx, info, x, y, left, top, pxPerWorld, pxPerWorld, mapHalf, cellWorldW, cellWorldH, c0, c1, r0, r1, 0.8);
 
+    this._drawMapRoadOverlay(ctx, game, x, y, w, h, left, top, worldSpan, {
+      roadBase: "rgba(42,26,14,0.82)",
+      roadTop: "rgba(232,205,154,0.95)",
+      roadBaseWidth: 3.4,
+      roadTopWidth: 1.5,
+      bridgeColor: "rgba(252,233,196,0.98)",
+      bridgeWidth: 2.7,
+    });
+    this._drawMapPoiMarkers(ctx, game, x, y, w, h, left, top, worldSpan, 2.8);
     ctx.restore();
     this._drawHeroCrosshair(ctx, x, y, w, h, x + w * 0.5, y + h * 0.5, false);
+  }
+
+  _drawMapRoadOverlay(ctx, game, x, y, w, h, viewLeft, viewTop, viewSpan, opts = {}) {
+    const world = game?.world;
+    if (!world) return;
+
+    const px = w / viewSpan;
+    const py = h / viewSpan;
+    const right = viewLeft + viewSpan;
+    const bottom = viewTop + viewSpan;
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    for (const road of world.roads || []) {
+      const pts = road.points;
+      if (!pts || pts.length < 2) continue;
+      let visible = false;
+      let revealed = false;
+      for (const p of pts) {
+        if (!revealed && this._isMapPointRevealed(game, p)) revealed = true;
+        if (p.x >= viewLeft - 40 && p.x <= right + 40 && p.y >= viewTop - 40 && p.y <= bottom + 40) {
+          visible = true;
+          if (revealed) break;
+        }
+      }
+      if (!visible || !revealed) continue;
+
+      ctx.strokeStyle = opts.roadBase || "rgba(48,32,16,0.55)";
+      ctx.lineWidth = opts.roadBaseWidth || 2.6;
+      ctx.beginPath();
+      ctx.moveTo(x + (pts[0].x - viewLeft) * px, y + (pts[0].y - viewTop) * py);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(x + (pts[i].x - viewLeft) * px, y + (pts[i].y - viewTop) * py);
+      ctx.stroke();
+
+      ctx.strokeStyle = opts.roadTop || "rgba(224,192,128,0.88)";
+      ctx.lineWidth = opts.roadTopWidth || 1.2;
+      ctx.beginPath();
+      ctx.moveTo(x + (pts[0].x - viewLeft) * px, y + (pts[0].y - viewTop) * py);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(x + (pts[i].x - viewLeft) * px, y + (pts[i].y - viewTop) * py);
+      ctx.stroke();
+    }
+
+    for (const bridge of world.bridges || []) {
+      const bx = bridge.cx;
+      const by = bridge.cy;
+      if (bx < viewLeft - 40 || bx > right + 40 || by < viewTop - 40 || by > bottom + 40) continue;
+      const path = bridge.path || [];
+      if (path.length < 2) continue;
+      let revealed = this._isMapPointRevealed(game, bridge);
+      if (!revealed) {
+        for (const p of path) {
+          if (this._isMapPointRevealed(game, p)) {
+            revealed = true;
+            break;
+          }
+        }
+      }
+      if (!revealed) continue;
+      ctx.strokeStyle = opts.bridgeColor || "rgba(245,221,180,0.95)";
+      ctx.lineWidth = opts.bridgeWidth || 2.2;
+      ctx.beginPath();
+      ctx.moveTo(x + (path[0].x - viewLeft) * px, y + (path[0].y - viewTop) * py);
+      for (let i = 1; i < path.length; i++) ctx.lineTo(x + (path[i].x - viewLeft) * px, y + (path[i].y - viewTop) * py);
+      ctx.stroke();
+    }
+
+    ctx.restore();
   }
 
   _drawHeroCrosshair(ctx, x, y, w, h, hx, hy, drawBorder = true) {
@@ -720,27 +1017,41 @@ export default class UI {
     ];
     const compact = this.w < 1040 || this.h < 700;
     const lines = compact ? compactLines : fullLines;
+    const rowStep = compact ? 16 : 15;
 
     const hud = this._getHudLayout();
     const spell = game?.getSpellBarLayout?.() || { y: this.h - 62 };
-    const x = 16;
-    const y = Math.max(hud.y + hud.panelH + 128, spell.y - (compact ? 104 : 136));
-    const panelH = compact ? 118 : 206;
-    const panelW = compact ? 156 : 164;
+    const x = hud.x;
+    const panelW = compact ? 188 : 200;
+    const footerH = 28;
+    const panelH = 26 + lines.length * rowStep + footerH + 12;
+    const expandedY = Math.max(hud.y + hud.panelH + 104, spell.y - panelH + 26);
+    const drawY = this._controlsCollapsed ? expandedY + panelH - footerH : expandedY;
+    const drawH = this._controlsCollapsed ? footerH : panelH;
+    const footerY = drawY + drawH - footerH;
 
     ctx.save();
-    this._drawPanel(ctx, x - 8, y - 16, panelW, panelH, { alpha: 0.56, accent: "rgba(148,170,190,0.28)" });
+    this._controlsToggleRect = { x: x - 10, y: footerY, w: panelW, h: footerH };
+    this._drawPanel(ctx, x - 10, drawY, panelW, drawH, { alpha: 0.62, accent: UI_PURPLE });
 
+    if (!this._controlsCollapsed) {
+      for (let i = 0; i < lines.length; i++) {
+        const parts = lines[i].split(" ");
+        const key = parts.shift() || "";
+        this._drawKeyCap(ctx, x, expandedY + 18 + i * rowStep, key, parts.join(" "), false);
+      }
+    }
+
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fillRect(x - 2, footerY, panelW - 16, 1);
     ctx.fillStyle = "#dfe7f2";
     ctx.font = "bold 13px 'Segoe UI', Arial";
     ctx.textAlign = "left";
-    ctx.fillText("Controls", x, y);
-
-    for (let i = 0; i < lines.length; i++) {
-      const parts = lines[i].split(" ");
-      const key = parts.shift() || "";
-      this._drawKeyCap(ctx, x, y + 24 + i * 14, key, parts.join(" "), false);
-    }
+    ctx.fillText("Controls", x, footerY + 18);
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#d6b5ff";
+    ctx.fillText(this._controlsCollapsed ? "+" : "-", x + panelW - 22, footerY + 18);
+    ctx.textAlign = "left";
     ctx.restore();
   }
 
@@ -751,7 +1062,7 @@ export default class UI {
     const y = Math.max(226, this.h - 190);
 
     ctx.save();
-    this._drawPanel(ctx, x, y, w, 28, { alpha: 0.46, accent: "rgba(142,214,232,0.30)" });
+    this._drawPanel(ctx, x, y, w, 28, { alpha: 0.46, accent: UI_PURPLE });
     ctx.fillStyle = "#b9c8da";
     ctx.font = "bold 11px 'Segoe UI', Arial";
     ctx.textAlign = "left";
@@ -818,14 +1129,19 @@ export default class UI {
     const y = layout.y;
     const w = layout.w;
     const h = layout.h;
+    const inset = 12;
+    const innerX = x + inset;
+    const innerY = y + inset;
+    const innerW = w - inset * 2;
+    const innerH = h - inset * 2;
     const hasTarget = !!(objective.target && game?.hero);
-    const arrowW = hasTarget && w >= 300 ? 76 : 0;
-    const textW = w - 24 - arrowW;
+    const arrowW = hasTarget && innerW >= 300 ? 76 : 0;
+    const textW = innerW - arrowW;
 
     ctx.save();
-    this._drawPanel(ctx, x - 8, y - 8, w, h, { alpha: 0.72, accent: objective.color || "rgba(255,211,110,0.52)" });
+    this._drawPanel(ctx, x - 8, y - 8, w, h, { alpha: 0.72, accent: UI_PURPLE });
 
-    this._drawPill(ctx, x, y - 10, 78, 18, "Objective", {
+    this._drawPill(ctx, innerX, innerY - 2, 78, 18, "Objective", {
       fill: "rgba(255,211,110,0.12)",
       stroke: "rgba(255,211,110,0.28)",
       textColor: objective.color || "#ffd36e",
@@ -833,7 +1149,7 @@ export default class UI {
     });
 
     const track = game?.trackedObjective || "story";
-    this._drawPill(ctx, x + 86, y - 10, Math.min(122, Math.max(74, w - 112 - arrowW)), 18, `Tracking ${this._titleCase(track)}`, {
+    this._drawPill(ctx, innerX + 86, innerY - 2, Math.min(122, Math.max(74, innerW - 112 - arrowW)), 18, `Tracking ${this._titleCase(track)}`, {
       fill: "rgba(255,255,255,0.06)",
       stroke: "rgba(255,255,255,0.14)",
       textColor: "#8fa2bb",
@@ -842,18 +1158,18 @@ export default class UI {
 
     ctx.fillStyle = "#eef4fb";
     ctx.font = "bold 15px 'Segoe UI', Arial";
-    this._drawFitText(ctx, objective.title || "Explore", x, y + 24, textW, 10);
+    this._drawFitText(ctx, objective.title || "Explore", innerX, innerY + 36, textW, 10);
 
     ctx.fillStyle = "#9fb1c7";
     ctx.font = "12px 'Segoe UI', Arial";
-    this._drawClampedText(ctx, objective.detail || "", x, y + 46, textW, 15, 3);
+    this._drawClampedText(ctx, objective.detail || "", innerX, innerY + 56, textW, 15, 3);
 
     if (hasTarget && arrowW > 0) {
       const dx = objective.target.x - game.hero.x;
       const dy = objective.target.y - game.hero.y;
       const angle = Math.atan2(dy, dx);
-      const cx = x + w - 42;
-      const cy = y + 34;
+      const cx = innerX + innerW - 34;
+      const cy = innerY + 36;
 
       ctx.save();
       ctx.translate(cx, cy);
@@ -869,7 +1185,7 @@ export default class UI {
       ctx.restore();
 
       const dist = Math.max(0, Math.round(Math.hypot(dx, dy) / 10) * 10);
-      this._drawPill(ctx, x + w - 78, y + 64, 72, 18, `${dist}m`, {
+      this._drawPill(ctx, innerX + innerW - 72, innerY + 72, 72, 18, `${dist}m`, {
         fill: "rgba(255,255,255,0.06)",
         stroke: "rgba(255,255,255,0.14)",
         textColor: "#c7d4e6",
@@ -892,7 +1208,7 @@ export default class UI {
     ctx.save();
     this._drawPanel(ctx, x, y, w, layout.h, {
       alpha: 0.86,
-      accent: boss.accent || "rgba(255,138,92,0.46)",
+      accent: UI_PURPLE,
     });
 
     this._drawPill(ctx, x + 10, y + 8, 64, 16, boss.kind === "dragon" ? "Boss" : "Elite Boss", {
@@ -959,7 +1275,7 @@ export default class UI {
     const spell = game?.getSpellBarLayout?.() || { y: this.h - 62, box: 46 };
     const panelX = (this.w - panelW) / 2;
     const panelY = spell.y - (this.h < 540 ? 42 : 48);
-    this._drawPanel(ctx, panelX, panelY, panelW, 34, { alpha: 0.78, accent: "rgba(232,190,96,0.52)" });
+    this._drawPanel(ctx, panelX, panelY, panelW, 34, { alpha: 0.78, accent: UI_PURPLE });
 
     ctx.fillStyle = "#edf3fb";
     ctx.font = "bold 14px 'Segoe UI', Arial";
@@ -980,7 +1296,7 @@ export default class UI {
     const x = ((this.w - w) / 2) | 0;
     const y = 18;
 
-    this._drawPanel(ctx, x, y, w, 30, { alpha: 0.84, accent: "rgba(232,190,96,0.50)" });
+    this._drawPanel(ctx, x, y, w, 30, { alpha: 0.84, accent: UI_PURPLE });
 
     ctx.fillStyle = "#eef4fb";
     ctx.font = "bold 14px 'Segoe UI', Arial";
@@ -1012,7 +1328,7 @@ export default class UI {
     const y = ((this.h - panelH) / 2) | 0;
 
     ctx.save();
-    this._drawPanel(ctx, x, y, panelW, panelH, { alpha: 0.92, accent: "rgba(116,198,216,0.44)" });
+    this._drawPanel(ctx, x, y, panelW, panelH, { alpha: 0.92, accent: UI_PURPLE });
 
     ctx.fillStyle = "#eef4fb";
     ctx.font = "bold 20px 'Segoe UI', Arial";
@@ -1032,23 +1348,36 @@ export default class UI {
       textColor: "#9db2ca",
       font: "bold 10px 'Segoe UI', Arial",
     });
+    const info = game?.world?.getMapInfo?.();
+    const revealedRows = info?.revealed || [];
+    let discovered = 0;
+    let discoveredTotal = 0;
+    for (const row of revealedRows) {
+      discoveredTotal += row?.length || 0;
+      for (const cell of row || []) if (cell) discovered++;
+    }
+    const discoveredPct = discoveredTotal > 0 ? Math.round((discovered / discoveredTotal) * 100) : 0;
+    this._drawPill(ctx, x + panelW - 160, y + 10, 78, 18, `${discoveredPct}% seen`, {
+      fill: "rgba(255,255,255,0.06)",
+      stroke: "rgba(255,255,255,0.12)",
+      textColor: "#d8e5f4",
+      font: "bold 10px 'Segoe UI', Arial",
+    });
 
     const mapX = x + 18;
     const mapY = y + 42;
     const mapW = panelW - 36;
-    const mapH = panelH - 72;
+    const mapH = panelH - 110;
 
     ctx.fillStyle = "rgba(2,4,8,0.95)";
     ctx.fillRect(mapX, mapY, mapW, mapH);
     ctx.strokeStyle = "rgba(255,255,255,0.12)";
     ctx.strokeRect(mapX + 0.5, mapY + 0.5, mapW - 1, mapH - 1);
 
-    const info = game?.world?.getMapInfo?.();
-    const mapReady = !!info?.revealed?.length && !game?.world?._mapDirty;
-    if (this._mini && !mapReady) {
-      this._drawBigMapFromCanvas(ctx, game, this._mini, mapX, mapY, mapW, mapH);
-    } else if (info?.revealed?.length) {
+    if (info?.revealed?.length) {
       this._drawBigMapFromMapInfo(ctx, game, info, mapX, mapY, mapW, mapH);
+    } else if (this._mini) {
+      this._drawBigMapFromCanvas(ctx, game, this._mini, mapX, mapY, mapW, mapH);
     } else {
       ctx.fillStyle = "rgba(255,255,255,0.05)";
       ctx.fillRect(mapX, mapY, mapW, mapH);
@@ -1056,7 +1385,39 @@ export default class UI {
 
     ctx.fillStyle = "#95a7bd";
     ctx.font = "12px 'Segoe UI', Arial";
-    this._drawFitText(ctx, "M or Esc close   wheel or +/- zoom   0 reset", x + 18, y + panelH - 12, panelW - 36);
+    this._drawPill(ctx, x + 18, y + panelH - 40, 64, 16, "Roads", {
+      fill: "rgba(186,154,107,0.14)",
+      stroke: "rgba(186,154,107,0.24)",
+      textColor: "#e8d5ac",
+      font: "bold 9px 'Segoe UI', Arial",
+    });
+    this._drawPill(ctx, x + 88, y + panelH - 40, 74, 16, "Bridges", {
+      fill: "rgba(231,214,178,0.12)",
+      stroke: "rgba(231,214,178,0.22)",
+      textColor: "#f0e2c7",
+      font: "bold 9px 'Segoe UI', Arial",
+    });
+    this._drawPill(ctx, x + 168, y + panelH - 40, 60, 16, "Towns", {
+      fill: "rgba(139,233,255,0.12)",
+      stroke: "rgba(139,233,255,0.22)",
+      textColor: "#dff8ff",
+      font: "bold 9px 'Segoe UI', Arial",
+    });
+    this._drawPill(ctx, x + 234, y + panelH - 40, 86, 16, "Objective", {
+      fill: "rgba(255,211,110,0.12)",
+      stroke: "rgba(255,211,110,0.22)",
+      textColor: "#ffdf97",
+      font: "bold 9px 'Segoe UI', Arial",
+    });
+    this._drawPill(ctx, x + 326, y + panelH - 40, 74, 16, "Coast", {
+      fill: "rgba(97,190,236,0.14)",
+      stroke: "rgba(97,190,236,0.24)",
+      textColor: "#bcecff",
+      font: "bold 9px 'Segoe UI', Arial",
+    });
+    ctx.fillStyle = "#95a7bd";
+    ctx.font = "11px 'Segoe UI', Arial";
+    this._drawFitText(ctx, "M or Esc close   wheel or +/- zoom   0 reset   hero coords shown on map", x + 18, y + panelH - 17, panelW - 36, 8);
     ctx.restore();
   }
 
@@ -1102,7 +1463,10 @@ export default class UI {
     ctx.rect(x, y, w, h);
     ctx.clip();
 
-    ctx.fillStyle = "rgba(2,4,8,0.95)";
+    const bg = ctx.createLinearGradient(x, y, x, y + h);
+    bg.addColorStop(0, "rgba(10,15,21,0.98)");
+    bg.addColorStop(1, "rgba(3,6,10,0.98)");
+    ctx.fillStyle = bg;
     ctx.fillRect(x, y, w, h);
 
     const mapHalf = game.world?.mapHalfSize || 5200;
@@ -1123,31 +1487,216 @@ export default class UI {
     const pxPerWorldX = w / viewSpan;
     const pxPerWorldY = h / viewSpan;
 
+    const mapCanvas = game?.world?.peekMinimapCanvas?.() || this._mini;
+    if (mapCanvas?.width && mapCanvas?.height) {
+      const srcX = clamp(((viewLeft + mapHalf) / worldFull) * mapCanvas.width, 0, Math.max(0, mapCanvas.width - 2));
+      const srcY = clamp(((viewTop + mapHalf) / worldFull) * mapCanvas.height, 0, Math.max(0, mapCanvas.height - 2));
+      const srcW = Math.max(2, (viewSpan / worldFull) * mapCanvas.width);
+      const srcH = Math.max(2, (viewSpan / worldFull) * mapCanvas.height);
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(mapCanvas, srcX, srcY, srcW, srcH, x, y, w, h);
+      ctx.imageSmoothingEnabled = true;
+    } else {
+      for (let r = r0; r <= r1; r++) {
+        for (let c = c0; c <= c1; c++) {
+          if (!revealed[r]?.[c]) continue;
+          const wx = -mapHalf + c * cellWorldW;
+          const wy = -mapHalf + r * cellWorldH;
+          const sx = x + (wx - viewLeft) * pxPerWorldX;
+          const sy = y + (wy - viewTop) * pxPerWorldY;
+          const sw = Math.ceil(cellWorldW * pxPerWorldX) + 1;
+          const sh = Math.ceil(cellWorldH * pxPerWorldY) + 1;
+          ctx.fillStyle = info.tiles?.[r]?.[c] || info.colors?.[r]?.[c] || "#526b59";
+          ctx.fillRect(sx, sy, sw, sh);
+        }
+      }
+    }
+
     for (let r = r0; r <= r1; r++) {
       for (let c = c0; c <= c1; c++) {
-        if (!revealed[r]?.[c]) continue;
-        ctx.fillStyle =
-          info.tiles?.[r]?.[c] ||
-          info.colors?.[r]?.[c] ||
-          "#526b59";
+        if (revealed[r]?.[c]) continue;
         const wx = -mapHalf + c * cellWorldW;
         const wy = -mapHalf + r * cellWorldH;
         const sx = x + (wx - viewLeft) * pxPerWorldX;
         const sy = y + (wy - viewTop) * pxPerWorldY;
         const sw = Math.ceil(cellWorldW * pxPerWorldX) + 1;
         const sh = Math.ceil(cellWorldH * pxPerWorldY) + 1;
+        ctx.fillStyle = "rgba(6,9,13,0.93)";
         ctx.fillRect(sx, sy, sw, sh);
+        if (((r + c) & 1) === 0) {
+          ctx.fillStyle = "rgba(255,255,255,0.020)";
+          ctx.fillRect(sx, sy, sw, Math.max(1, sh * 0.18));
+        }
       }
     }
 
-    ctx.restore();
+    this._drawMapZoneWash(ctx, info, x, y, viewLeft, viewTop, pxPerWorldX, pxPerWorldY, mapHalf, cellWorldW, cellWorldH, c0, c1, r0, r1, 0.22);
+    this._drawMapFeatureContours(ctx, info, x, y, viewLeft, viewTop, pxPerWorldX, pxPerWorldY, mapHalf, cellWorldW, cellWorldH, c0, c1, r0, r1, 1);
 
+    ctx.restore();
+    this._drawMapRoadOverlay(ctx, game, x, y, w, h, viewLeft, viewTop, viewSpan, {
+      roadBase: "rgba(66,39,18,0.74)",
+      roadTop: "rgba(224,194,142,0.94)",
+      roadBaseWidth: zoom > 2 ? 5.2 : 4.2,
+      roadTopWidth: zoom > 2 ? 2.4 : 1.8,
+      bridgeColor: "rgba(248,230,196,0.98)",
+      bridgeWidth: zoom > 2 ? 4.6 : 3.2,
+    });
     this._drawMapPoiMarkers(ctx, game, x, y, w, h, viewLeft, viewTop, viewSpan, zoom > 2 ? 4.2 : 3.2);
+    this._drawBigMapRegionLabels(ctx, game, x, y, w, h, viewLeft, viewTop, viewSpan, zoom);
+    this._drawBigMapCoordinates(ctx, game, x, y, w, h, viewLeft, viewTop, viewSpan, zoom);
 
     const hx = x + (heroX - viewLeft) * pxPerWorldX;
     const hy = y + (heroY - viewTop) * pxPerWorldY;
 
     this._drawHeroCrosshair(ctx, x, y, w, h, hx, hy);
+  }
+
+  _drawBigMapCoordinates(ctx, game, x, y, w, h, viewLeft, viewTop, viewSpan, zoom) {
+    const hero = game?.hero || { x: 0, y: 0 };
+    const coordText = `X ${Math.round(hero.x)}   Y ${Math.round(hero.y)}`;
+    this._drawPill(ctx, x + w - 148, y + h - 24, 132, 16, coordText, {
+      fill: "rgba(8,12,19,0.76)",
+      stroke: "rgba(201,167,255,0.22)",
+      textColor: "#d9e4f3",
+      font: "bold 9px 'Segoe UI', Arial",
+    });
+  }
+
+  _getMapZoneType(zone) {
+    const z = String(zone || "").toLowerCase();
+    if (z === "river" || z === "bridge" || z === "dock") return "water";
+    if (z === "mountain") return "mountain";
+    return "land";
+  }
+
+  _getMapZoneWashColor(zone) {
+    const z = String(zone || "").toLowerCase();
+    if (z === "river" || z === "bridge" || z === "dock") return "rgba(77,168,214,0.30)";
+    if (z === "mountain") return "rgba(204,213,223,0.16)";
+    if (z === "road") return "rgba(211,177,126,0.10)";
+    if (z === "greenwood" || z === "forest" || z === "deep wilds") return "rgba(55,112,74,0.15)";
+    if (z === "ashlands" || z === "ash fields") return "rgba(156,118,76,0.14)";
+    if (z === "highlands" || z === "stone flats") return "rgba(138,146,156,0.10)";
+    if (z === "meadow" || z === "old fields") return "rgba(171,154,105,0.08)";
+    return "";
+  }
+
+  _drawMapZoneWash(ctx, info, x, y, viewLeft, viewTop, pxPerWorldX, pxPerWorldY, mapHalf, cellWorldW, cellWorldH, c0, c1, r0, r1, alphaScale = 1) {
+    const zones = info?.zones;
+    if (!zones?.length) return;
+    ctx.save();
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        if (!info?.revealed?.[r]?.[c]) continue;
+        const zone = zones?.[r]?.[c] || "";
+        const tint = this._getMapZoneWashColor(zone);
+        if (!tint) continue;
+        const wx = -mapHalf + c * cellWorldW;
+        const wy = -mapHalf + r * cellWorldH;
+        const sx = x + (wx - viewLeft) * pxPerWorldX;
+        const sy = y + (wy - viewTop) * pxPerWorldY;
+        const sw = Math.ceil(cellWorldW * pxPerWorldX) + 1;
+        const sh = Math.ceil(cellWorldH * pxPerWorldY) + 1;
+        ctx.globalAlpha = alphaScale;
+        ctx.fillStyle = tint;
+        ctx.fillRect(sx, sy, sw, sh);
+      }
+    }
+
+    ctx.restore();
+  }
+
+  _drawMapFeatureContours(ctx, info, x, y, viewLeft, viewTop, pxPerWorldX, pxPerWorldY, mapHalf, cellWorldW, cellWorldH, c0, c1, r0, r1, alphaScale = 1) {
+    const zones = info?.zones;
+    if (!zones?.length) return;
+    ctx.save();
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        if (!info?.revealed?.[r]?.[c]) continue;
+        const zone = zones?.[r]?.[c] || "";
+        const type = this._getMapZoneType(zone);
+        const wx = -mapHalf + c * cellWorldW;
+        const wy = -mapHalf + r * cellWorldH;
+        const sx = x + (wx - viewLeft) * pxPerWorldX;
+        const sy = y + (wy - viewTop) * pxPerWorldY;
+        const sw = Math.ceil(cellWorldW * pxPerWorldX) + 1;
+        const sh = Math.ceil(cellWorldH * pxPerWorldY) + 1;
+
+        const eastZone = zones?.[r]?.[c + 1] || "";
+        const southZone = zones?.[r + 1]?.[c] || "";
+        const eastType = this._getMapZoneType(eastZone);
+        const southType = this._getMapZoneType(southZone);
+        const eastVisible = info?.revealed?.[r]?.[c + 1];
+        const southVisible = info?.revealed?.[r + 1]?.[c];
+
+        let eastColor = "";
+        let southColor = "";
+        if (eastVisible && eastType !== type) {
+          if (type === "water" || eastType === "water") eastColor = "rgba(134,214,255,0.42)";
+          else if (type === "mountain" || eastType === "mountain") eastColor = "rgba(231,237,245,0.30)";
+        }
+        if (southVisible && southType !== type) {
+          if (type === "water" || southType === "water") southColor = "rgba(134,214,255,0.42)";
+          else if (type === "mountain" || southType === "mountain") southColor = "rgba(231,237,245,0.30)";
+        }
+
+        if (eastColor) {
+          ctx.globalAlpha = alphaScale;
+          ctx.strokeStyle = eastColor;
+          ctx.lineWidth = type === "mountain" || eastType === "mountain" ? 2 : 1.25;
+          ctx.beginPath();
+          ctx.moveTo(sx + sw - 0.5, sy + 1);
+          ctx.lineTo(sx + sw - 0.5, sy + sh - 1);
+          ctx.stroke();
+        }
+        if (southColor) {
+          ctx.globalAlpha = alphaScale;
+          ctx.strokeStyle = southColor;
+          ctx.lineWidth = type === "mountain" || southType === "mountain" ? 2 : 1.25;
+          ctx.beginPath();
+          ctx.moveTo(sx + 1, sy + sh - 0.5);
+          ctx.lineTo(sx + sw - 1, sy + sh - 0.5);
+          ctx.stroke();
+        }
+      }
+    }
+
+    ctx.restore();
+  }
+
+  _drawBigMapRegionLabels(ctx, game, x, y, w, h, viewLeft, viewTop, viewSpan, zoom) {
+    if (zoom < 1.6) return;
+    const world = game?.world;
+    if (!world) return;
+    const px = w / viewSpan;
+    const py = h / viewSpan;
+    const sets = [
+      [world.towns, p => p.name || "Town", "#dff8ff"],
+      [world.dungeons, () => "Dungeon", "#f1cbff"],
+      [world.waystones, () => "Waystone", "#d8fbff"],
+      [world.dragonLairs, () => "Dragon Lair", "#ffd2bf"],
+      [world.docks, () => "Dock", "#e8f0ff"],
+    ];
+
+    ctx.save();
+    for (const [arr, getLabel, color] of sets) {
+      for (const p of arr || []) {
+        if (!this._isMapPointRevealed(game, p)) continue;
+        const sx = x + (p.x - viewLeft) * px;
+        const sy = y + (p.y - viewTop) * py;
+        if (sx < x + 18 || sx > x + w - 18 || sy < y + 18 || sy > y + h - 18) continue;
+        const label = getLabel(p);
+        const lw = Math.min(110, Math.max(40, label.length * 6 + 12));
+        ctx.fillStyle = "rgba(3,7,12,0.62)";
+        ctx.fillRect(sx - lw * 0.5, sy + 8, lw, 14);
+        ctx.fillStyle = color;
+        ctx.font = "bold 10px Arial";
+        ctx.textAlign = "left";
+        this._drawFitText(ctx, label, sx - lw * 0.5 + 4, sy + 19, lw - 8, 7);
+      }
+    }
+    ctx.restore();
   }
 
   _drawMapPoiMarkers(ctx, game, x, y, w, h, viewLeft, viewTop, viewSpan, radius = 3) {
@@ -1166,8 +1715,6 @@ export default class UI {
       [world.secrets, "#ffeaa8", "secret"],
       [world.dragonLairs, "#ff8a5c", "dragon"],
     ];
-    const bridgeSet = game?.progress?.crossedBridges || new Set();
-
     ctx.save();
     ctx.beginPath();
     ctx.rect(x, y, w, h);
@@ -1225,8 +1772,7 @@ export default class UI {
     }
 
     for (const b of world.bridges || []) {
-      const id = `${b.cx | 0},${b.cy | 0}`;
-      if (!bridgeSet.has?.(id) && !this._isMapPointRevealed(game, b)) continue;
+      if (!this._isMapPointRevealed(game, b)) continue;
       const sx = x + (b.cx - viewLeft) * px;
       const sy = y + (b.cy - viewTop) * py;
       if (sx < x - 8 || sx > x + w + 8 || sy < y - 8 || sy > y + h + 8) continue;
@@ -1236,7 +1782,7 @@ export default class UI {
       ctx.rotate(b.roadAngle || b.angle || 0);
       ctx.fillStyle = "rgba(0,0,0,0.70)";
       ctx.fillRect(-radius - 3, -2.5, radius * 2 + 6, 5);
-      ctx.fillStyle = bridgeSet.has?.(id) ? "#f0c17a" : "rgba(240,193,122,0.60)";
+      ctx.fillStyle = "#f0c17a";
       ctx.fillRect(-radius - 2, -1.5, radius * 2 + 4, 3);
       ctx.restore();
     }
@@ -1320,7 +1866,7 @@ export default class UI {
     const y = layout.y;
 
     ctx.save();
-    this._drawPanel(ctx, x, y, panelW, panelH, { alpha: 0.92, accent: "rgba(232,190,96,0.50)" });
+    this._drawPanel(ctx, x, y, panelW, panelH, { alpha: 0.92, accent: UI_PURPLE });
 
     ctx.fillStyle = "#eef4fb";
     ctx.font = "bold 22px Arial";
@@ -1544,7 +2090,7 @@ export default class UI {
     };
 
     ctx.save();
-    this._drawPanel(ctx, x, y, panelW, panelH, { alpha: 0.92, accent: "rgba(132,170,255,0.46)" });
+    this._drawPanel(ctx, x, y, panelW, panelH, { alpha: 0.92, accent: UI_PURPLE });
 
     ctx.fillStyle = "#eef4fb";
     ctx.font = "bold 22px Arial";
@@ -1552,53 +2098,76 @@ export default class UI {
 
     ctx.fillStyle = "#95a7bd";
     ctx.font = "13px Arial";
-      ctx.fillText("K or Esc to close", x + 18, y + 52);
+    ctx.fillText("K or Esc to close", x + 18, y + 52);
+    ctx.fillStyle = "#9bb0c8";
+    ctx.font = "12px Arial";
+    this._drawFitText(ctx, panelData.manaText, x + 18, y + 68, 140, 8);
+    ctx.fillStyle = "#d6e2f2";
+    ctx.font = "bold 13px Arial";
+    this._drawFitText(ctx, panelData.oathText, x + panelW - 160, y + 52, 142, 9);
+    ctx.fillStyle = "#8ea1b8";
+    ctx.font = "11px Arial";
+    this._drawFitText(ctx, panelData.legendText, x + 164, y + 68, panelW - 182, 8);
+
+    const rowLeft = x + layout.rowInset;
+    const rowW = panelW - layout.rowInset * 2;
+    const nameW = Math.min(180, Math.max(132, rowW * 0.32));
+    const manaX = rowLeft + nameW + 14;
+    const cooldownX = manaX + 66;
+    const levelW = 54;
+    const levelX = cooldownX + 68;
+    const statusW = 86;
+    const statusX = x + panelW - layout.rowInset - statusW;
+    const xpLeft = rowLeft + 12;
+    const xpRight = statusX - 18;
+    const xpW = Math.max(110, xpRight - xpLeft);
+    let sy = y + layout.rowStart;
+
+    for (const row of panelData.rows) {
+      ctx.fillStyle = "rgba(255,255,255,0.05)";
+      ctx.fillRect(rowLeft, sy - 20, rowW, layout.rowHeight + 4);
+      ctx.strokeStyle = "rgba(255,255,255,0.08)";
+      ctx.strokeRect(rowLeft + 0.5, sy - 19.5, rowW - 1, layout.rowHeight + 3);
+
+      ctx.fillStyle = row.color;
+      ctx.font = "bold 16px Arial";
+      this._drawFitText(ctx, `${(row.key || "?").toUpperCase()}  ${row.name}`, rowLeft + 12, sy, nameW, 10);
+
       ctx.fillStyle = "#9bb0c8";
       ctx.font = "12px Arial";
-      this._drawFitText(ctx, panelData.manaText, x + 18, y + 68, 140, 8);
-      ctx.fillStyle = "#d6e2f2";
-        ctx.font = "bold 13px Arial";
-        this._drawFitText(ctx, panelData.oathText, x + panelW - 160, y + 52, 142, 9);
-        ctx.fillStyle = "#8ea1b8";
-        ctx.font = "11px Arial";
-        this._drawFitText(ctx, panelData.legendText, x + 164, y + 68, panelW - 182, 8);
-        let sy = y + layout.rowStart;
+      this._drawFitText(ctx, row.manaText, manaX, sy, 60, 8);
+      this._drawFitText(ctx, row.cooldownText, cooldownX, sy, 66, 8);
+      this._drawPill(ctx, levelX, sy - 10, levelW, 16, row.levelText, {
+        fill: "rgba(255,255,255,0.08)",
+        stroke: "rgba(255,255,255,0.14)",
+        textColor: "#f0f4fb",
+        font: "bold 9px 'Segoe UI', Arial",
+      });
+      this._drawPill(ctx, statusX, sy - 10, statusW, 16, row.statusText, {
+        fill: row.cooldownValue > 0 ? "rgba(255,184,94,0.14)" : row.affordable ? "rgba(122,221,138,0.14)" : "rgba(255,120,120,0.14)",
+        stroke: row.statusColor,
+        textColor: row.statusColor,
+        font: "bold 9px 'Segoe UI', Arial",
+      });
 
-        for (const row of panelData.rows) {
-          ctx.fillStyle = "rgba(255,255,255,0.04)";
-          ctx.fillRect(x + layout.rowInset, sy - 18, panelW - layout.rowInset * 2, layout.rowHeight);
-          ctx.strokeStyle = "rgba(255,255,255,0.08)";
-          ctx.strokeRect(x + layout.rowInset + 0.5, sy - 17.5, panelW - layout.rowInset * 2 - 1, layout.rowHeight - 1);
+      ctx.fillStyle = "rgba(255,255,255,0.08)";
+      ctx.fillRect(xpLeft, sy + 11, xpW, 9);
+      ctx.fillStyle = row.color;
+      ctx.fillRect(xpLeft, sy + 11, Math.max(6, (xpW * row.xpFrac) | 0), 9);
 
-          ctx.fillStyle = row.color;
-          ctx.font = "bold 16px Arial";
-          this._drawFitText(ctx, `${(row.key || "?").toUpperCase()}  ${row.name}`, x + 30, sy, 150);
+      ctx.fillStyle = "#dce6f4";
+      ctx.font = "12px Arial";
+      this._drawFitText(ctx, row.xpText, xpLeft, sy + 25, xpW, 8);
 
-        ctx.fillStyle = "#9bb0c8";
-        ctx.font = "12px Arial";
-        ctx.fillText(row.manaText, x + 190, sy);
-        ctx.fillText(row.cooldownText, x + 270, sy);
-        this._drawFitText(ctx, row.levelText, x + 400, sy, 62, 8);
-        ctx.fillStyle = row.statusColor;
-        this._drawFitText(ctx, row.statusText, x + panelW - 112, sy, 82, 8);
+      ctx.fillStyle = "#8ea1b8";
+      ctx.font = "11px Arial";
+      this._drawFitText(ctx, row.infoText, rowLeft + 12, sy + 42, rowW - 24, 8);
 
-        ctx.fillStyle = "rgba(255,255,255,0.08)";
-        ctx.fillRect(x + 30, sy + 10, panelW - 120, 10);
-        ctx.fillStyle = row.color;
-        ctx.fillRect(x + 30, sy + 10, ((panelW - 120) * row.xpFrac) | 0, 10);
-
-        ctx.fillStyle = "#dce6f4";
-        ctx.fillText(row.xpText, x + panelW - 120, sy + 19);
-
-          ctx.fillStyle = "#8ea1b8";
-          ctx.font = "11px Arial";
-          this._drawFitText(ctx, row.infoText, x + 30, sy + 34, panelW - 60, 8);
-
-          sy += layout.rowStep;
-        }
-
-      ctx.restore();
+      sy += layout.rowStep;
     }
+
+    ctx.restore();
+  }
 
   _drawShopPanel(ctx, game) {
     const layout = game?.getShopPanelLayout?.() || {
@@ -1617,7 +2186,7 @@ export default class UI {
     const items = game?.shop?.items || [];
 
     ctx.save();
-    this._drawPanel(ctx, x, y, w, h, { alpha: 0.92, accent: "rgba(104,214,141,0.44)" });
+    this._drawPanel(ctx, x, y, w, h, { alpha: 0.92, accent: UI_PURPLE });
 
     ctx.fillStyle = "#eef4fb";
     ctx.font = "bold 22px Arial";
@@ -1668,61 +2237,172 @@ export default class UI {
     const armor = equip.armor;
     const helm = equip.helm;
     const weapon = equip.weapon;
+    const boots = equip.boots;
+    const ring = equip.ring;
+    const trinket = equip.trinket;
     const armorColor = armor?.color || "#7f93aa";
     const helmColor = helm?.color || "#b9c9d8";
     const weaponColor = weapon?.color || "#dce9f5";
+    const bootsColor = boots?.color || "#8993a3";
+    const ringColor = ring?.color || "#e3d39a";
+    const trinketColor = trinket?.color || "#b99cff";
 
     ctx.save();
-    ctx.fillStyle = "rgba(255,255,255,0.045)";
+    ctx.fillStyle = "rgba(255,255,255,0.055)";
     ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.strokeStyle = "rgba(201,167,255,0.18)";
     ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
 
     const cx = x + w * 0.5;
-    const base = y + h - 14;
+    const base = y + h - 12;
+    const bg = ctx.createLinearGradient(x, y, x, y + h);
+    bg.addColorStop(0, "rgba(31,24,46,0.98)");
+    bg.addColorStop(0.55, "rgba(14,16,28,0.98)");
+    bg.addColorStop(1, "rgba(8,10,18,0.98)");
+    ctx.fillStyle = bg;
+    ctx.fillRect(x + 1, y + 1, w - 2, h - 2);
+
+    ctx.fillStyle = "rgba(255,255,255,0.06)";
+    ctx.fillRect(x + 5, y + 5, w - 10, 12);
     ctx.fillStyle = "rgba(0,0,0,0.24)";
     ctx.beginPath();
-    ctx.ellipse(cx, base + 2, w * 0.32, 7, 0, 0, Math.PI * 2);
+    ctx.ellipse(cx, base + 1, w * 0.34, 7, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = armorColor;
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fillRect(x + 9, y + 8, w - 18, h - 22);
+
+    ctx.fillStyle = "rgba(90,32,48,0.22)";
     ctx.beginPath();
-    ctx.moveTo(cx - 22, base - 4);
-    ctx.lineTo(cx - 15, y + 46);
-    ctx.lineTo(cx + 15, y + 46);
-    ctx.lineTo(cx + 22, base - 4);
+    ctx.moveTo(cx - 20, base - 2);
+    ctx.lineTo(cx - 16, y + 44);
+    ctx.lineTo(cx, y + 58);
+    ctx.lineTo(cx + 16, y + 44);
+    ctx.lineTo(cx + 20, base - 2);
     ctx.closePath();
     ctx.fill();
-    ctx.fillStyle = "rgba(255,255,255,0.20)";
-    ctx.fillRect(cx - 10, y + 50, 20, 3);
+
+    const chestHeavy = (armor?.stats?.armor || 0) >= 18;
+    const chestMedium = !chestHeavy && (armor?.stats?.armor || 0) >= 9;
+    ctx.fillStyle = armorColor;
+    ctx.beginPath();
+    ctx.moveTo(cx - 20, base - 3);
+    ctx.lineTo(cx - (chestHeavy ? 18 : 14), y + 46);
+    ctx.lineTo(cx + (chestHeavy ? 18 : 14), y + 46);
+    ctx.lineTo(cx + 20, base - 3);
+    ctx.closePath();
+    ctx.fill();
+    if (chestHeavy) {
+      ctx.fillStyle = "rgba(255,255,255,0.22)";
+      ctx.fillRect(cx - 14, y + 49, 28, 4);
+      ctx.fillRect(cx - 16, y + 61, 32, 3);
+    } else if (chestMedium) {
+      ctx.fillStyle = "rgba(255,255,255,0.18)";
+      ctx.fillRect(cx - 11, y + 49, 22, 3);
+    } else {
+      ctx.fillStyle = "rgba(255,255,255,0.16)";
+      ctx.fillRect(cx - 8, y + 49, 16, 2);
+    }
+
+    ctx.fillStyle = bootsColor;
+    ctx.fillRect(cx - 15, base - 10, 10, 6);
+    ctx.fillRect(cx + 5, base - 10, 10, 6);
+
     ctx.fillStyle = "#e4bca4";
     ctx.beginPath();
     ctx.arc(cx, y + 34, 13, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = helmColor;
+
+    ctx.fillStyle = "#4a3728";
     ctx.beginPath();
-    ctx.moveTo(cx - 15, y + 32);
-    ctx.quadraticCurveTo(cx, y + 12, cx + 15, y + 32);
-    ctx.lineTo(cx + 12, y + 25);
-    ctx.lineTo(cx - 12, y + 25);
+    ctx.moveTo(cx - 13, y + 32);
+    ctx.quadraticCurveTo(cx - 9, y + 15, cx, y + 15);
+    ctx.quadraticCurveTo(cx + 9, y + 15, cx + 13, y + 32);
+    ctx.lineTo(cx + 10, y + 25);
+    ctx.quadraticCurveTo(cx, y + 18, cx - 10, y + 25);
     ctx.closePath();
     ctx.fill();
+
+    ctx.fillStyle = "rgba(238,246,255,0.12)";
+    ctx.beginPath();
+    ctx.arc(cx, y + 29, 9, Math.PI, Math.PI * 2);
+    ctx.fill();
+    if (helm) {
+      ctx.fillStyle = helmColor;
+      ctx.beginPath();
+      ctx.moveTo(cx - 15, y + 32);
+      ctx.quadraticCurveTo(cx, y + 10, cx + 15, y + 32);
+      ctx.lineTo(cx + 12, y + 25);
+      ctx.lineTo(cx - 12, y + 25);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.16)";
+      ctx.fillRect(cx - 8, y + 25, 16, 3);
+      if ((helm?.stats?.armor || 0) >= 8 || helm?.rarity === "epic") {
+        ctx.fillStyle = "rgba(229,236,248,0.22)";
+        ctx.fillRect(cx - 3, y + 28, 6, 10);
+      }
+    }
     ctx.fillStyle = "#111820";
     ctx.fillRect(cx - 7, y + 35, 4, 2);
     ctx.fillRect(cx + 3, y + 35, 4, 2);
 
-    ctx.strokeStyle = weaponColor;
-    ctx.lineWidth = 4;
+    ctx.fillStyle = armor ? "rgba(99,128,168,0.22)" : "rgba(90,106,126,0.14)";
     ctx.beginPath();
-    ctx.moveTo(x + w - 16, y + 18);
-    ctx.lineTo(x + w - 28, y + 70);
+    ctx.ellipse(cx - 16, y + 56, 12, 16, -0.32, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = armor ? "#9cb3c8" : "rgba(148,162,182,0.52)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.ellipse(cx - 16, y + 56, 11, 15, -0.32, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.strokeStyle = weaponColor;
+    ctx.lineWidth = (weapon?.stats?.dmg || 0) >= 18 ? 5.5 : 4.5;
+    ctx.beginPath();
+    ctx.moveTo(x + w - 18, y + 20);
+    ctx.lineTo(x + w - 29, y + 72);
     ctx.stroke();
     ctx.strokeStyle = "rgba(255,255,255,0.45)";
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(x + w - 15, y + 18);
-    ctx.lineTo(x + w - 27, y + 70);
+    ctx.moveTo(x + w - 17, y + 20);
+    ctx.lineTo(x + w - 28, y + 72);
     ctx.stroke();
+    ctx.fillStyle = "#b68958";
+    ctx.fillRect(x + w - 33, y + 67, 8, 4);
+    ctx.fillStyle = "#f0f5fb";
+    ctx.fillRect(x + w - 20, y + 17, 4, 6);
+
+    if (ring) {
+      ctx.fillStyle = ringColor;
+      ctx.beginPath();
+      ctx.arc(cx - 18, y + 58, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (trinket) {
+      ctx.fillStyle = trinketColor;
+      ctx.beginPath();
+      ctx.arc(cx, y + 57, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.18)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cx, y + 46);
+      ctx.lineTo(cx, y + 53);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = "rgba(0,0,0,0.14)";
+    ctx.fillRect(x + 5, y + h - 18, w - 10, 12);
+    ctx.fillStyle = armorColor;
+    ctx.fillRect(x + 6, y + h - 10, Math.max(12, Math.floor(w * 0.24)), 4);
+    ctx.fillStyle = helmColor;
+    ctx.fillRect(x + Math.floor(w * 0.31), y + h - 10, Math.max(10, Math.floor(w * 0.16)), 4);
+    ctx.fillStyle = weaponColor;
+    ctx.fillRect(x + Math.floor(w * 0.51), y + h - 10, Math.max(12, Math.floor(w * 0.18)), 4);
+    ctx.fillStyle = trinketColor;
+    ctx.fillRect(x + Math.floor(w * 0.74), y + h - 10, Math.max(8, Math.floor(w * 0.10)), 4);
     ctx.restore();
   }
 
@@ -1790,16 +2470,16 @@ export default class UI {
 
     ctx.fillStyle = "#c9a7ff";
     ctx.font = "bold 16px Arial";
-    this._drawFitText(ctx, "Restore the Ash Crown", x + 34, y + 142, w - 68);
+    this._drawFitText(ctx, "Restore the Ash Crown", x + 34, y + 156, w - 68);
 
     ctx.fillStyle = "#b7c6da";
     ctx.font = "13px Arial";
-    ctx.fillText(`Relic shards: ${shards} / ${next}`, x + 34, y + 164);
+    ctx.fillText(`Relic shards: ${shards} / ${next}`, x + 34, y + 170);
 
     ctx.fillStyle = "rgba(255,255,255,0.08)";
-    ctx.fillRect(x + 34, y + 176, w - 68, 10);
+    ctx.fillRect(x + 34, y + 182, w - 68, 10);
     ctx.fillStyle = "#c9a7ff";
-    ctx.fillRect(x + 34, y + 176, ((w - 68) * storyFrac) | 0, 10);
+    ctx.fillRect(x + 34, y + 182, ((w - 68) * storyFrac) | 0, 10);
 
     ctx.fillStyle = "rgba(255,255,255,0.05)";
     ctx.fillRect(x + 18, y + 206, w - 36, 112);
@@ -1856,7 +2536,7 @@ export default class UI {
     const y = layout.y;
 
     ctx.save();
-    this._drawPanel(ctx, x, y, w, h, { alpha: 0.94, accent: "rgba(117,211,224,0.52)" });
+    this._drawPanel(ctx, x, y, w, h, { alpha: 0.94, accent: UI_PURPLE });
 
     ctx.fillStyle = "#eefbff";
     ctx.font = "bold 22px Arial";
@@ -1864,7 +2544,7 @@ export default class UI {
 
     ctx.fillStyle = "#95a7bd";
     ctx.font = "12px Arial";
-    ctx.fillText("1-8 or click - Esc to leave town", x + 18, y + 55);
+    ctx.fillText("1-9 or click - Esc to leave town", x + 18, y + 55);
 
     const townMenu = game?.getTownMenuLines?.(town) || {
       npcs: town?.npcs || ["Warden", "Smith", "Archivist"],
@@ -1935,7 +2615,7 @@ export default class UI {
     ];
 
     ctx.save();
-    this._drawPanel(ctx, x, y, w, h, { alpha: 0.93, accent: game?.dev?.godMode ? "rgba(118,224,255,0.58)" : "rgba(232,190,96,0.46)" });
+    this._drawPanel(ctx, x, y, w, h, { alpha: 0.93, accent: UI_PURPLE });
 
     ctx.fillStyle = "#eef4fb";
     ctx.font = "bold 21px Arial";
@@ -1961,7 +2641,7 @@ export default class UI {
     const y = ((this.h - panelH) / 2) | 0;
 
     ctx.save();
-    this._drawPanel(ctx, x, y, panelW, panelH, { alpha: 0.92, accent: "rgba(232,190,96,0.46)" });
+    this._drawPanel(ctx, x, y, panelW, panelH, { alpha: 0.92, accent: UI_PURPLE });
 
     ctx.fillStyle = "#eef4fb";
     ctx.font = "bold 22px Arial";
@@ -1983,7 +2663,7 @@ export default class UI {
 
   _drawStatusPanel(ctx, game) {
     const panelW = Math.min(Math.max(this.w - 140, 340), 560);
-    const panelH = Math.min(Math.max(this.h - 160, 260), 340);
+    const panelH = Math.min(Math.max(this.h - 140, 320), 400);
     const x = ((this.w - panelW) / 2) | 0;
     const y = ((this.h - panelH) / 2) | 0;
     const hero = game?.hero || {};
@@ -2007,7 +2687,7 @@ export default class UI {
     ];
 
     ctx.save();
-    this._drawPanel(ctx, x, y, panelW, panelH, { alpha: 0.93, accent: "rgba(232,190,96,0.46)" });
+    this._drawPanel(ctx, x, y, panelW, panelH, { alpha: 0.93, accent: UI_PURPLE });
 
     ctx.fillStyle = "#eef4fb";
     ctx.font = "bold 22px Arial";
@@ -2018,15 +2698,20 @@ export default class UI {
     ctx.font = "12px Arial";
     ctx.fillText("Esc to close", x + 20, y + 54);
 
+    const bodyY = y + 76;
+    const bodyH = panelH - 128;
     ctx.fillStyle = "rgba(255,255,255,0.055)";
-    ctx.fillRect(x + 18, y + 76, panelW - 36, panelH - 118);
+    ctx.fillRect(x + 18, bodyY, panelW - 36, bodyH);
     ctx.strokeStyle = "rgba(255,255,255,0.08)";
-    ctx.strokeRect(x + 18.5, y + 76.5, panelW - 37, panelH - 119);
+    ctx.strokeRect(x + 18.5, bodyY + 0.5, panelW - 37, bodyH - 1);
 
     ctx.font = "13px Arial";
     for (let i = 0; i < lines.length; i++) {
+      const lineY = y + 92 + i * 24;
+      ctx.fillStyle = i % 2 === 0 ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.08)";
+      ctx.fillRect(x + 26, lineY - 11, panelW - 52, 18);
       ctx.fillStyle = i === lines.length - 1 ? "#ffd86e" : "#dce7f5";
-      this._drawFitText(ctx, lines[i], x + 34, y + 102 + i * 21, panelW - 68, 9);
+      this._drawFitText(ctx, lines[i], x + 34, lineY + 2, panelW - 68, 9);
     }
 
     ctx.fillStyle = "#8ea1b8";
